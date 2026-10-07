@@ -6,11 +6,11 @@ phases before adding features.
 ## Commands
 
 ```bash
-cd server && npm run dev        # API, tsx watch on :5300 (needs Postgres and server/.env)
+cd server && npm run dev        # API, tsx watch on :5400 (needs Postgres and server/.env)
 cd server && npm run typecheck
 cd server && npm test           # unit tests (compiled, then node --test)
 cd server && npm run smoke      # end-to-end against the running API
-cd client && npm run dev        # Vite on :5190, proxies /api to :5300
+cd client && npm run dev        # Vite on :5195, proxies /api to :5400
 cd client && npm run build      # tsc -b && vite build -> server/public
 ```
 

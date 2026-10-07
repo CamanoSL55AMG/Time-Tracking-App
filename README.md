@@ -6,8 +6,8 @@ Accounting) link to. Built to replace Timesheets.com at Morgan Sound and to be s
 its own. The full plan is in [TIME-TRACKING-APP.md](TIME-TRACKING-APP.md).
 
 ```
-client/   React + TypeScript + MUI (Vite) — the app techs use on their phones   :5190 in dev
-server/   Express + TypeScript + Prisma + PostgreSQL — the API at /api/v1        :5300
+client/   React + TypeScript + MUI (Vite) — the app techs use on their phones   :5195 in dev
+server/   Express + TypeScript + Prisma + PostgreSQL — the API at /api/v1        :5400
 ```
 
 ## What works today
@@ -45,14 +45,20 @@ Or run `setup.cmd` from the repo root after filling in `server\.env`.
 
 To let people arrive signed in from GED, set `ADDON_SSO_SECRET` to the same value GED has.
 
+## Ports
+
+API 5400, app 5195 in development. Chosen to stay clear of the other apps on the same PC
+(GED 5000/5173, AV Inventory 3001/5174, Project Report 5200/5180, Control Tower 5300/5190,
+Standalone 5500/5175).
+
 ## Running
 
 ```powershell
-dev-api.cmd     # API on http://localhost:5300   (reference: http://localhost:5300/api/v1/docs)
-dev-web.cmd     # app on http://localhost:5190
+dev-api.cmd     # API on http://localhost:5400   (reference: http://localhost:5400/api/v1/docs)
+dev-web.cmd     # app on http://localhost:5195
 ```
 
-For one server that serves both the app and the API on :5300, run `build.bat`, then
+For one server that serves both the app and the API on :5400, run `build.bat`, then
 `npm start` in `server`.
 
 Phones only share their location with pages loaded over HTTPS, so for real use put the
@@ -78,12 +84,12 @@ the API, and deactivates them again when it is done.
 
 ```bash
 # Keep a GED project selectable as a job
-curl -X PUT http://localhost:5300/api/v1/jobs/by-ref/ged/P-1371 \
+curl -X PUT http://localhost:5400/api/v1/jobs/by-ref/ged/P-1371 \
   -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
   -d '{"name":"P-1371 Canyon Hill","code":"P-1371","kind":"project"}'
 
 # Clock a tech in to it from a task button
-curl -X POST http://localhost:5300/api/v1/punches/in \
+curl -X POST http://localhost:5400/api/v1/punches/in \
   -H "Authorization: Bearer $KEY" -H "X-Act-As: tech@morgansound.com" \
   -H "Content-Type: application/json" \
   -d '{"jobRef":{"system":"ged","externalId":"P-1371"},"phaseKey":"work"}'

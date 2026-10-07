@@ -7,7 +7,7 @@ const num = (v: string | undefined): number | null => {
 }
 
 export const config = {
-  port: num(process.env.PORT) ?? 5300,
+  port: num(process.env.PORT) ?? 5400,
   isProduction: process.env.NODE_ENV === 'production',
   jwtSecret: process.env.JWT_SECRET ?? '',
   addonSsoSecret: process.env.ADDON_SSO_SECRET ?? '',

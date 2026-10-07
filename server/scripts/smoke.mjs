@@ -5,7 +5,7 @@
 import 'dotenv/config'
 import { createHmac, randomBytes } from 'node:crypto'
 
-const base = process.env.SMOKE_URL ?? `http://localhost:${process.env.PORT ?? 5300}`
+const base = process.env.SMOKE_URL ?? `http://localhost:${process.env.PORT ?? 5400}`
 const api = `${base}/api/v1`
 const email = (process.env.ADMIN_EMAIL ?? '').toLowerCase()
 const password = process.env.ADMIN_PASSWORD ?? ''
