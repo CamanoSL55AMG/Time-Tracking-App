@@ -1,0 +1,198 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Every table carries companyId. One company per install today; a shared
+// install later needs no schema change.
+
+model Company {
+  id          String   @id @default(uuid())
+  name        String
+  timezone    String   @default("America/Los_Angeles")
+  shopLat     Float?
+  shopLng     Float?
+  shopRadiusM Int      @default(150)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  people  Person[]
+  jobs    Job[]
+  phases  Phase[]
+  punches Punch[]
+  apiKeys ApiKey[]
+}
+
+model Person {
+  id           String   @id @default(uuid())
+  companyId    String
+  email        String   @unique
+  name         String
+  initials     String   @default("")
+  role         String   @default("tech") // tech | lead | manager | payroll | admin
+  passwordHash String?
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id])
+  punches Punch[]
+
+  @@index([companyId, active])
+}
+
+model Job {
+  id          String   @id @default(uuid())
+  companyId   String
+  kind        String   @default("project") // project | service | shop | other
+  name        String
+  code        String   @default("") // P-number, service ticket, etc.
+  active      Boolean  @default(true)
+  siteLat     Float?
+  siteLng     Float?
+  siteRadiusM Int?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id])
+  punches Punch[]
+
+  @@index([companyId, active])
+}
+
+// The task picker: the phases of a work day, in order.
+model Phase {
+  id        String  @id @default(uuid())
+  companyId String
+  key       String // stable slug, e.g. "travel-out"
+  name      String
+  short     String
+  sortOrder Int
+  atShop    Boolean @default(false)
+  active    Boolean @default(true)
+
+  company Company @relation(fields: [companyId], references: [id])
+  punches Punch[]
+
+  @@unique([companyId, key])
+  @@index([companyId, sortOrder])
+}
+
+// One segment of work. Open segment (clockOut null) = on the clock.
+// Switching job or phase closes the open segment and opens a new one.
+model Punch {
+  id           String    @id @default(uuid())
+  companyId    String
+  personId     String
+  jobId        String
+  phaseId      String?
+  clockIn      DateTime
+  clockOut     DateTime?
+  source       String    @default("app") // app | api | lead | edit
+  inLat        Float?
+  inLng        Float?
+  inAccuracyM  Float?
+  outLat       Float?
+  outLng       Float?
+  outAccuracyM Float?
+  notes        String    @default("")
+  clientId     String? // generated on the phone; makes offline re-sends harmless
+  apiKeyId     String? // set when an integration punched on the person's behalf
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  company Company     @relation(fields: [companyId], references: [id])
+  person  Person      @relation(fields: [personId], references: [id])
+  job     Job         @relation(fields: [jobId], references: [id])
+  phase   Phase?      @relation(fields: [phaseId], references: [id])
+  edits   PunchEdit[]
+
+  @@unique([companyId, clientId])
+  @@index([personId, clockIn])
+  @@index([companyId, clockIn])
+  @@index([companyId, clockOut])
+  @@index([jobId])
+  @@index([companyId, updatedAt])
+}
+
+// Audit trail: every correction keeps who, when, before, after and why.
+model PunchEdit {
+  id            String   @id @default(uuid())
+  punchId       String
+  editedById    String?
+  editedByKeyId String?
+  at            DateTime @default(now())
+  before        Json
+  after         Json
+  reason        String
+
+  punch Punch @relation(fields: [punchId], references: [id])
+
+  @@index([punchId])
+}
+
+// Ids in other systems (ged, jetbuilt, timesheets, accountedge) pointing at our rows.
+model ExternalRef {
+  id         String   @id @default(uuid())
+  companyId  String
+  entity     String // job | person
+  entityId   String
+  system     String
+  externalId String
+  createdAt  DateTime @default(now())
+
+  @@unique([companyId, entity, system, externalId])
+  @@index([entity, entityId])
+}
+
+model ApiKey {
+  id          String    @id @default(uuid())
+  companyId   String
+  name        String
+  prefix      String // first characters, shown in lists so a key can be recognised
+  keyHash     String    @unique // sha-256 of the key; the key itself is never stored
+  scopes      String[]
+  createdById String?
+  lastUsedAt  DateTime?
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  company Company @relation(fields: [companyId], references: [id])
+
+  @@index([companyId])
+}
+
+// Ordered change feed. Apps that cannot receive webhooks poll /events?after=seq.
+model Event {
+  seq       Int      @id @default(autoincrement())
+  companyId String
+  type      String
+  payload   Json
+  at        DateTime @default(now())
+
+  @@index([companyId, seq])
+}
+
+// A repeated POST with the same Idempotency-Key returns the first result.
+model IdempotencyKey {
+  id        String   @id @default(uuid())
+  companyId String
+  key       String
+  method    String
+  path      String
+  status    Int
+  response  Json
+  createdAt DateTime @default(now())
+
+  @@unique([companyId, key])
+}
+
+// One-click sign-in tokens from GED are single use.
+model SsoNonce {
+  jti    String   @id
+  usedAt DateTime @default(now())
+}
