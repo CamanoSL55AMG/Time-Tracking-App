@@ -1,6 +1,6 @@
 # Time Tracking — Standalone App Spec
 
-**Status:** Draft 4 · **Date:** 2026-10-07 · **Author:** Art Howard + Claude
+**Status:** Draft 4; Phase 0 and the core of Phase 1 built 2026-10-07 (see README) · **Date:** 2026-10-07 · **Author:** Art Howard + Claude
 **Supersedes:** the GED-embedded punch clock built 2026-10-05 (code to be moved here, see §11)
 
 ## 1. Decision
