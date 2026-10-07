@@ -1,0 +1,32 @@
+# Node
+node_modules/
+dist/
+build/
+*.log
+npm-debug.log*
+.DS_Store
+
+# Secrets — never commit real credentials
+.env
+.env.local
+.env.production
+!.env.example
+_credentials/
+
+# Client build output served by the server
+/client/.vite
+/server/public/
+
+# Receipts and other uploads
+/server/uploads/
+
+# Editor
+.vscode/
+.idea/
+
+# Scratch
+_to_delete/
+
+# Windows / cloud-sync folder metadata
+desktop.ini
+Thumbs.db
