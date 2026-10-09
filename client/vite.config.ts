@@ -5,6 +5,6 @@ import react from '@vitejs/plugin-react-swc'
 // Build: the page is written into server/public, and the server serves it.
 export default defineConfig({
   plugins: [react()],
-  server: { port: 5195, host: true, proxy: { '/api': 'http://localhost:5400' } },
+  server: { port: 5195, strictPort: true, host: true, proxy: { '/api': 'http://localhost:5400' } },
   build: { outDir: '../server/public', emptyOutDir: true },
 })
