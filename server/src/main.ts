@@ -46,6 +46,18 @@ const publicDir = path.resolve(here, '..', 'public')
 if (fs.existsSync(path.join(publicDir, 'index.html'))) {
   app.use(express.static(publicDir))
   app.get('*', (_req, res) => res.sendFile(path.join(publicDir, 'index.html')))
+} else {
+  // In development the app is served by Vite, not by this server. Say where it is
+  // instead of Express's bare "Cannot GET /".
+  app.get('/', (_req, res) => {
+    res.type('html').send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Time Tracking API</title>
+<style>body{font:16px/1.5 system-ui,sans-serif;max-width:560px;margin:48px auto;padding:0 16px;color:#1c2330}code{background:#f2f4f8;padding:1px 5px;border-radius:4px}a{color:#1f6feb}</style></head><body>
+<h1>Time Tracking API is running</h1>
+<p>This port is the API. The app itself is at <a href="http://localhost:5195">http://localhost:5195</a> while <code>dev-web.cmd</code> is running.</p>
+<p>To serve the app from this port instead, run <code>build.bat</code> and restart the server.</p>
+<p>API reference: <a href="/api/v1/docs">/api/v1/docs</a></p>
+</body></html>`)
+  })
 }
 
 // ─── Errors ─────────────────────────────────────────────────────────────────
