@@ -6,7 +6,7 @@ import { badRequest, forbidden, notFound } from '../errors.js'
 import { requireAuth, requirePerson, requireScope, type Auth } from '../auth/middleware.js'
 import { SELF } from '../auth/apiKeys.js'
 import { parseGeo } from '../lib/geo.js'
-import { board, editPunch, personState, punchIn, punchInclude, punchNext, punchOut, type Actor, type PunchInput } from '../services/punch.js'
+import { addPunch, board, crewPunch, editPunch, personState, punchIn, punchInclude, punchNext, punchOut, type Actor, type CrewAction, type PunchInput } from '../services/punch.js'
 
 export const punchesRouter = Router()
 
@@ -207,3 +207,85 @@ route(
   async (req) => board(requireScope(req, 'punch:read').companyId),
 )
 
+
+route(
+  punchesRouter,
+  {
+    method: 'post',
+    path: '/punches',
+    tag: 'Punching',
+    summary: 'Add a segment that was never punched. The reason is kept in its history.',
+    access: ['punch:write:any'],
+    status: 201,
+    body: {
+      personId: 'Whose time this is',
+      jobId: 'Job to charge',
+      phaseId: 'Phase of the day (optional)',
+      clockIn: 'ISO date-time',
+      clockOut: 'ISO date-time',
+      notes: 'Optional note',
+      reason: 'Why it is being added (required)',
+    },
+  },
+  async (req) => {
+    const auth = requireScope(req, 'punch:write:any')
+    const b = (req.body ?? {}) as Record<string, unknown>
+    const clockIn = optionalDate(b.clockIn, 'clockIn')
+    const clockOut = optionalDate(b.clockOut, 'clockOut')
+    if (!clockIn) throw badRequest('clockIn is required.', { field: 'clockIn' })
+    if (!clockOut) throw badRequest('clockOut is required.', { field: 'clockOut' })
+    const punch = await addPunch(
+      { companyId: auth.companyId, personId: auth.via === 'session' ? auth.person?.id ?? null : null, apiKeyId: auth.apiKeyId },
+      {
+        personId: str(b.personId, 80),
+        jobId: str(b.jobId, 80),
+        phaseId: str(b.phaseId, 80) || null,
+        clockIn,
+        clockOut,
+        notes: str(b.notes, 500),
+      },
+      str(b.reason, 500),
+    )
+    return { punch }
+  },
+)
+
+const CREW_ACTIONS: CrewAction[] = ['in', 'next', 'out']
+
+route(
+  punchesRouter,
+  {
+    method: 'post',
+    path: '/punches/crew',
+    tag: 'Punching',
+    summary: 'A lead punches several people at once: clock in (or switch), next phase, or clock out. Each person succeeds or fails separately.',
+    access: ['punch:crew'],
+    body: {
+      action: 'in | next | out',
+      personIds: 'Array of person ids',
+      jobId: 'For in: the job',
+      jobRef: 'For in: alternative to jobId',
+      phaseId: 'For in or next: the phase',
+      phaseKey: 'Alternative to phaseId',
+      geo: "The lead's position, stamped on every punch",
+    },
+  },
+  async (req) => {
+    const auth = requireScope(req, 'punch:crew')
+    const b = (req.body ?? {}) as Record<string, unknown>
+    const action = str(b.action, 10) as CrewAction
+    if (!CREW_ACTIONS.includes(action)) throw badRequest('action must be in, next or out.', { field: 'action' })
+    const ids = Array.isArray(b.personIds) ? b.personIds.map((v) => str(v, 80)).filter(Boolean) : []
+    if (!ids.length) throw badRequest('Name at least one person.', { field: 'personIds' })
+    if (ids.length > 50) throw badRequest('50 people at most per crew punch.', { field: 'personIds' })
+    const input = inputOf(req)
+    if (action === 'in' && !input.jobId && !input.jobRef) throw badRequest('Pick the job for the crew.', { field: 'jobId' })
+    const results = await crewPunch(
+      { ...actorOf(auth), source: 'lead', enteredById: auth.person?.id ?? null },
+      ids,
+      action,
+      { ...input, clientId: undefined },
+    )
+    return { results, ok: results.filter((r) => r.ok).length, failed: results.filter((r) => !r.ok).length }
+  },
+)

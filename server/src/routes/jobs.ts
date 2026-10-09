@@ -113,7 +113,7 @@ route(
 
 route(
   jobsRouter,
-  { method: 'patch', path: '/jobs/:id', tag: 'Jobs', summary: 'Change a job. Set active to false to close it to new time.', access: ['jobs:write'], body: { name: 'Name', kind: 'Kind', code: 'Code', active: 'true or false' } },
+  { method: 'patch', path: '/jobs/:id', tag: 'Jobs', summary: 'Change a job. Set active to false to close it to new time.', access: ['jobs:write'], body: { name: 'Name', kind: 'Kind', code: 'Code', active: 'true or false', siteLat: 'Job site latitude, or null', siteLng: 'Job site longitude, or null', siteRadiusM: 'How far from the pin still counts as on site, in metres (200 if not set)' } },
   async (req) => {
     const auth = requireScope(req, 'jobs:write')
     const existing = await prisma.job.findFirst({ where: { id: req.params.id, companyId: auth.companyId } })

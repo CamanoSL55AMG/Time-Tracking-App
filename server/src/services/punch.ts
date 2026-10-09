@@ -4,6 +4,7 @@ import { ApiError, badRequest, conflict, notFound } from '../errors.js'
 import { dayBounds, hoursBetween } from '../lib/time.js'
 import { insideFence, type Fence, type GeoStamp } from '../lib/geo.js'
 import { emit } from './events.js'
+import { guardWeeks } from './approvals.js'
 
 // The punch engine. A person has at most one open segment. Clocking in while on the
 // clock is a switch: the open segment closes at the same instant the new one opens,
@@ -26,6 +27,8 @@ export interface Actor {
   companyId: string
   apiKeyId: string | null
   source: PunchSource
+  /** Someone punching for another person (a lead's crew punch). */
+  enteredById?: string | null
 }
 
 const include = { job: true, phase: true } satisfies Prisma.PunchInclude
@@ -105,6 +108,7 @@ async function openSegment(
   input: PunchInput,
   at: Date,
 ): Promise<{ punch: PunchRow; switchedFrom: PunchRow | null }> {
+  await guardWeeks(tx, actor.companyId, person.id, [at])
   const open = await tx.punch.findFirst({ where: { personId: person.id, clockOut: null }, include })
   let switchedFrom: PunchRow | null = null
 
@@ -132,6 +136,7 @@ async function openSegment(
       clockIn: at,
       source: actor.source,
       apiKeyId: actor.apiKeyId,
+      enteredById: actor.enteredById ?? null,
       clientId: input.clientId || null,
       notes: input.notes ?? '',
       ...geoIn(input.geo),
@@ -209,6 +214,7 @@ export async function punchOut(actor: Actor, person: Person, input: Pick<PunchIn
     const at = input.at ?? new Date()
     const open = await tx.punch.findFirst({ where: { personId: person.id, clockOut: null }, include })
     if (!open) throw conflict('not_clocked_in', 'You are not clocked in.')
+    await guardWeeks(tx, actor.companyId, person.id, [open.clockIn, at])
     if (at.getTime() < open.clockIn.getTime()) {
       throw conflict('punch_overlap', 'That time is before the current segment started.', { openSince: open.clockIn })
     }
@@ -256,6 +262,7 @@ export async function editPunch(
     if (clockOut && clockOut.getTime() <= clockIn.getTime()) {
       throw badRequest('Clock-out must be after clock-in.', { field: 'clockOut' })
     }
+    await guardWeeks(tx, actor.companyId, before.personId, [before.clockIn, before.clockOut ?? before.clockIn, clockIn, clockOut ?? clockIn])
     if (!clockOut) {
       const otherOpen = await tx.punch.findFirst({ where: { personId: before.personId, clockOut: null, id: { not: before.id } } })
       if (otherOpen) throw conflict('already_open', 'This person already has an open segment.')
@@ -304,6 +311,116 @@ export async function editPunch(
     await emit(tx, actor.companyId, 'punch.edited', { punch: summary(after), reason: reason.trim() })
     return after
   })
+}
+
+/** Add a segment that was never punched (a forgotten day, a missed switch). Reason required. */
+export async function addPunch(
+  actor: { companyId: string; personId: string | null; apiKeyId: string | null },
+  input: { personId: string; jobId: string; phaseId?: string | null; clockIn: Date; clockOut: Date; notes?: string },
+  reason: string,
+) {
+  if (!reason.trim()) throw badRequest('A reason is required to add time.', { field: 'reason' })
+  checkAt(input.clockIn)
+  checkAt(input.clockOut)
+  if (input.clockOut.getTime() <= input.clockIn.getTime()) throw badRequest('Clock-out must be after clock-in.', { field: 'clockOut' })
+  if (input.clockOut.getTime() - input.clockIn.getTime() > 24 * 3_600_000) throw badRequest('One segment cannot be longer than 24 hours.', { field: 'clockOut' })
+  return prisma.$transaction(async (tx) => {
+    const person = await tx.person.findFirst({ where: { id: input.personId, companyId: actor.companyId } })
+    if (!person) throw notFound('Person')
+    await lockPerson(tx, person.id)
+    await guardWeeks(tx, actor.companyId, person.id, [input.clockIn, input.clockOut])
+    const job = await tx.job.findFirst({ where: { id: input.jobId, companyId: actor.companyId } })
+    if (!job) throw notFound('Job')
+    if (input.phaseId) {
+      const phase = await tx.phase.findFirst({ where: { id: input.phaseId, companyId: actor.companyId } })
+      if (!phase) throw notFound('Phase')
+    }
+    const clash = await tx.punch.findFirst({
+      where: {
+        personId: person.id,
+        clockIn: { lt: input.clockOut },
+        OR: [{ clockOut: null }, { clockOut: { gt: input.clockIn } }],
+      },
+    })
+    if (clash) throw conflict('punch_overlap', 'That time overlaps a segment already recorded.', { overlaps: clash.id })
+
+    const punch = await tx.punch.create({
+      data: {
+        companyId: actor.companyId,
+        personId: person.id,
+        jobId: job.id,
+        phaseId: input.phaseId ?? null,
+        clockIn: input.clockIn,
+        clockOut: input.clockOut,
+        source: 'edit',
+        apiKeyId: actor.apiKeyId,
+        enteredById: actor.personId,
+        notes: input.notes ?? '',
+      },
+      include,
+    })
+    await tx.punchEdit.create({
+      data: {
+        punchId: punch.id,
+        editedById: actor.personId,
+        editedByKeyId: actor.apiKeyId,
+        reason: reason.trim(),
+        before: {},
+        after: JSON.parse(JSON.stringify(auditShape(punch))) as Prisma.InputJsonValue,
+      },
+    })
+    await emit(tx, actor.companyId, 'punch.added', { punch: summary(punch), reason: reason.trim() })
+    return punch
+  })
+}
+
+// ─── Crew punch ─────────────────────────────────────────────────────────────
+
+export type CrewAction = 'in' | 'next' | 'out'
+
+export interface CrewResult {
+  personId: string
+  name: string
+  ok: boolean
+  code?: string
+  message?: string
+  jobName?: string
+  phaseKey?: string | null
+}
+
+/** A lead punches several people at once. Each person succeeds or fails on its own. */
+export async function crewPunch(
+  actor: Actor,
+  personIds: string[],
+  action: CrewAction,
+  input: PunchInput,
+): Promise<CrewResult[]> {
+  const people = await prisma.person.findMany({ where: { companyId: actor.companyId, id: { in: personIds } } })
+  const found = new Map(people.map((p) => [p.id, p]))
+  const results: CrewResult[] = []
+  // Without an explicit time each person's punch reads "now" under their own lock,
+  // as a tap of their own would.
+  const at = input.at
+  for (const id of [...new Set(personIds)]) {
+    const person = found.get(id)
+    if (!person || !person.active) {
+      results.push({ personId: id, name: person?.name ?? '', ok: false, code: 'not_found', message: 'No active person with that id.' })
+      continue
+    }
+    try {
+      const r =
+        action === 'in'
+          ? await punchIn(actor, person, { ...input, at, clientId: undefined })
+          : action === 'next'
+            ? await punchNext(actor, person, { phaseId: input.phaseId, phaseKey: input.phaseKey, geo: input.geo, at })
+            : await punchOut(actor, person, { geo: input.geo, at })
+      results.push({ personId: id, name: person.name, ok: true, jobName: r.punch.job.name, phaseKey: r.punch.phase?.key ?? null })
+    } catch (err) {
+      const e = err as { code?: string; message?: string }
+      results.push({ personId: id, name: person.name, ok: false, code: e.code ?? 'error', message: e.message ?? 'Failed.' })
+    }
+  }
+  return results
 }
 
 // ─── Views ──────────────────────────────────────────────────────────────────

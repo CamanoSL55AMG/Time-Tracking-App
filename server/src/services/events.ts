@@ -9,8 +9,27 @@ export type EventType =
   | 'punch.ended'
   | 'punch.switched'
   | 'punch.edited'
+  | 'punch.added'
   | 'job.upserted'
   | 'person.upserted'
+  | 'approval.signed'
+  | 'approval.approved'
+  | 'approval.reopened'
+  | 'webhook.test'
+
+export const EVENT_TYPES: EventType[] = [
+  'punch.started',
+  'punch.ended',
+  'punch.switched',
+  'punch.edited',
+  'punch.added',
+  'job.upserted',
+  'person.upserted',
+  'approval.signed',
+  'approval.approved',
+  'approval.reopened',
+  'webhook.test',
+]
 
 export async function emit(tx: Tx, companyId: string, type: EventType, payload: Record<string, unknown>): Promise<void> {
   await tx.event.create({

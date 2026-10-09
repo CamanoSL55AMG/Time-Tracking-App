@@ -51,3 +51,17 @@ export const isYmd = (s: string): boolean => /^\d{4}-\d{2}-\d{2}$/.test(s) && !N
 export function hoursBetween(clockIn: Date, clockOut: Date | null, now = new Date()): number {
   return Math.max(0, ((clockOut ?? now).getTime() - clockIn.getTime()) / 3_600_000)
 }
+
+/** Day of the week of a YYYY-MM-DD date: 0 = Sunday … 6 = Saturday. */
+export const weekday = (ymd: string): number => new Date(`${ymd}T00:00:00Z`).getUTCDay()
+
+/** First day (YYYY-MM-DD) of the week holding `ymd`, for weeks that start on `startDay`. */
+export function weekOf(ymd: string, startDay: number): string {
+  return addDays(ymd, -((weekday(ymd) - startDay + 7) % 7))
+}
+
+/** [start, end) of the week that begins on `week`, as instants. */
+export function weekBounds(week: string, tz: string): { start: Date; end: Date; days: string[] } {
+  const days = Array.from({ length: 7 }, (_, i) => addDays(week, i))
+  return { start: startOfLocalDay(week, tz), end: startOfLocalDay(addDays(week, 7), tz), days }
+}

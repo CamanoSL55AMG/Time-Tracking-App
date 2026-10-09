@@ -1,9 +1,11 @@
 // End-to-end check against a running server:  npm run smoke
 // Signs in as the admin from .env, then walks sign-in, keys, jobs, a full day of
-// punches for a throwaway person, a correction, the board, the report and the feed.
+// punches for a throwaway person, a correction, the board, the report, weekly
+// sign-off and approval, crew punches, reconcile, a webhook delivery and the feed.
 // It cleans up after itself: the test person and job are deactivated, the key revoked.
 import 'dotenv/config'
 import { createHmac, randomBytes } from 'node:crypto'
+import { createServer } from 'node:http'
 
 const base = process.env.SMOKE_URL ?? `http://localhost:${process.env.PORT ?? 5400}`
 const api = `${base}/api/v1`
@@ -58,13 +60,21 @@ try {
   const phases = r.json?.data ?? []
   check('phases are seeded', phases.length >= 2, `got ${phases.length}`)
 
-  r = await call('POST', '/api-keys', { token: admin, body: { name: `smoke ${stamp}`, scopes: ['punch:read', 'punch:write:any', 'jobs:read', 'jobs:write', 'people:read', 'people:write', 'reports:read', 'events:read', 'assignments:write'] } })
+  r = await call('POST', '/api-keys', { token: admin, body: { name: `smoke ${stamp}`, scopes: ['punch:read', 'punch:write:any', 'jobs:read', 'jobs:write', 'people:read', 'people:write', 'reports:read', 'events:read', 'assignments:write', 'time:approve', 'punch:crew', 'reconcile:write', 'webhooks:manage'] } })
   check('create integration key', r.status === 201 && r.json?.key?.startsWith('tt_live_'), JSON.stringify(r.json))
   const key = r.json?.key
   const keyId = r.json?.apiKey?.id
 
   r = await call('GET', '/api-keys', { token: key })
   check('a key cannot manage keys', r.status === 403)
+
+  // Where the change feed stands now, so the events this run causes can be found later.
+  let startSeq = 0
+  for (;;) {
+    r = await call('GET', `/events?after=${startSeq}&limit=500`, { token: key })
+    startSeq = r.json?.lastSeq ?? startSeq
+    if (!r.json?.more) break
+  }
 
   r = await call('PUT', `/jobs/by-ref/smoke/${stamp}`, { token: key, body: { name: `Smoke test job ${stamp}`, kind: 'project', code: `SMK-${stamp}` } })
   check('create job by external reference', r.status === 200 && r.json?.created === true, JSON.stringify(r.json))
@@ -164,6 +174,109 @@ try {
   r = await call('GET', '/me/state', { token: tech })
   check('a tech sees their own day', r.status === 200 && r.json?.today?.length >= 2 && r.json?.phases?.length === phases.length)
 
+  // ─── Review: missed time, weekly sign-off and approval ──────────────────
+  const personId = row?.personId
+  r = await call('GET', '/company', { token: tech })
+  check('anyone signed in can read the company settings', r.status === 200 && Number.isInteger(r.json?.company?.weekStartDay))
+  const past = new Date(Date.now() - 28 * 86_400_000)
+  const pastIn = past.toISOString()
+  const pastOut = new Date(past.getTime() + 2 * 3_600_000).toISOString()
+  const pastDay = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit' }).format(past)
+  r = await call('POST', '/punches', { token: key, body: { personId, jobId, clockIn: pastIn, clockOut: pastOut } })
+  check('adding missed time without a reason is refused', r.status === 400)
+  r = await call('POST', '/punches', { token: key, body: { personId, jobId, clockIn: pastIn, clockOut: pastOut, reason: 'smoke: forgot to punch' } })
+  check('add a missed segment', r.status === 201 && r.json?.punch?.source === 'edit', JSON.stringify(r.json?.error ?? ''))
+  const addedId = r.json?.punch?.id
+  r = await call('POST', '/punches', { token: key, body: { personId, jobId, clockIn: pastIn, clockOut: pastOut, reason: 'twice' } })
+  check('missed time that overlaps is refused', r.status === 409 && r.json?.error?.code === 'punch_overlap')
+
+  r = await call('GET', `/me/week?week=${pastDay}`, { token: tech })
+  check('the tech sees that week', r.status === 200 && Math.abs(r.json?.hours - 2) < 0.01 && r.json?.days?.length === 7, JSON.stringify(r.json?.error ?? r.json?.hours))
+  const week = r.json?.week
+  r = await call('POST', '/approvals/sign', { token: tech, body: { week } })
+  check('the tech signs the week', r.status === 200 && Boolean(r.json?.approval?.signedAt), JSON.stringify(r.json?.error ?? ''))
+  r = await call('POST', '/approvals/approve', { token: tech, body: { week, personIds: [personId] } })
+  check('a tech cannot approve', r.status === 403)
+  r = await call('GET', `/approvals?week=${week}`, { token: key })
+  const mine = r.json?.rows?.find((x) => x.personId === personId)
+  check('the week list shows the signature', r.status === 200 && Boolean(mine?.signedAt) && !mine?.approvedAt, JSON.stringify(mine))
+  r = await call('POST', '/approvals/approve', { token: key, body: { week: today, personIds: [personId] } })
+  check('a week that is not over cannot be approved', r.status === 409 && r.json?.error?.code === 'week_not_over')
+  r = await call('POST', '/approvals/approve', { token: key, body: { week, personIds: [personId] } })
+  check('approve the week', r.status === 200 && r.json?.approved === 1 && Math.abs(r.json?.results?.[0]?.hours - 2) < 0.01, JSON.stringify(r.json))
+  r = await call('PATCH', `/punches/${addedId}`, { token: key, body: { notes: 'late change', reason: 'smoke' } })
+  check('an approved week is frozen', r.status === 409 && r.json?.error?.code === 'week_approved')
+  r = await call('POST', '/punches', { token: key, body: { personId, jobId, clockIn: new Date(past.getTime() + 3 * 3_600_000).toISOString(), clockOut: new Date(past.getTime() + 4 * 3_600_000).toISOString(), reason: 'smoke' } })
+  check('no time can be added to an approved week', r.status === 409 && r.json?.error?.code === 'week_approved')
+  r = await call('POST', '/approvals/reopen', { token: key, body: { week, personId } })
+  check('reopening without a reason is refused', r.status === 400)
+  r = await call('POST', '/approvals/reopen', { token: key, body: { week, personId, reason: 'smoke: fix a note' } })
+  check('reopen the week', r.status === 200 && !r.json?.approval?.approvedAt)
+  r = await call('PATCH', `/punches/${addedId}`, { token: key, body: { notes: 'late change', reason: 'smoke' } })
+  check('a reopened week can be corrected', r.status === 200)
+  r = await call('POST', '/approvals/sign', { token: tech, body: { week } })
+  await call('PATCH', `/punches/${addedId}`, { token: key, body: { notes: 'another change', reason: 'smoke' } })
+  r = await call('GET', `/me/week?week=${week}`, { token: tech })
+  check('a change after signing clears the signature', r.status === 200 && r.json?.signedAt === null)
+
+  r = await call('GET', `/reports/exceptions?from=${pastDay}&to=${pastDay}&personId=${personId}`, { token: key })
+  const kinds = new Set((r.json?.data ?? []).map((e) => e.type))
+  check('exceptions list who added and changed time', r.status === 200 && kinds.has('entered_by_other') && kinds.has('edited'), [...kinds].join(','))
+  r = await call('GET', '/reports/exceptions', { token: tech })
+  check('a tech cannot open the exceptions list', r.status === 403)
+
+  // ─── Crew punch ──────────────────────────────────────────────────────────
+  r = await call('POST', '/punches/crew', { token: tech, body: { action: 'in', personIds: [personId], jobId } })
+  check('a tech cannot punch a crew', r.status === 403)
+  r = await call('POST', '/punches/crew', { token: key, body: { action: 'in', personIds: [personId, 'no-such-person'], jobId } })
+  check('crew clock-in: each person on their own', r.status === 200 && r.json?.ok === 1 && r.json?.failed === 1, JSON.stringify(r.json))
+  r = await call('POST', '/punches/crew', { token: key, body: { action: 'next', personIds: [personId] } })
+  check('crew next phase', r.status === 200 && r.json?.ok === 1 && r.json?.results?.[0]?.phaseKey === phases[1]?.key, JSON.stringify(r.json))
+  r = await call('POST', '/punches/crew', { token: key, body: { action: 'out', personIds: [personId] } })
+  check('crew clock-out', r.status === 200 && r.json?.ok === 1)
+
+  // ─── Parallel run: hours from Timesheets.com beside ours ─────────────────
+  const sys = `smoke-${stamp}`
+  r = await call('PUT', `/external-hours/${sys}`, { token: key, body: { from: today, to: today, rows: [{ email: testEmail, date: today, hours: 0.25 }, { email: `nobody-${stamp}@example.invalid`, date: today, hours: 8 }] } })
+  check('push the other system\'s hours', r.status === 200 && r.json?.stored === 1 && r.json?.unknownEmails?.length === 1, JSON.stringify(r.json))
+  r = await call('GET', `/reports/reconcile?system=${sys}&from=${today}&to=${today}`, { token: key })
+  const rec = r.json?.rows?.find((x) => x.personId === personId)
+  check('reconcile shows ours, theirs and the difference', r.status === 200 && rec?.theirs === 0.25 && rec?.match === false && Math.abs(rec.diff - (rec.ours - 0.25)) < 0.01, JSON.stringify(rec))
+  await call('PUT', `/external-hours/${sys}`, { token: key, body: { from: today, to: today, rows: [] } })
+
+  // ─── Webhooks: a signed delivery reaches a listener ──────────────────────
+  const got = []
+  const listener = createServer((req, res) => {
+    let raw = ''
+    req.on('data', (c) => (raw += c))
+    req.on('end', () => {
+      got.push({ sig: req.headers['x-tt-signature'], raw })
+      res.end('ok')
+    })
+  })
+  await new Promise((ok) => listener.listen(0, '127.0.0.1', ok))
+  try {
+    const hookUrl = `http://127.0.0.1:${listener.address().port}/hook`
+    r = await call('POST', '/webhooks', { token: key, body: { url: 'http://example.com/hook' } })
+    check('a plain-http webhook to the internet is refused', r.status === 400)
+    r = await call('POST', '/webhooks', { token: key, body: { url: hookUrl, events: ['punch.started'] } })
+    check('subscribe a webhook', r.status === 201 && r.json?.secret?.startsWith('whsec_'), JSON.stringify(r.json?.error ?? ''))
+    const hookId = r.json?.webhook?.id
+    const secret = r.json?.secret
+    const valid = (g) => g.sig === `sha256=${createHmac('sha256', secret).update(g.raw).digest('hex')}`
+    r = await call('POST', `/webhooks/${hookId}/test`, { token: key })
+    check('test delivery reaches the listener, signed', r.json?.result?.ok === true && got.length === 1 && valid(got[0]), JSON.stringify(r.json))
+    await call('POST', '/punches/in', { token: key, headers: as, body: { jobId } })
+    await call('POST', '/punches/out', { token: key, headers: as })
+    for (let i = 0; i < 30 && got.length < 2; i++) await new Promise((ok) => setTimeout(ok, 500))
+    const ev = got[1] ? JSON.parse(got[1].raw) : null
+    check('a punch is delivered to the webhook, signed', ev?.type === 'punch.started' && valid(got[1]) && got.length === 2, `received ${got.length}`)
+    r = await call('DELETE', `/webhooks/${hookId}`, { token: key })
+    check('remove the webhook', r.status === 200)
+  } finally {
+    listener.close()
+  }
+
   // One-click sign-in from GED, when the shared secret is configured.
   const sso = process.env.ADDON_SSO_SECRET
   if (sso) {
@@ -185,9 +298,9 @@ try {
     console.log('SKIP  one-click sign-in (ADDON_SSO_SECRET is not set)')
   }
 
-  r = await call('GET', '/events?after=0&limit=500', { token: key })
+  r = await call('GET', `/events?after=${startSeq}&limit=500`, { token: key })
   const types = new Set((r.json?.data ?? []).map((e) => e.type))
-  check('change feed has the events', ['job.upserted', 'person.upserted', 'punch.started', 'punch.switched', 'punch.ended', 'punch.edited'].every((t) => types.has(t)), [...types].join(','))
+  check('change feed has the events', ['job.upserted', 'person.upserted', 'punch.started', 'punch.switched', 'punch.ended', 'punch.edited', 'punch.added', 'approval.signed', 'approval.approved', 'approval.reopened'].every((t) => types.has(t)), [...types].join(','))
 
   r = await call('GET', '/openapi.json')
   check('API describes itself', r.status === 200 && Boolean(r.json?.paths?.['/punches/in']?.post))

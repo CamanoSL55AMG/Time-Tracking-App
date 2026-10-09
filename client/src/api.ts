@@ -57,6 +57,9 @@ export interface Job {
   name: string
   code: string
   active: boolean
+  siteLat?: number | null
+  siteLng?: number | null
+  siteRadiusM?: number | null
   refs?: { system: string; externalId: string }[]
 }
 export interface Phase {
@@ -131,6 +134,111 @@ export interface Geo {
   accuracyM?: number
 }
 
+// ─── Review shapes ──────────────────────────────────────────────────────────
+
+export interface PunchEdit {
+  id: string
+  at: string
+  reason: string
+  editedById: string | null
+  before: Record<string, unknown>
+  after: Record<string, unknown>
+}
+export interface ReviewPunch extends Punch {
+  source: string
+  enteredById: string | null
+  inLat: number | null
+  inLng: number | null
+  edits: PunchEdit[]
+}
+export interface TimeException {
+  type: string
+  severity: 'warn' | 'info'
+  personId: string
+  personName: string
+  date: string
+  punchId?: string
+  message: string
+}
+export interface PersonWeek {
+  week: string
+  person: { id: string; name: string; email: string }
+  ended: boolean
+  hours: number
+  onClock: boolean
+  signedAt: string | null
+  approvedAt: string | null
+  approvedBy: string
+  days: { date: string; hours: number; punches: ReviewPunch[]; exceptions: TimeException[] }[]
+}
+export interface WeekRow {
+  personId: string
+  name: string
+  email: string
+  role: string
+  active: boolean
+  hours: number
+  segments: number
+  onClock: boolean
+  signedAt: string | null
+  approvedAt: string | null
+  approvedBy: string
+  approvedHours: number | null
+  warnings: number
+  notes: number
+}
+export interface WeekSummary {
+  week: string
+  days: string[]
+  weekStartDay: number
+  ended: boolean
+  totals: { people: number; hours: number; signed: number; approved: number }
+  rows: WeekRow[]
+}
+export interface ApproveResult {
+  personId: string
+  ok: boolean
+  code?: string
+  message?: string
+  hours?: number
+}
+export interface CrewResult {
+  personId: string
+  name: string
+  ok: boolean
+  message?: string
+}
+export interface Company {
+  id: string
+  name: string
+  timezone: string
+  weekStartDay: number
+  weekStartName: string
+  shopLat: number | null
+  shopLng: number | null
+  shopRadiusM: number
+}
+export interface Webhook {
+  id: string
+  url: string
+  events: string[]
+  active: boolean
+  createdAt: string
+  delivered: number
+  pending: number
+  failed: number
+}
+export interface Reconcile {
+  system: string
+  from: string
+  to: string
+  toleranceHours: number
+  lastSyncedAt: string | null
+  totals: { ours: number; theirs: number; days: number; mismatchedDays: number }
+  people: { personId: string; name: string; ours: number; theirs: number; diff: number; mismatchedDays: number }[]
+  rows: { personId: string; name: string; date: string; ours: number; theirs: number | null; diff: number; match: boolean }[]
+}
+
 /** The phone's position right now, or null if it is refused, unavailable or slow. Never throws. */
 export const grabGeo = (timeoutMs = 6000): Promise<Geo | null> =>
   new Promise((resolve) => {
@@ -171,7 +279,64 @@ export const api = {
   keys: () => http.get<{ data: ApiKey[]; availableScopes: string[] }>('/api-keys').then((r) => r.data),
   createKey: (name: string, scopes: string[]) => http.post<{ key: string; apiKey: ApiKey }>('/api-keys', { name, scopes }).then((r) => r.data),
   revokeKey: (id: string) => http.delete(`/api-keys/${id}`).then((r) => r.data),
+
+  // Review
+  myWeek: (week?: string) => http.get<PersonWeek>('/me/week', { params: { week } }).then((r) => r.data),
+  signWeek: (week: string) => http.post('/approvals/sign', { week }).then((r) => r.data),
+  weekSummary: (week?: string) => http.get<WeekSummary>('/approvals', { params: { week } }).then((r) => r.data),
+  personWeek: (personId: string, week: string) => http.get<PersonWeek>(`/approvals/${personId}`, { params: { week } }).then((r) => r.data),
+  approve: (week: string, personIds: string[]) =>
+    http.post<{ results: ApproveResult[]; approved: number; failed: number }>('/approvals/approve', { week, personIds }).then((r) => r.data),
+  reopen: (week: string, personId: string, reason: string) => http.post('/approvals/reopen', { week, personId, reason }).then((r) => r.data),
+  editPunch: (id: string, body: { clockIn?: string; clockOut?: string | null; jobId?: string; phaseId?: string | null; notes?: string; reason: string }) =>
+    http.patch<{ punch: Punch }>(`/punches/${id}`, body).then((r) => r.data.punch),
+  addPunch: (body: { personId: string; jobId: string; phaseId?: string | null; clockIn: string; clockOut: string; notes?: string; reason: string }) =>
+    http.post<{ punch: Punch }>('/punches', body).then((r) => r.data.punch),
+  phases: () => http.get<{ data: Phase[] }>('/phases').then((r) => r.data.data),
+  crew: (action: PunchKind, personIds: string[], fields: { jobId?: string; phaseId?: string; geo?: Geo | null }) =>
+    http
+      .post<{ results: CrewResult[]; ok: number; failed: number }>('/punches/crew', { action, personIds, ...fields, geo: fields.geo ?? undefined }, { headers: { 'Idempotency-Key': newId() } })
+      .then((r) => r.data),
+  reconcile: (from: string, to: string) => http.get<Reconcile>('/reports/reconcile', { params: { from, to } }).then((r) => r.data),
+
+  // Settings
+  company: () => http.get<{ company: Company }>('/company').then((r) => r.data.company),
+  saveCompany: (body: Partial<Omit<Company, 'id' | 'weekStartName'>>) => http.patch<{ company: Company }>('/company', body).then((r) => r.data.company),
+  saveJob: (id: string, body: { siteLat?: number | null; siteLng?: number | null; siteRadiusM?: number | null }) =>
+    http.patch<{ job: Job }>(`/jobs/${id}`, body).then((r) => r.data.job),
+  webhooks: () => http.get<{ data: Webhook[]; eventTypes: string[] }>('/webhooks').then((r) => r.data),
+  addWebhook: (url: string, events: string[]) => http.post<{ webhook: Webhook; secret: string }>('/webhooks', { url, events }).then((r) => r.data),
+  setWebhookActive: (id: string, active: boolean) => http.patch(`/webhooks/${id}`, { active }).then((r) => r.data),
+  testWebhook: (id: string) => http.post<{ result: { ok: boolean; code: number | null; error: string } }>(`/webhooks/${id}/test`).then((r) => r.data.result),
+  retryWebhook: (id: string) => http.post<{ requeued: number }>(`/webhooks/${id}/retry`).then((r) => r.data),
+  deleteWebhook: (id: string) => http.delete(`/webhooks/${id}`).then((r) => r.data),
 }
+
+// ─── Dates ──────────────────────────────────────────────────────────────────
+
+/** YYYY-MM-DD plus whole days. */
+export const addDays = (ymd: string, days: number) => {
+  const [y, m, d] = ymd.split('-').map(Number)
+  return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10)
+}
+/** "Mon Oct 5" for a YYYY-MM-DD date. */
+export const fmtDay = (ymd: string) =>
+  new Date(`${ymd}T12:00:00Z`).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' })
+/** "Oct 4 – 10" for the week starting on `week`. */
+export const fmtWeek = (week: string) => {
+  const a = new Date(`${week}T12:00:00Z`)
+  const b = new Date(`${addDays(week, 6)}T12:00:00Z`)
+  const mo = (d: Date) => d.toLocaleDateString([], { month: 'short', timeZone: 'UTC' })
+  return mo(a) === mo(b) ? `${mo(a)} ${a.getUTCDate()} – ${b.getUTCDate()}` : `${mo(a)} ${a.getUTCDate()} – ${mo(b)} ${b.getUTCDate()}`
+}
+/** Value for a datetime-local input, in this device's timezone. */
+export const toLocalInput = (iso: string | null | undefined) => {
+  if (!iso) return ''
+  const d = new Date(iso)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+export const fromLocalInput = (v: string) => (v ? new Date(v).toISOString() : '')
 
 // ─── Formatting ─────────────────────────────────────────────────────────────
 

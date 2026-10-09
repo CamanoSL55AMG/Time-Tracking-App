@@ -26,8 +26,10 @@ import Login from './pages/Login'
 import PunchPage from './pages/Punch'
 import BoardPage from './pages/Board'
 import AdminPage from './pages/Admin'
+import WeekPage from './pages/Week'
+import ReviewPage from './pages/Review'
 
-type Tab = 'clock' | 'board' | 'admin'
+type Tab = 'clock' | 'week' | 'board' | 'review' | 'admin'
 
 const ClockIcon = () => (
   <SvgIcon>
@@ -37,6 +39,16 @@ const ClockIcon = () => (
 const BoardIcon = () => (
   <SvgIcon>
     <path d="M3 5h18v2H3V5Zm0 6h18v2H3v-2Zm0 6h18v2H3v-2Z" />
+  </SvgIcon>
+)
+const WeekIcon = () => (
+  <SvgIcon>
+    <path d="M19 4h-1V2h-2v2H8V2H6v2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2Zm0 16H5V9h14v11ZM7 11h5v5H7v-5Z" />
+  </SvgIcon>
+)
+const ReviewIcon = () => (
+  <SvgIcon>
+    <path d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4L9 16.2Z" />
   </SvgIcon>
 )
 const AdminIcon = () => (
@@ -99,7 +111,8 @@ export default function App() {
   const can = (scope: string) => person.scopes.includes(scope)
   const showBoard = can('punch:read')
   const showAdmin = can('people:write') || can('jobs:write')
-  const current: Tab = (tab === 'board' && !showBoard) || (tab === 'admin' && !showAdmin) ? 'clock' : tab
+  const showReview = can('time:approve') || can('reports:read')
+  const current: Tab = (tab === 'board' && !showBoard) || (tab === 'admin' && !showAdmin) || (tab === 'review' && !showReview) ? 'clock' : tab
 
   return (
     <Box sx={{ minHeight: '100dvh', pb: 'calc(72px + env(safe-area-inset-bottom))' }}>
@@ -130,21 +143,23 @@ export default function App() {
         </Toolbar>
       </AppBar>
 
-      <Container maxWidth={current === 'clock' ? 'sm' : 'md'} sx={{ py: 2 }}>
+      <Container maxWidth={current === 'clock' || current === 'week' ? 'sm' : 'md'} sx={{ py: 2 }}>
         {current === 'clock' && <PunchPage />}
-        {current === 'board' && <BoardPage />}
+        {current === 'week' && <WeekPage />}
+        {current === 'board' && <BoardPage canCrew={can('punch:crew')} />}
+        {current === 'review' && <ReviewPage me={person} />}
         {current === 'admin' && <AdminPage me={person} />}
       </Container>
 
-      {(showBoard || showAdmin) && (
-        <Paper square sx={{ position: 'fixed', bottom: 0, left: 0, right: 0, borderWidth: '1px 0 0', pb: 'env(safe-area-inset-bottom)', zIndex: 10 }}>
-          <BottomNavigation showLabels value={current} onChange={(_, v: Tab) => setTab(v)}>
+      <Paper square sx={{ position: 'fixed', bottom: 0, left: 0, right: 0, borderWidth: '1px 0 0', pb: 'env(safe-area-inset-bottom)', zIndex: 10 }}>
+          <BottomNavigation showLabels value={current} onChange={(_, v: Tab) => setTab(v)} sx={{ '& .MuiBottomNavigationAction-root': { minWidth: 0, px: 0.5 } }}>
             <BottomNavigationAction value="clock" label="Clock" icon={<ClockIcon />} />
+            <BottomNavigationAction value="week" label="Week" icon={<WeekIcon />} />
             {showBoard && <BottomNavigationAction value="board" label="Board" icon={<BoardIcon />} />}
+            {showReview && <BottomNavigationAction value="review" label="Review" icon={<ReviewIcon />} />}
             {showAdmin && <BottomNavigationAction value="admin" label="Manage" icon={<AdminIcon />} />}
           </BottomNavigation>
-        </Paper>
-      )}
+      </Paper>
 
       <PasswordDialog open={pwOpen} onClose={() => setPwOpen(false)} />
     </Box>

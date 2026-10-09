@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { addDays, dayBounds, hoursBetween, isYmd, localDate, startOfLocalDay, tzOffsetMs } from './time.js'
+import { addDays, dayBounds, hoursBetween, isYmd, localDate, startOfLocalDay, tzOffsetMs, weekBounds, weekOf } from './time.js'
 
 const LA = 'America/Los_Angeles'
 
@@ -47,4 +47,21 @@ test('hoursBetween', () => {
   assert.equal(hoursBetween(a, new Date('2026-10-07T16:30:00Z')), 1.5)
   assert.equal(hoursBetween(a, null, new Date('2026-10-07T15:15:00Z')), 0.25)
   assert.equal(hoursBetween(a, new Date('2026-10-07T14:00:00Z')), 0)
+})
+
+test('weeks start on the company week-start day', () => {
+  // 2026-10-07 is a Wednesday.
+  assert.equal(weekOf('2026-10-07', 0), '2026-10-04')
+  assert.equal(weekOf('2026-10-07', 1), '2026-10-05')
+  assert.equal(weekOf('2026-10-04', 0), '2026-10-04')
+  assert.equal(weekOf('2026-10-03', 0), '2026-09-27')
+  assert.equal(weekOf('2026-10-07', 3), '2026-10-07')
+  assert.equal(weekOf('2026-10-06', 3), '2026-09-30')
+})
+
+test('a week across the daylight-saving change is 169 hours long', () => {
+  const w = weekBounds('2026-11-01', LA)
+  assert.equal(w.days.length, 7)
+  assert.equal(w.days[6], '2026-11-07')
+  assert.equal((w.end.getTime() - w.start.getTime()) / 3_600_000, 169)
 })

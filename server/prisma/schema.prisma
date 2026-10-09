@@ -17,6 +17,7 @@ model Company {
   shopLat     Float?
   shopLng     Float?
   shopRadiusM Int      @default(150)
+  weekStartDay Int     @default(0) // 0 = Sunday … 6 = Saturday; the week techs sign and managers approve
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -42,6 +43,8 @@ model Person {
   company     Company      @relation(fields: [companyId], references: [id])
   punches     Punch[]
   assignments Assignment[]
+  approvals   Approval[]
+  external    ExternalHours[]
 
   @@index([companyId, active])
 }
@@ -104,6 +107,7 @@ model Punch {
   notes        String    @default("")
   clientId     String? // generated on the phone; makes offline re-sends harmless
   apiKeyId     String? // set when an integration punched on the person's behalf
+  enteredById  String? // set when someone else entered it: a lead's crew punch or a manager's correction
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
@@ -157,6 +161,81 @@ model PunchEdit {
   punch Punch @relation(fields: [punchId], references: [id])
 
   @@index([punchId])
+}
+
+// A tech signs their week; any manager approves it. An approved week is frozen:
+// punches in it cannot be added or changed until a manager reopens it. A change to a
+// signed (not yet approved) week clears the signature so the tech signs again.
+model Approval {
+  id           String    @id @default(uuid())
+  companyId    String
+  personId     String
+  week         String // YYYY-MM-DD, first day of the week in the company timezone
+  signedAt     DateTime?
+  approvedAt   DateTime?
+  approvedById String?
+  hours        Float     @default(0) // total when approved
+  note         String    @default("")
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  person Person @relation(fields: [personId], references: [id])
+
+  @@unique([personId, week])
+  @@index([companyId, week])
+}
+
+// Hours per person per day from another system (Timesheets.com during the parallel
+// run), pushed in so /reports/reconcile can compare them with ours.
+model ExternalHours {
+  id        String   @id @default(uuid())
+  companyId String
+  system    String
+  personId  String
+  date      String // YYYY-MM-DD
+  hours     Float
+  syncedAt  DateTime @default(now())
+
+  person Person @relation(fields: [personId], references: [id])
+
+  @@unique([companyId, system, personId, date])
+  @@index([companyId, system, date])
+}
+
+// Outbound subscriptions. Each event after lastSeq whose type matches is delivered,
+// signed with the secret, and retried with backoff for 24 hours.
+model Webhook {
+  id        String   @id @default(uuid())
+  companyId String
+  url       String
+  secret    String // needed to sign deliveries, so kept as is; only admins can see the list, never the secret
+  events    String[] // empty = every event type
+  active    Boolean  @default(true)
+  lastSeq   Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  deliveries WebhookDelivery[]
+
+  @@index([companyId])
+}
+
+model WebhookDelivery {
+  id         String   @id @default(uuid())
+  webhookId  String
+  eventSeq   Int
+  status     String   @default("pending") // pending | ok | failed
+  attempts   Int      @default(0)
+  nextAt     DateTime @default(now())
+  lastCode   Int?
+  lastError  String   @default("")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  webhook Webhook @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+
+  @@unique([webhookId, eventSeq])
+  @@index([status, nextAt])
 }
 
 // Ids in other systems (ged, jetbuilt, timesheets, accountedge) pointing at our rows.

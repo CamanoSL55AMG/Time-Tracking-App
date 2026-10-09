@@ -19,26 +19,30 @@ import {
   TextField,
   Typography,
 } from '@mui/material'
-import { api, errorText, fmtTime, type ApiKey, type Job, type Person } from '../api'
+import { api, errorText, fmtTime, grabGeo, type ApiKey, type Company, type Job, type Person, type Webhook } from '../api'
 
 // People, jobs and integration keys. Most jobs arrive from GED through the API;
 // this page is for the ones added by hand and for seeing what is there.
 
-type Section = 'people' | 'jobs' | 'keys'
+type Section = 'people' | 'jobs' | 'company' | 'keys' | 'webhooks'
 
 export default function AdminPage({ me }: { me: Person }) {
   const isAdmin = me.scopes.includes('keys:manage')
   const [section, setSection] = useState<Section>('people')
   return (
     <Stack spacing={2}>
-      <Tabs value={section} onChange={(_, v: Section) => setSection(v)}>
+      <Tabs value={section} onChange={(_, v: Section) => setSection(v)} variant="scrollable" allowScrollButtonsMobile>
         <Tab value="people" label="People" />
         <Tab value="jobs" label="Jobs" />
+        {isAdmin && <Tab value="company" label="Company" />}
         {isAdmin && <Tab value="keys" label="API keys" />}
+        {isAdmin && <Tab value="webhooks" label="Webhooks" />}
       </Tabs>
       {section === 'people' && <People isAdmin={isAdmin} />}
       {section === 'jobs' && <Jobs />}
+      {section === 'company' && isAdmin && <CompanySettings />}
       {section === 'keys' && isAdmin && <Keys />}
+      {section === 'webhooks' && isAdmin && <Webhooks />}
     </Stack>
   )
 }
@@ -173,6 +177,7 @@ function Jobs() {
   const [adding, setAdding] = useState(false)
   const [form, setForm] = useState({ name: '', kind: 'project', code: '' })
   const [busy, setBusy] = useState(false)
+  const [siteJob, setSiteJob] = useState<Job | null>(null)
 
   const save = async () => {
     setBusy(true)
@@ -214,6 +219,9 @@ function Jobs() {
               {[j.code, ...(j.refs ?? []).map((r) => `${r.system}: ${r.externalId}`)].filter(Boolean).join(' · ') || 'Added by hand'}
             </Typography>
           </Box>
+          <Button size="small" onClick={() => setSiteJob(j)} title="Where the job site is, for the off-site check">
+            {j.siteLat !== null && j.siteLat !== undefined ? 'Site set' : 'Set site'}
+          </Button>
           <Chip size="small" label={j.kind} />
           <Switch checked={j.active} onChange={() => void toggle(j)} inputProps={{ 'aria-label': `${j.name} open for time` }} />
         </Row>
@@ -238,6 +246,308 @@ function Jobs() {
           <Button onClick={() => setAdding(false)}>Cancel</Button>
           <Button variant="contained" onClick={save} disabled={busy || !form.name.trim()}>
             Add
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {siteJob && (
+        <PinDialog
+          title={`Job site: ${siteJob.name}`}
+          help="Punches for work phases that start farther than this from the pin are flagged for review. Travel phases are not checked."
+          lat={siteJob.siteLat ?? null}
+          lng={siteJob.siteLng ?? null}
+          radiusM={siteJob.siteRadiusM ?? 200}
+          onClose={() => setSiteJob(null)}
+          onSave={async (v) => {
+            await api.saveJob(siteJob.id, { siteLat: v.lat, siteLng: v.lng, siteRadiusM: v.lat === null ? null : v.radiusM })
+            setSiteJob(null)
+            await load()
+          }}
+        />
+      )}
+    </Stack>
+  )
+}
+
+// ─── A pin and a radius: job sites and the shop ─────────────────────────────
+
+function PinDialog({
+  title,
+  help,
+  lat,
+  lng,
+  radiusM,
+  onClose,
+  onSave,
+}: {
+  title: string
+  help: string
+  lat: number | null
+  lng: number | null
+  radiusM: number
+  onClose: () => void
+  onSave: (v: { lat: number | null; lng: number | null; radiusM: number }) => Promise<void>
+}) {
+  const [form, setForm] = useState({ lat: lat === null ? '' : String(lat), lng: lng === null ? '' : String(lng), radius: String(radiusM) })
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const here = async () => {
+    setBusy(true)
+    const g = await grabGeo(10_000)
+    setBusy(false)
+    if (!g) return setError('This device did not give a location. Allow location for this site, or type the numbers.')
+    setForm({ ...form, lat: g.lat.toFixed(6), lng: g.lng.toFixed(6) })
+    setError('')
+  }
+  const paste = (v: string) => {
+    // Accept "47.8123, -122.3045" pasted from a map into either box.
+    const m = /(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/.exec(v)
+    if (m) setForm({ ...form, lat: m[1], lng: m[2] })
+    return Boolean(m)
+  }
+  const save = async (clear = false) => {
+    setBusy(true)
+    setError('')
+    try {
+      const la = clear || form.lat.trim() === '' ? null : Number(form.lat)
+      const ln = clear || form.lng.trim() === '' ? null : Number(form.lng)
+      if ((la === null) !== (ln === null) || (la !== null && (!Number.isFinite(la) || !Number.isFinite(ln)))) throw new Error('Give both latitude and longitude as numbers.')
+      await onSave({ lat: la, lng: ln, radiusM: Number(form.radius) || 200 })
+    } catch (err) {
+      setError(errorText(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Dialog open onClose={onClose} fullWidth maxWidth="xs">
+      <DialogTitle>{title}</DialogTitle>
+      <DialogContent>
+        <Stack spacing={2} sx={{ pt: 1 }}>
+          <Typography variant="body2" color="text.secondary">
+            {help} Standing there? Use this phone's location. Otherwise paste the coordinates from Google Maps (right-click the spot).
+          </Typography>
+          <Button variant="outlined" onClick={() => void here()} disabled={busy}>
+            Use my location
+          </Button>
+          <TextField label="Latitude" value={form.lat} onChange={(e) => paste(e.target.value) || setForm({ ...form, lat: e.target.value })} inputMode="decimal" />
+          <TextField label="Longitude" value={form.lng} onChange={(e) => paste(e.target.value) || setForm({ ...form, lng: e.target.value })} inputMode="decimal" />
+          <TextField label="Radius (metres)" value={form.radius} onChange={(e) => setForm({ ...form, radius: e.target.value })} inputMode="numeric" helperText="200 m suits most sites; a campus may need more" />
+          {error && <Alert severity="error">{error}</Alert>}
+        </Stack>
+      </DialogContent>
+      <DialogActions>
+        {lat !== null && (
+          <Button color="warning" onClick={() => void save(true)} disabled={busy} sx={{ mr: 'auto' }}>
+            Remove pin
+          </Button>
+        )}
+        <Button onClick={onClose}>Cancel</Button>
+        <Button variant="contained" onClick={() => void save()} disabled={busy}>
+          Save
+        </Button>
+      </DialogActions>
+    </Dialog>
+  )
+}
+
+// ─── Company settings ───────────────────────────────────────────────────────
+
+const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+
+function CompanySettings() {
+  const { data, error, setError, load } = useLoader(api.company)
+  const [saved, setSaved] = useState('')
+  const [pin, setPin] = useState(false)
+
+  const save = async (body: Partial<Omit<Company, 'id' | 'weekStartName'>>, what: string) => {
+    setSaved('')
+    try {
+      await api.saveCompany(body)
+      await load()
+      setSaved(what)
+    } catch (err) {
+      setError(errorText(err))
+    }
+  }
+
+  if (!data) return error ? <Alert severity="error">{error}</Alert> : null
+  return (
+    <Stack spacing={2}>
+      {error && <Alert severity="error">{error}</Alert>}
+      {saved && <Alert severity="success">{saved} saved.</Alert>}
+      <Paper sx={{ p: 2 }}>
+        <Stack spacing={2}>
+          <TextField
+            select
+            label="Week starts on"
+            value={data.weekStartDay}
+            onChange={(e) => void save({ weekStartDay: Number(e.target.value) }, 'Week start')}
+            helperText="The week techs sign and managers approve. Match your payroll week."
+          >
+            {DAYS.map((d, i) => (
+              <MenuItem key={d} value={i}>
+                {d}
+              </MenuItem>
+            ))}
+          </TextField>
+          <TextField label="Timezone" value={data.timezone} disabled helperText="Days and weeks are counted in this timezone" />
+        </Stack>
+      </Paper>
+      <Paper sx={{ p: 2 }}>
+        <Stack direction="row" alignItems="center" spacing={2}>
+          <Box sx={{ flex: 1 }}>
+            <Typography sx={{ fontWeight: 600 }}>Shop location</Typography>
+            <Typography variant="body2" color="text.secondary">
+              {data.shopLat !== null ? `${data.shopLat.toFixed(5)}, ${data.shopLng?.toFixed(5)} · ${data.shopRadiusM} m` : 'Not set. Shop phases are not checked for location.'}
+            </Typography>
+          </Box>
+          <Button onClick={() => setPin(true)}>{data.shopLat !== null ? 'Change' : 'Set'}</Button>
+        </Stack>
+      </Paper>
+      {pin && (
+        <PinDialog
+          title="Shop location"
+          help="Shop phases (load, put away) that start farther than this from the shop are flagged for review, and the board shows who is at the shop."
+          lat={data.shopLat}
+          lng={data.shopLng}
+          radiusM={data.shopRadiusM}
+          onClose={() => setPin(false)}
+          onSave={async (v) => {
+            await api.saveCompany({ shopLat: v.lat, shopLng: v.lng, shopRadiusM: v.radiusM })
+            setPin(false)
+            await load()
+            setSaved('Shop location')
+          }}
+        />
+      )}
+    </Stack>
+  )
+}
+
+// ─── Webhooks ───────────────────────────────────────────────────────────────
+
+function Webhooks() {
+  const { data, error, setError, load } = useLoader(api.webhooks)
+  const [adding, setAdding] = useState(false)
+  const [url, setUrl] = useState('')
+  const [events, setEvents] = useState<string[]>([])
+  const [secret, setSecret] = useState('')
+  const [notice, setNotice] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const run = async (fn: () => Promise<unknown>) => {
+    setBusy(true)
+    setNotice('')
+    try {
+      await fn()
+      await load()
+    } catch (err) {
+      setError(errorText(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Stack spacing={1.5}>
+      {error && <Alert severity="error">{error}</Alert>}
+      {notice && <Alert severity={notice.startsWith('Delivered') ? 'success' : 'warning'}>{notice}</Alert>}
+      <Typography variant="body2" color="text.secondary">
+        For apps that accept incoming calls. Each change is sent to the address, signed with its secret, and retried for 24 hours. Apps that cannot accept calls, like GED, read the change feed instead.
+      </Typography>
+      <Box>
+        <Button variant="contained" onClick={() => setAdding(true)}>
+          Add webhook
+        </Button>
+      </Box>
+      {(data?.data ?? []).map((w: Webhook) => (
+        <Row key={w.id} dim={!w.active}>
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Typography sx={{ fontWeight: 600, wordBreak: 'break-all' }}>{w.url}</Typography>
+            <Typography variant="body2" color="text.secondary">
+              {w.events.length ? w.events.join(', ') : 'Every event'}
+            </Typography>
+            <Typography variant="caption" color={w.failed ? 'warning.main' : 'text.secondary'}>
+              {w.delivered} delivered · {w.pending} waiting · {w.failed} failed
+            </Typography>
+          </Box>
+          <Stack spacing={0.5}>
+            <Button
+              size="small"
+              disabled={busy}
+              onClick={() =>
+                void run(async () => {
+                  const r = await api.testWebhook(w.id)
+                  setNotice(r.ok ? `Delivered (HTTP ${r.code}).` : `Not delivered: ${r.error || `HTTP ${r.code}`}`)
+                })
+              }
+            >
+              Test
+            </Button>
+            {w.failed > 0 && (
+              <Button size="small" disabled={busy} onClick={() => void run(() => api.retryWebhook(w.id))}>
+                Retry failed
+              </Button>
+            )}
+            <Button size="small" color="warning" disabled={busy} onClick={() => void run(() => api.deleteWebhook(w.id))}>
+              Remove
+            </Button>
+          </Stack>
+          <Switch checked={w.active} onChange={() => void run(() => api.setWebhookActive(w.id, !w.active))} inputProps={{ 'aria-label': 'Sending' }} />
+        </Row>
+      ))}
+
+      <Dialog open={adding} onClose={() => setAdding(false)} fullWidth maxWidth="sm">
+        <DialogTitle>Add webhook</DialogTitle>
+        <DialogContent>
+          <Stack spacing={1} sx={{ pt: 1 }}>
+            <TextField label="Address" placeholder="https://example.com/hooks/time" value={url} onChange={(e) => setUrl(e.target.value)} />
+            <Typography variant="subtitle2" sx={{ pt: 1 }}>
+              Which events (none ticked = all)
+            </Typography>
+            {(data?.eventTypes ?? []).map((t) => (
+              <FormControlLabel
+                key={t}
+                control={<Checkbox size="small" checked={events.includes(t)} onChange={(e) => setEvents(e.target.checked ? [...events, t] : events.filter((x) => x !== t))} />}
+                label={<Typography variant="body2" sx={{ fontFamily: 'ui-monospace, Consolas, monospace' }}>{t}</Typography>}
+              />
+            ))}
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setAdding(false)}>Cancel</Button>
+          <Button
+            variant="contained"
+            disabled={busy || !url.trim()}
+            onClick={() =>
+              void run(async () => {
+                const r = await api.addWebhook(url.trim(), events)
+                setSecret(r.secret)
+                setAdding(false)
+                setUrl('')
+                setEvents([])
+              })
+            }
+          >
+            Add
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={Boolean(secret)} fullWidth maxWidth="sm">
+        <DialogTitle>Copy the signing secret now</DialogTitle>
+        <DialogContent>
+          <Stack spacing={2}>
+            <Alert severity="warning">This is the only time it is shown. The receiving app uses it to check the X-TT-Signature header.</Alert>
+            <Paper sx={{ p: 1.5, fontFamily: 'ui-monospace, Consolas, monospace', wordBreak: 'break-all', bgcolor: 'grey.100' }}>{secret}</Paper>
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button variant="contained" onClick={() => setSecret('')}>
+            Done
           </Button>
         </DialogActions>
       </Dialog>
