@@ -58,7 +58,7 @@ try {
   const phases = r.json?.data ?? []
   check('phases are seeded', phases.length >= 2, `got ${phases.length}`)
 
-  r = await call('POST', '/api-keys', { token: admin, body: { name: `smoke ${stamp}`, scopes: ['punch:read', 'punch:write:any', 'jobs:read', 'jobs:write', 'people:read', 'people:write', 'reports:read', 'events:read'] } })
+  r = await call('POST', '/api-keys', { token: admin, body: { name: `smoke ${stamp}`, scopes: ['punch:read', 'punch:write:any', 'jobs:read', 'jobs:write', 'people:read', 'people:write', 'reports:read', 'events:read', 'assignments:write'] } })
   check('create integration key', r.status === 201 && r.json?.key?.startsWith('tt_live_'), JSON.stringify(r.json))
   const key = r.json?.key
   const keyId = r.json?.apiKey?.id
@@ -121,6 +121,21 @@ try {
 
   r = await call('GET', `/reports/hours?groupBy=job,phase&jobId=${jobId}`, { token: key })
   check('hours report', r.status === 200 && r.json?.rows?.length === 2 && Math.abs(r.json?.totalHours - 45 / 60) < 0.02, JSON.stringify(r.json))
+
+  // The day's schedule pushed in by another app pre-selects the job.
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
+  r = await call('PUT', `/assignments/${today}`, { token: key, body: { source: `smoke-${stamp}`, assignments: [
+    { email: testEmail, jobRef: { system: 'smoke', externalId: stamp }, title: `ZZ to Smoke test job ${stamp} 7am shop`, shopTime: '7am', externalId: `evt-${stamp}` },
+    { email: `nobody-${stamp}@example.invalid`, title: 'unknown person' },
+  ] } })
+  check('push the day\'s schedule', r.status === 200 && r.json?.saved === 1 && r.json?.withJob === 1 && r.json?.skipped?.length === 1, JSON.stringify(r.json))
+  r = await call('GET', '/me/state', { token: key, headers: as })
+  check('the person\'s day lists the scheduled job', r.json?.assignments?.length === 1 && r.json.assignments[0].job?.id === jobId && r.json.assignments[0].shopTime === '7am', JSON.stringify(r.json?.assignments))
+  r = await call('PUT', `/assignments/${today}`, { token: key, body: { source: `smoke-${stamp}`, assignments: [] } })
+  const after = await call('GET', '/me/state', { token: key, headers: as })
+  check('a new push replaces the day', r.status === 200 && after.json?.assignments?.length === 0)
+  r = await call('PUT', '/assignments/10-07-2026', { token: key, body: { assignments: [] } })
+  check('a bad date is refused', r.status === 400)
 
   // Five punches at the same instant must still leave exactly one open segment.
   const burst = await Promise.all([1, 2, 3, 4, 5].map((n) => call('POST', '/punches/in', { token: key, headers: as, body: { jobId, clientId: `b${n}-${stamp}` } })))

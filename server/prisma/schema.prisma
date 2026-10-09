@@ -39,8 +39,9 @@ model Person {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  company Company @relation(fields: [companyId], references: [id])
-  punches Punch[]
+  company     Company      @relation(fields: [companyId], references: [id])
+  punches     Punch[]
+  assignments Assignment[]
 
   @@index([companyId, active])
 }
@@ -58,8 +59,9 @@ model Job {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  company Company @relation(fields: [companyId], references: [id])
-  punches Punch[]
+  company     Company      @relation(fields: [companyId], references: [id])
+  punches     Punch[]
+  assignments Assignment[]
 
   @@index([companyId, active])
 }
@@ -117,6 +119,28 @@ model Punch {
   @@index([companyId, clockOut])
   @@index([jobId])
   @@index([companyId, updatedAt])
+}
+
+// Who is scheduled on which job on a given day. Pushed in by GED from the shared
+// job calendar; pre-selects the job when a tech clocks in. A push for a date
+// replaces that date's rows from the same source.
+model Assignment {
+  id         String   @id @default(uuid())
+  companyId  String
+  date       String // YYYY-MM-DD in the company timezone
+  personId   String
+  jobId      String? // null when the calendar entry names no job we know
+  title      String   @default("") // the calendar entry as written
+  shopTime   String   @default("") // call time, e.g. "7am"
+  source     String   @default("api")
+  externalId String   @default("") // e.g. the calendar event id
+  createdAt  DateTime @default(now())
+
+  person Person @relation(fields: [personId], references: [id])
+  job    Job?   @relation(fields: [jobId], references: [id])
+
+  @@index([companyId, date])
+  @@index([personId, date])
 }
 
 // Audit trail: every correction keeps who, when, before, after and why.

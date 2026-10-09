@@ -88,7 +88,14 @@ export interface DayState {
   byJob: { jobId: string; jobName: string; hours: number }[]
   nextPhase: Phase | null
   phases: Phase[]
+  assignments: Assignment[]
   asOf: string
+}
+export interface Assignment {
+  id: string
+  title: string
+  shopTime: string
+  job: Job | null
 }
 export interface BoardRow {
   personId: string
@@ -146,12 +153,9 @@ export const api = {
   changePassword: (current: string, next: string) => http.post('/auth/password', { current, next }).then((r) => r.data),
 
   state: () => http.get<DayState>('/me/state').then((r) => r.data),
-  // Each tap carries its own id, so a retry after a dropped connection cannot double-punch.
-  punchIn: async (jobId: string, phaseId: string | undefined) =>
-    http.post<PunchResult>('/punches/in', { jobId, phaseId, geo: await grabGeo(), clientId: newId() }).then((r) => r.data),
-  punchNext: async (phaseId?: string) =>
-    http.post<PunchResult>('/punches/next', { phaseId, geo: await grabGeo(), clientId: newId() }).then((r) => r.data),
-  punchOut: async () => http.post<PunchResult>('/punches/out', { geo: await grabGeo() }).then((r) => r.data),
+  punchIn: (jobId: string, phaseId: string | undefined) => punch('in', { jobId, phaseId }),
+  punchNext: (phaseId?: string) => punch('next', { phaseId }),
+  punchOut: () => punch('out', {}),
 
   jobs: (q?: string) => http.get<{ data: Job[] }>('/jobs', { params: { q: q || undefined, limit: 500 } }).then((r) => r.data.data),
   allJobs: () => http.get<{ data: Job[] }>('/jobs', { params: { active: 'all', limit: 500 } }).then((r) => r.data.data),
@@ -182,3 +186,119 @@ export const fmtElapsed = (fromIso: string | null | undefined, to: Date | string
 }
 
 export const fmtHours = (h: number) => `${h.toFixed(2)} h`
+
+// ─── Punches that survive a dead signal ─────────────────────────────────────
+// A tap that cannot reach the server is kept on the phone with the time it
+// happened, and sent later in the same order. Each one carries its own id, so a
+// repeat (a retry after a dropped answer) is recognised by the server and does
+// nothing twice. While anything is waiting, later taps wait behind it.
+
+export type PunchKind = 'in' | 'next' | 'out'
+interface QueuedPunch {
+  id: string
+  kind: PunchKind
+  body: Record<string, unknown>
+}
+export type PunchOutcome = { sent: true; state: DayState } | { sent: false; at: string }
+
+const QUEUE_KEY = 'tt_punch_queue'
+const FAILED_KEY = 'tt_punch_failed'
+const listeners = new Set<() => void>()
+
+const readJson = <T,>(key: string, fallback: T): T => {
+  try {
+    const raw = localStorage.getItem(key)
+    return raw ? (JSON.parse(raw) as T) : fallback
+  } catch {
+    return fallback
+  }
+}
+const writeJson = (key: string, value: unknown) => {
+  try {
+    localStorage.setItem(key, JSON.stringify(value))
+  } catch {
+    /* storage full or blocked: nothing more we can do here */
+  }
+  listeners.forEach((fn) => fn())
+}
+
+export const queuedPunches = () => readJson<QueuedPunch[]>(QUEUE_KEY, [])
+/** Messages for queued punches the server refused once the signal came back. */
+export const failedPunches = () => readJson<string[]>(FAILED_KEY, [])
+export const clearFailedPunches = () => writeJson(FAILED_KEY, [])
+export const onQueueChange = (fn: () => void) => {
+  listeners.add(fn)
+  return () => {
+    listeners.delete(fn)
+  }
+}
+
+/** No answer at all (as opposed to an answer that says no). */
+const isOffline = (err: unknown) => axios.isAxiosError(err) && !err.response && err.code !== 'ERR_CANCELED'
+
+const send = (q: QueuedPunch) => http.post<PunchResult>(`/punches/${q.kind}`, q.body, { headers: { 'Idempotency-Key': q.id } })
+
+async function punch(kind: PunchKind, fields: Record<string, unknown>): Promise<PunchOutcome> {
+  const id = newId()
+  const geo = await grabGeo()
+  const body: Record<string, unknown> = { ...fields, geo: geo ?? undefined }
+  if (kind !== 'out') body.clientId = id
+  const tappedAt = new Date().toISOString()
+
+  const keep = () => {
+    // Waiting punches carry the moment of the tap; online ones use the server's clock.
+    writeJson(QUEUE_KEY, [...queuedPunches(), { id, kind, body: { ...body, at: tappedAt } }])
+    return { sent: false as const, at: tappedAt }
+  }
+  if (queuedPunches().length) {
+    const outcome = keep()
+    void flushPunches()
+    return outcome
+  }
+  try {
+    const r = await send({ id, kind, body })
+    return { sent: true, state: r.data.state }
+  } catch (err) {
+    if (isOffline(err)) return keep()
+    throw err
+  }
+}
+
+let flushing = false
+/** Send waiting punches in order. Stops at the first one that still cannot get through. */
+export async function flushPunches(): Promise<boolean> {
+  if (flushing || !getToken()) return false
+  flushing = true
+  let sentAny = false
+  try {
+    for (;;) {
+      const q = queuedPunches()
+      if (!q.length) break
+      try {
+        await send(q[0])
+        sentAny = true
+      } catch (err) {
+        if (isOffline(err)) break
+        // Signed out: keep the punch until someone signs in again.
+        if (axios.isAxiosError(err) && err.response?.status === 401) break
+        const code = axios.isAxiosError(err) ? (err.response?.data as { error?: { code?: string } } | undefined)?.error?.code : undefined
+        // Clocking out when already out is not worth a warning.
+        if (!(q[0].kind === 'out' && code === 'not_clocked_in')) {
+          const when = new Date(String(q[0].body.at)).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+          writeJson(FAILED_KEY, [...failedPunches(), `${q[0].kind === 'in' ? 'Clock in' : q[0].kind === 'next' ? 'Next phase' : 'Clock out'} at ${when}: ${errorText(err)}`])
+        }
+      }
+      writeJson(QUEUE_KEY, queuedPunches().slice(1))
+    }
+  } finally {
+    flushing = false
+  }
+  return sentAny
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('online', () => void flushPunches())
+  setInterval(() => {
+    if (queuedPunches().length) void flushPunches()
+  }, 20_000)
+}

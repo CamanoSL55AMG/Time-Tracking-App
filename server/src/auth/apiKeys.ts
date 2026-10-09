@@ -24,6 +24,7 @@ export const SCOPES = [
   'people:write',
   'reports:read',
   'events:read',
+  'assignments:write',
 ] as const
 export type Scope = (typeof SCOPES)[number]
 
@@ -36,7 +37,7 @@ export type Role = (typeof ROLES)[number]
 
 const TECH = [SELF, 'jobs:read']
 const LEAD = [...TECH, 'punch:read', 'people:read']
-const MANAGER = [...LEAD, 'punch:write:any', 'jobs:write', 'people:write', 'reports:read', 'events:read']
+const MANAGER = [...LEAD, 'punch:write:any', 'jobs:write', 'people:write', 'reports:read', 'events:read', 'assignments:write']
 
 export const ROLE_SCOPES: Record<Role, string[]> = {
   tech: TECH,

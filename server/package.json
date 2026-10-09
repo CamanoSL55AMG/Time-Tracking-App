@@ -11,7 +11,8 @@
     "test": "tsc -p tsconfig.json && node --test dist/lib/time.test.js dist/lib/geo.test.js dist/auth/auth.test.js",
     "db:push": "prisma db push",
     "seed": "tsx scripts/seed.ts",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "link-ged": "tsx scripts/link-ged.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.1.0",

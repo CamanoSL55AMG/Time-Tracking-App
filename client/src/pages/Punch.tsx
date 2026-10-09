@@ -1,11 +1,37 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Alert, Autocomplete, Box, Button, Chip, CircularProgress, Divider, MenuItem, Paper, Stack, TextField, Typography } from '@mui/material'
-import { api, errorText, fmtElapsed, fmtHours, fmtTime, type DayState, type Job, type Phase } from '../api'
+import {
+  api,
+  clearFailedPunches,
+  errorText,
+  failedPunches,
+  flushPunches,
+  fmtElapsed,
+  fmtHours,
+  fmtTime,
+  onQueueChange,
+  queuedPunches,
+  type DayState,
+  type Job,
+  type Phase,
+  type PunchKind,
+  type PunchOutcome,
+  type Punch as Segment,
+} from '../api'
 
-// The tech's screen. Off the clock: pick the job, tap Clock In. On the clock: one big
-// button moves to the next phase of the day; Switch job and Clock Out sit under it.
+// The tech's screen. Off the clock: pick the job (today's schedule is offered
+// first), tap Clock In. On the clock: one big button moves to the next phase of the
+// day; Switch job and Clock Out sit under it. With no signal, taps are kept on the
+// phone and the screen carries on as if they had gone through.
 
-const KIND_LABEL: Record<Job['kind'], string> = { project: 'Projects', service: 'Service', shop: 'Shop', other: 'Other' }
+type Group = 'Today' | 'Projects' | 'Service' | 'Shop' | 'Other'
+const KIND_GROUP: Record<Job['kind'], Group> = { project: 'Projects', service: 'Service', shop: 'Shop', other: 'Other' }
+const GROUP_ORDER: Group[] = ['Today', 'Projects', 'Service', 'Shop', 'Other']
+interface Choice {
+  job: Job
+  group: Group
+  hint?: string
+}
 
 const useNow = (everyMs: number) => {
   const [now, setNow] = useState(() => new Date())
@@ -16,17 +42,28 @@ const useNow = (everyMs: number) => {
   return now
 }
 
+const useQueue = () => {
+  const [, bump] = useState(0)
+  useEffect(() => onQueueChange(() => bump((n) => n + 1)), [])
+  return { waiting: queuedPunches().length, failed: failedPunches() }
+}
+
+const labelOf = (j: Job) => (j.kind === 'project' && j.code && !j.name.includes(j.code) ? `${j.code} ${j.name}` : j.name)
+
 export default function PunchPage() {
   const [state, setState] = useState<DayState | null>(null)
   const [jobs, setJobs] = useState<Job[]>([])
-  const [job, setJob] = useState<Job | null>(null)
+  const [choice, setChoice] = useState<Choice | null>(null)
   const [phaseId, setPhaseId] = useState('')
   const [switching, setSwitching] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const now = useNow(15_000)
+  const queue = useQueue()
 
   const load = useCallback(async () => {
+    // While punches are waiting on this phone, the server's view is behind ours.
+    if (queuedPunches().length) return
     try {
       const [s, j] = await Promise.all([api.state(), api.jobs()])
       setState(s)
@@ -38,8 +75,8 @@ export default function PunchPage() {
   }, [])
 
   useEffect(() => {
-    void load()
-    const onFocus = () => void load()
+    void flushPunches().then(() => load())
+    const onFocus = () => void flushPunches().then(() => load())
     window.addEventListener('focus', onFocus)
     const t = setInterval(() => void load(), 60_000)
     return () => {
@@ -48,38 +85,53 @@ export default function PunchPage() {
     }
   }, [load])
 
+  // When the last waiting punch goes through, show the server's version again.
+  useEffect(() => {
+    if (queue.waiting === 0) void load()
+  }, [queue.waiting, load])
+
+  const choices = useMemo<Choice[]>(() => {
+    const scheduled = (state?.assignments ?? []).filter((a) => a.job)
+    const seen = new Set<string>()
+    const out: Choice[] = []
+    for (const a of scheduled) {
+      if (seen.has(a.job!.id)) continue
+      seen.add(a.job!.id)
+      out.push({ job: a.job!, group: 'Today', hint: [a.shopTime && `${a.shopTime} shop`, a.title].filter(Boolean).join(' · ') })
+    }
+    for (const j of jobs) if (!seen.has(j.id)) out.push({ job: j, group: KIND_GROUP[j.kind] })
+    return out.sort((a, b) => GROUP_ORDER.indexOf(a.group) - GROUP_ORDER.indexOf(b.group) || labelOf(a.job).localeCompare(labelOf(b.job)))
+  }, [state?.assignments, jobs])
+
   // Suggest the phase the day is up to; the tech can change it.
   useEffect(() => {
     if (state && !phaseId) setPhaseId(state.nextPhase?.id ?? state.phases[0]?.id ?? '')
   }, [state, phaseId])
 
-  // Suggest the job last worked today.
+  // Suggest a job: the one last worked today, else today's scheduled job.
   useEffect(() => {
-    if (job || !state || !jobs.length) return
+    if (choice || !state || !choices.length) return
     const last = state.today.length ? state.today[state.today.length - 1] : null
-    const match = last ? jobs.find((j) => j.id === last.jobId) : null
-    if (match) setJob(match)
-  }, [state, jobs, job])
+    const pick = (last && choices.find((c) => c.job.id === last.jobId)) || choices.find((c) => c.group === 'Today')
+    if (pick) setChoice(pick)
+  }, [state, choices, choice])
 
-  const act = async (fn: () => Promise<{ state: DayState }>) => {
+  const act = async (kind: PunchKind, run: () => Promise<PunchOutcome>, local: { job?: Job; phaseId?: string }) => {
+    if (!state) return
     setBusy(true)
     setError('')
     try {
-      const r = await fn()
-      setState(r.state)
+      const r = await run()
+      const next = r.sent ? r.state : simulate(state, kind, { ...local, at: r.at })
+      setState(next)
       setSwitching(false)
-      setPhaseId(r.state.nextPhase?.id ?? '')
+      setPhaseId(next.nextPhase?.id ?? '')
     } catch (err) {
       setError(errorText(err))
     } finally {
       setBusy(false)
     }
   }
-
-  const sortedJobs = useMemo(
-    () => [...jobs].sort((a, b) => KIND_LABEL[a.kind].localeCompare(KIND_LABEL[b.kind]) || a.name.localeCompare(b.name)),
-    [jobs],
-  )
 
   if (!state) {
     return (
@@ -93,9 +145,28 @@ export default function PunchPage() {
   const open = state.open
   const picking = !state.onClock || switching
   const phaseIndex = open?.phase ? state.phases.findIndex((p) => p.id === open.phase!.id) : -1
+  const scheduledToday = (state.assignments ?? []).filter((a) => a.title)
 
   return (
     <Stack spacing={2}>
+      {queue.waiting > 0 && (
+        <Alert severity="info">
+          {queue.waiting === 1 ? '1 punch is' : `${queue.waiting} punches are`} saved on this phone and will be sent when the signal comes back. The
+          times are kept as you tapped them.
+        </Alert>
+      )}
+      {queue.failed.length > 0 && (
+        <Alert severity="warning" onClose={clearFailedPunches}>
+          {queue.failed.length === 1 ? 'A punch saved without signal' : 'Some punches saved without signal'} could not be recorded. Tell your manager so it
+          can be fixed:
+          {queue.failed.map((m) => (
+            <Box key={m} component="span" sx={{ display: 'block' }}>
+              {m}
+            </Box>
+          ))}
+        </Alert>
+      )}
+
       <Paper sx={{ p: 2.5, borderColor: state.onClock ? 'success.main' : undefined, borderWidth: state.onClock ? 2 : 1 }}>
         <Stack spacing={1.5}>
           <Stack direction="row" alignItems="center" spacing={1}>
@@ -122,6 +193,19 @@ export default function PunchPage() {
           )}
 
           {open && state.phases.length > 0 && <PhaseTrack phases={state.phases} current={phaseIndex} />}
+
+          {!state.onClock && scheduledToday.length > 0 && (
+            <Box>
+              <Typography variant="caption" color="text.secondary">
+                On the job calendar today
+              </Typography>
+              {scheduledToday.map((a) => (
+                <Typography key={a.id} variant="body2" sx={{ fontWeight: 600 }}>
+                  {a.title}
+                </Typography>
+              ))}
+            </Box>
+          )}
         </Stack>
       </Paper>
 
@@ -131,12 +215,27 @@ export default function PunchPage() {
         <Paper sx={{ p: 2 }}>
           <Stack spacing={2}>
             <Autocomplete
-              options={sortedJobs}
-              value={job}
-              onChange={(_, v) => setJob(v)}
-              groupBy={(j) => KIND_LABEL[j.kind]}
-              getOptionLabel={(j) => (j.code && !j.name.includes(j.code) ? `${j.code} ${j.name}` : j.name)}
-              isOptionEqualToValue={(a, b) => a.id === b.id}
+              options={choices}
+              value={choice}
+              onChange={(_, v) => setChoice(v)}
+              groupBy={(c) => (c.group === 'Today' ? "Today's schedule" : c.group)}
+              getOptionLabel={(c) => labelOf(c.job)}
+              isOptionEqualToValue={(a, b) => a.job.id === b.job.id}
+              renderOption={(props, c) => {
+                const { key, ...rest } = props as typeof props & { key: string }
+                return (
+                  <li key={key} {...rest}>
+                    <Box>
+                      <Typography variant="body2">{labelOf(c.job)}</Typography>
+                      {c.hint && (
+                        <Typography variant="caption" color="text.secondary">
+                          {c.hint}
+                        </Typography>
+                      )}
+                    </Box>
+                  </li>
+                )
+              }}
               renderInput={(params) => <TextField {...params} label={switching ? 'Switch to job' : 'Job'} placeholder="Search by name or number" />}
               noOptionsText="No matching job"
             />
@@ -153,8 +252,8 @@ export default function PunchPage() {
                 size="large"
                 variant="contained"
                 color={switching ? 'primary' : 'success'}
-                disabled={busy || !job}
-                onClick={() => job && act(() => api.punchIn(job.id, phaseId || undefined))}
+                disabled={busy || !choice}
+                onClick={() => choice && act('in', () => api.punchIn(choice.job.id, phaseId || undefined), { job: choice.job, phaseId })}
                 sx={{ py: 1.75, fontSize: 18 }}
               >
                 {busy ? 'Recording…' : switching ? 'Switch' : 'Clock In'}
@@ -172,7 +271,7 @@ export default function PunchPage() {
       {state.onClock && !switching && (
         <Stack spacing={1}>
           {state.nextPhase && (
-            <Button size="large" variant="contained" color="secondary" disabled={busy} onClick={() => act(() => api.punchNext())} sx={{ py: 2.25, fontSize: 20 }}>
+            <Button size="large" variant="contained" color="secondary" disabled={busy} onClick={() => act('next', () => api.punchNext(), {})} sx={{ py: 2.25, fontSize: 20 }}>
               {busy ? 'Recording…' : `Next: ${state.nextPhase.name}`}
             </Button>
           )}
@@ -180,7 +279,14 @@ export default function PunchPage() {
             <Button fullWidth size="large" variant="outlined" disabled={busy} onClick={() => setSwitching(true)}>
               Switch job
             </Button>
-            <Button fullWidth size="large" variant={state.nextPhase ? 'outlined' : 'contained'} color="warning" disabled={busy} onClick={() => act(() => api.punchOut())}>
+            <Button
+              fullWidth
+              size="large"
+              variant={state.nextPhase ? 'outlined' : 'contained'}
+              color="warning"
+              disabled={busy}
+              onClick={() => act('out', () => api.punchOut(), {})}
+            >
               Clock Out
             </Button>
           </Stack>
@@ -201,6 +307,7 @@ export default function PunchPage() {
                   </Typography>
                   <Typography variant="caption" color="text.secondary">
                     {fmtTime(p.clockIn)} – {p.clockOut ? fmtTime(p.clockOut) : 'now'}
+                    {p.id.startsWith('local-') && ' · not sent yet'}
                   </Typography>
                 </Box>
                 <Typography variant="body2" sx={{ fontVariantNumeric: 'tabular-nums' }} color={p.clockOut ? 'text.primary' : 'success.main'}>
@@ -222,6 +329,28 @@ export default function PunchPage() {
 /** Hours today, counting the open segment up to this minute. */
 function liveHours(state: DayState, now: Date): number {
   return state.today.reduce((sum, p) => sum + Math.max(0, (new Date(p.clockOut ?? now).getTime() - new Date(p.clockIn).getTime()) / 3_600_000), 0)
+}
+
+/** What the server will say once a waiting punch reaches it, worked out on the phone. */
+function simulate(s: DayState, kind: PunchKind, o: { job?: Job; phaseId?: string; at: string }): DayState {
+  const today: Segment[] = s.today.map((p) => (p.clockOut ? p : { ...p, clockOut: o.at }))
+  let open: Segment | null = null
+  if (kind !== 'out') {
+    const job = kind === 'next' ? s.open?.job : o.job
+    const phase =
+      kind === 'next'
+        ? s.nextPhase
+        : s.phases.find((p) => p.id === o.phaseId) ?? s.phases[0] ?? null
+    if (job) {
+      open = { id: `local-${o.at}`, personId: '', jobId: job.id, phaseId: phase?.id ?? null, clockIn: o.at, clockOut: null, notes: '', job, phase }
+      today.push(open)
+    }
+  }
+  const after = open?.phase?.sortOrder ?? -1
+  const last = today.length ? today[today.length - 1] : null
+  const nextPhase = open ? s.phases.find((p) => p.sortOrder > after) ?? null : s.phases.find((p) => p.id === last?.phaseId) ?? s.phases[0] ?? null
+  const hoursToday = today.reduce((sum, p) => sum + Math.max(0, (new Date(p.clockOut ?? o.at).getTime() - new Date(p.clockIn).getTime()) / 3_600_000), 0)
+  return { ...s, onClock: Boolean(open), open, today, nextPhase, hoursToday }
 }
 
 function PhaseTrack({ phases, current }: { phases: Phase[]; current: number }) {

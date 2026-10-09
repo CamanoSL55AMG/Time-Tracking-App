@@ -22,8 +22,12 @@ server/   Express + TypeScript + Prisma + PostgreSQL — the API at /api/v1     
 - API: scoped keys, `X-Act-As`, `Idempotency-Key`, change feed, hours report, and a
   reference page at `/api/v1/docs` generated from the code.
 
-Not built yet: job pre-fill from the Google Calendar, offline queue on the phone, crew
-punch, approvals, expenses, payroll export, leave. See the phases in the plan.
+- Today's job calendar assignment offered first and pre-selected (pushed in by GED).
+- No signal? Punches are kept on the phone with the time they were tapped and sent, in
+  order, when the signal returns.
+
+Not built yet: crew punch, approvals, expenses, payroll export, leave. See the phases in
+the plan.
 
 ## First-time setup (Windows)
 
@@ -74,6 +78,16 @@ npm run smoke   # with the API running: 45 end-to-end checks against your databa
 
 `npm run smoke` creates a throwaway person and job, walks a whole day of punches through
 the API, and deactivates them again when it is done.
+
+## Linking GED
+
+```powershell
+cd server
+npm run link-ged      # creates GED's key and writes it into GED's server\.env
+```
+
+Then restart GED's server. GED pushes its active projects as jobs and today's job
+calendar as assignments, and its title-bar clock punches through this app.
 
 ## Linking another app
 

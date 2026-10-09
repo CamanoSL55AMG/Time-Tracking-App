@@ -319,7 +319,7 @@ export async function personState(person: Person) {
   const company = await prisma.company.findUniqueOrThrow({ where: { id: person.companyId } })
   const now = new Date()
   const { start, end, date } = dayBounds(now, company.timezone)
-  const [open, today, phases] = await Promise.all([
+  const [open, today, phases, assignments] = await Promise.all([
     prisma.punch.findFirst({ where: { personId: person.id, clockOut: null }, include }),
     prisma.punch.findMany({
       where: { personId: person.id, clockIn: { gte: start, lt: end } },
@@ -327,6 +327,11 @@ export async function personState(person: Person) {
       include,
     }),
     prisma.phase.findMany({ where: { companyId: person.companyId, active: true }, orderBy: { sortOrder: 'asc' } }),
+    prisma.assignment.findMany({
+      where: { personId: person.id, date },
+      include: { job: true },
+      orderBy: [{ shopTime: 'asc' }, { createdAt: 'asc' }],
+    }),
   ])
 
   const byJob = new Map<string, { jobId: string; jobName: string; hours: number }>()
@@ -354,6 +359,13 @@ export async function personState(person: Person) {
     byJob: [...byJob.values()],
     nextPhase,
     phases,
+    // Today's schedule from the job calendar; closed jobs are not offered.
+    assignments: assignments.map((a) => ({
+      id: a.id,
+      title: a.title,
+      shopTime: a.shopTime,
+      job: a.job && a.job.active ? a.job : null,
+    })),
     asOf: now,
   }
 }
