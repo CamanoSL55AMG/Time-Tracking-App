@@ -108,11 +108,15 @@ export default function PunchPage() {
     if (state && !phaseId) setPhaseId(state.nextPhase?.id ?? state.phases[0]?.id ?? '')
   }, [state, phaseId])
 
-  // Suggest a job: the one last worked today, else today's scheduled job.
+  // Suggest a job: the one last worked today, else today's scheduled job, else the
+  // job last punched on any earlier day. The tech can always change it.
   useEffect(() => {
     if (choice || !state || !choices.length) return
     const last = state.today.length ? state.today[state.today.length - 1] : null
-    const pick = (last && choices.find((c) => c.job.id === last.jobId)) || choices.find((c) => c.group === 'Today')
+    const pick =
+      (last && choices.find((c) => c.job.id === last.jobId)) ||
+      choices.find((c) => c.group === 'Today') ||
+      (state.lastJob && choices.find((c) => c.job.id === state.lastJob!.id))
     if (pick) setChoice(pick)
   }, [state, choices, choice])
 
@@ -144,7 +148,9 @@ export default function PunchPage() {
 
   const open = state.open
   const picking = !state.onClock || switching
-  const phaseIndex = open?.phase ? state.phases.findIndex((p) => p.id === open.phase!.id) : -1
+  // The step track shows the field day only; office phases are not steps in it.
+  const flowPhases = state.phases.filter((p) => p.dayFlow !== false)
+  const phaseIndex = open?.phase ? flowPhases.findIndex((p) => p.id === open.phase!.id) : -1
   const scheduledToday = (state.assignments ?? []).filter((a) => a.title)
 
   return (
@@ -192,7 +198,7 @@ export default function PunchPage() {
             </Typography>
           )}
 
-          {open && state.phases.length > 0 && <PhaseTrack phases={state.phases} current={phaseIndex} />}
+          {open && phaseIndex >= 0 && <PhaseTrack phases={flowPhases} current={phaseIndex} />}
 
           {!state.onClock && scheduledToday.length > 0 && (
             <Box>
@@ -346,9 +352,15 @@ function simulate(s: DayState, kind: PunchKind, o: { job?: Job; phaseId?: string
       today.push(open)
     }
   }
+  // Same rule as the server: "Next" steps through the field day only.
   const after = open?.phase?.sortOrder ?? -1
   const last = today.length ? today[today.length - 1] : null
-  const nextPhase = open ? s.phases.find((p) => p.sortOrder > after) ?? null : s.phases.find((p) => p.id === last?.phaseId) ?? s.phases[0] ?? null
+  const flow = s.phases.filter((p) => p.dayFlow !== false)
+  const nextPhase = open
+    ? open.phase && open.phase.dayFlow === false
+      ? null
+      : flow.find((p) => p.sortOrder > after) ?? null
+    : s.phases.find((p) => p.id === last?.phaseId) ?? flow[0] ?? s.phases[0] ?? null
   const hoursToday = today.reduce((sum, p) => sum + Math.max(0, (new Date(p.clockOut ?? o.at).getTime() - new Date(p.clockIn).getTime()) / 3_600_000), 0)
   return { ...s, onClock: Boolean(open), open, today, nextPhase, hoursToday }
 }

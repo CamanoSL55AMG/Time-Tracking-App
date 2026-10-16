@@ -172,3 +172,48 @@ route(
     return { data: await prisma.phase.findMany({ where: { companyId: auth.companyId, active: true }, orderBy: { sortOrder: 'asc' } }) }
   },
 )
+
+const LABOR_CATEGORIES = ['engineering', 'install', 'programming', 'management', 'other']
+
+route(
+  jobsRouter,
+  {
+    method: 'patch',
+    path: '/phases/:id',
+    tag: 'Jobs',
+    summary: 'Change a phase: its name, order, the sold-labor line it rolls up to, or whether it is a step of the field day.',
+    access: ['jobs:write'],
+    body: {
+      name: 'Name',
+      short: 'Short label',
+      sortOrder: 'Position in the list (lower first)',
+      laborCategory: 'engineering | install | programming | management | other',
+      dayFlow: 'true if "Next" steps through it during the field day',
+      active: 'false hides it from the picker',
+    },
+  },
+  async (req) => {
+    const auth = requireScope(req, 'jobs:write')
+    const existing = await prisma.phase.findFirst({ where: { id: req.params.id, companyId: auth.companyId } })
+    if (!existing) throw notFound('Phase')
+    const b = req.body ?? {}
+    const laborCategory = b.laborCategory === undefined ? undefined : String(b.laborCategory)
+    if (laborCategory !== undefined && !LABOR_CATEGORIES.includes(laborCategory)) {
+      throw badRequest(`laborCategory must be one of ${LABOR_CATEGORIES.join(', ')}.`, { field: 'laborCategory' })
+    }
+    const sortOrder = num(b.sortOrder, 'sortOrder')
+    if (sortOrder === null) throw badRequest('sortOrder cannot be empty.', { field: 'sortOrder' })
+    const phase = await prisma.phase.update({
+      where: { id: existing.id },
+      data: {
+        name: b.name === undefined ? undefined : requiredStr(b.name, 'name', 120),
+        short: b.short === undefined ? undefined : requiredStr(b.short, 'short', 40),
+        sortOrder: sortOrder === undefined ? undefined : Math.round(sortOrder),
+        laborCategory,
+        dayFlow: bool(b.dayFlow),
+        active: bool(b.active),
+      },
+    })
+    return { phase }
+  },
+)

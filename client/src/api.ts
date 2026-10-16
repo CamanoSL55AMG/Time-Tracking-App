@@ -66,6 +66,10 @@ export interface Phase {
   short: string
   sortOrder: number
   atShop: boolean
+  /** Sold-labor line the hours roll up to: engineering | install | programming | management | other. */
+  laborCategory: string
+  /** A step of the field day ("Next" walks through these); office phases are not. */
+  dayFlow: boolean
 }
 export interface Punch {
   id: string
@@ -89,6 +93,8 @@ export interface DayState {
   nextPhase: Phase | null
   phases: Phase[]
   assignments: Assignment[]
+  /** The job this person last punched on (any day), if it is still open to time. */
+  lastJob?: Job | null
   asOf: string
 }
 export interface Assignment {
@@ -149,6 +155,8 @@ type PunchResult = { punch: Punch; state: DayState }
 export const api = {
   login: (email: string, password: string) => http.post<{ token: string; person: Person }>('/auth/login', { email, password }).then((r) => r.data),
   sso: (token: string) => http.post<{ token: string; person: Person }>('/auth/sso', { token }).then((r) => r.data),
+  authConfig: () => http.get<{ googleClientId: string | null }>('/auth/config').then((r) => r.data),
+  google: (credential: string) => http.post<{ token: string; person: Person }>('/auth/google', { credential }).then((r) => r.data),
   me: () => http.get<{ person: Person | null; scopes: string[] }>('/auth/me').then((r) => r.data),
   changePassword: (current: string, next: string) => http.post('/auth/password', { current, next }).then((r) => r.data),
 

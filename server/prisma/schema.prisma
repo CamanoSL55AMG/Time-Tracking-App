@@ -76,6 +76,12 @@ model Phase {
   sortOrder Int
   atShop    Boolean @default(false)
   active    Boolean @default(true)
+  // The sold-labor line this phase's hours roll up to, so hours line up with the
+  // labor budget in Jetbuilt: engineering | install | programming | management | other.
+  laborCategory String  @default("install")
+  // Part of the field day's step-by-step sequence ("Next" and the step track).
+  // Office phases (engineering, programming, PM) are picked directly instead.
+  dayFlow       Boolean @default(true)
 
   company Company @relation(fields: [companyId], references: [id])
   punches Punch[]

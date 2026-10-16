@@ -8,6 +8,7 @@ import { ApiError, badRequest, unauthorized } from '../errors.js'
 import { requireAuth, requirePerson } from '../auth/middleware.js'
 import { signSession } from '../auth/session.js'
 import { verifySsoToken } from '../auth/ssoToken.js'
+import { verifyGoogleIdToken } from '../auth/googleIdToken.js'
 import { isRole, ROLE_SCOPES } from '../auth/apiKeys.js'
 
 export const authRouter = Router()
@@ -65,6 +66,52 @@ route(
       throw unauthorized('Email or password is not correct.')
     }
     failures.delete(key)
+    return session(person)
+  },
+)
+
+route(
+  authRouter,
+  {
+    method: 'get',
+    path: '/auth/config',
+    tag: 'Sign-in',
+    summary: 'Which sign-in methods this server offers. The sign-in page reads this.',
+    access: 'public',
+  },
+  async () => ({ googleClientId: config.googleClientId || null }),
+)
+
+route(
+  authRouter,
+  {
+    method: 'post',
+    path: '/auth/google',
+    tag: 'Sign-in',
+    summary: 'Sign in with a Google ID token from Google Identity Services. Returns a session token.',
+    access: 'public',
+    body: { credential: 'The ID token Google returns to the sign-in button' },
+  },
+  async (req) => {
+    if (!config.googleClientId) throw new ApiError(503, 'google_not_configured', 'Google sign-in is not set up on this server (GOOGLE_CLIENT_ID).')
+    const credential = requiredStr(req.body?.credential, 'credential', 8000)
+    const result = await verifyGoogleIdToken(credential, config.googleClientId).catch((err: unknown) => {
+      throw new ApiError(502, 'google_unreachable', err instanceof Error ? err.message : 'Could not reach Google.')
+    })
+    if (!result.ok) throw unauthorized(result.reason)
+    const { email, name, hd } = result.identity
+
+    let person = await prisma.person.findUnique({ where: { email } })
+    if (!person) {
+      // Only people from the company's own Google Workspace domain are added on first sign-in.
+      const domainOk = Boolean(config.googleAllowedDomain) && (hd === config.googleAllowedDomain || email.endsWith(`@${config.googleAllowedDomain}`))
+      const companies = domainOk ? await prisma.company.findMany({ take: 2 }) : []
+      if (!domainOk || companies.length !== 1) {
+        throw unauthorized(`No Time Tracking account exists for ${email}. Ask an admin to add you.`)
+      }
+      person = await prisma.person.create({ data: { companyId: companies[0].id, email, name: str(name, 200) || email, role: 'tech' } })
+    }
+    if (!person.active) throw unauthorized('This account is not active.')
     return session(person)
   },
 )

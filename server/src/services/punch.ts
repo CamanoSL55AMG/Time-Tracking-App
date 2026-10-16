@@ -72,8 +72,8 @@ async function resolvePhase(tx: Tx, companyId: string, input: PunchInput): Promi
     if (!phase) throw notFound(`Phase "${input.phaseKey}"`)
     return phase
   }
-  // Nothing chosen: the first phase of the day.
-  return tx.phase.findFirst({ where: { companyId, active: true }, orderBy: { sortOrder: 'asc' } })
+  // Nothing chosen: the first phase of the field day.
+  return tx.phase.findFirst({ where: { companyId, active: true, dayFlow: true }, orderBy: { sortOrder: 'asc' } })
 }
 
 function checkAt(at: Date): void {
@@ -190,8 +190,14 @@ export async function punchNext(actor: Actor, person: Person, input: Pick<PunchI
     if (input.phaseId || input.phaseKey) {
       phase = await resolvePhase(tx, actor.companyId, input)
     } else {
+      // "Next" only steps through the field day. Office phases (engineering,
+      // programming, PM) are not a step in it, so from one of those the person
+      // picks where to go instead.
+      if (open.phase && !open.phase.dayFlow) {
+        throw conflict('not_in_day_flow', `"${open.phase.name}" is not a step of the field day. Pick the phase to switch to, or clock out.`)
+      }
       phase = await tx.phase.findFirst({
-        where: { companyId: actor.companyId, active: true, sortOrder: { gt: open.phase?.sortOrder ?? -1 } },
+        where: { companyId: actor.companyId, active: true, dayFlow: true, sortOrder: { gt: open.phase?.sortOrder ?? -1 } },
         orderBy: { sortOrder: 'asc' },
       })
       if (!phase) throw conflict('last_phase', 'That was the last phase of the day. Clock out instead.')
@@ -319,7 +325,7 @@ export async function personState(person: Person) {
   const company = await prisma.company.findUniqueOrThrow({ where: { id: person.companyId } })
   const now = new Date()
   const { start, end, date } = dayBounds(now, company.timezone)
-  const [open, today, phases, assignments] = await Promise.all([
+  const [open, today, phases, assignments, lastPunch] = await Promise.all([
     prisma.punch.findFirst({ where: { personId: person.id, clockOut: null }, include }),
     prisma.punch.findMany({
       where: { personId: person.id, clockIn: { gte: start, lt: end } },
@@ -331,6 +337,12 @@ export async function personState(person: Person) {
       where: { personId: person.id, date },
       include: { job: true },
       orderBy: [{ shopTime: 'asc' }, { createdAt: 'asc' }],
+    }),
+    // The job this person last punched on, on any day, while it is still open to time.
+    prisma.punch.findFirst({
+      where: { personId: person.id, job: { active: true } },
+      orderBy: { clockIn: 'desc' },
+      include: { job: true },
     }),
   ])
 
@@ -344,10 +356,14 @@ export async function personState(person: Person) {
   // On the clock: the phase "Next" moves to (null after the last one).
   // Off the clock: the phase to suggest. Back from a break, that is the phase the
   // person was in; at the start of the day, the first one.
+  // Office phases are not steps of the field day, so "Next" offers nothing from them.
   const lastToday = today.length ? today[today.length - 1] : null
+  const flow = phases.filter((ph) => ph.dayFlow)
   const nextPhase = open
-    ? phases.find((ph) => ph.sortOrder > (open.phase?.sortOrder ?? -1)) ?? null
-    : phases.find((ph) => ph.id === lastToday?.phaseId) ?? phases[0] ?? null
+    ? open.phase && !open.phase.dayFlow
+      ? null
+      : flow.find((ph) => ph.sortOrder > (open.phase?.sortOrder ?? -1)) ?? null
+    : phases.find((ph) => ph.id === lastToday?.phaseId) ?? flow[0] ?? phases[0] ?? null
 
   return {
     date,
@@ -366,6 +382,8 @@ export async function personState(person: Person) {
       shopTime: a.shopTime,
       job: a.job && a.job.active ? a.job : null,
     })),
+    // Pre-fills the job picker when nothing from today points elsewhere.
+    lastJob: lastPunch?.job ?? null,
     asOf: now,
   }
 }
@@ -400,7 +418,8 @@ export async function board(companyId: string) {
     }),
     prisma.phase.findMany({ where: { companyId, active: true }, orderBy: { sortOrder: 'asc' } }),
   ])
-  const index = new Map(phases.map((ph, i) => [ph.id, i]))
+  // Step number within the field day; office phases have none.
+  const index = new Map(phases.filter((ph) => ph.dayFlow).map((ph, i) => [ph.id, i]))
   const fence = shopFence(company)
   const rows = new Map<string, BoardRow>()
 

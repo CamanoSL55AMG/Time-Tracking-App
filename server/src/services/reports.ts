@@ -2,10 +2,12 @@ import { prisma } from '../db.js'
 import { badRequest } from '../errors.js'
 import { hoursBetween, localDate } from '../lib/time.js'
 
-// Hours grouped by any mix of person / job / phase / day. A segment that runs past
-// midnight is counted on the day it started.
+// Hours grouped by any mix of person / job / phase / laborCategory / day. A segment
+// that runs past midnight is counted on the day it started. laborCategory is the
+// sold-labor line a phase rolls up to (engineering, install, programming,
+// management, other), so hours line up with the labor budget in Jetbuilt.
 
-export const GROUPS = ['person', 'job', 'phase', 'day'] as const
+export const GROUPS = ['person', 'job', 'phase', 'laborCategory', 'day'] as const
 export type Group = (typeof GROUPS)[number]
 
 const MAX_ROWS = 50_000
@@ -13,15 +15,20 @@ const MAX_ROWS = 50_000
 export interface HoursRow {
   personId?: string
   personName?: string
+  personEmail?: string
   jobId?: string
   jobName?: string
   jobCode?: string
   phaseKey?: string | null
   phaseName?: string
+  laborCategory?: string
   day?: string
   hours: number
   segments: number
 }
+
+/** A segment with no phase counts as install, the default for field work. */
+const categoryOf = (phase: { laborCategory: string } | null): string => phase?.laborCategory || 'install'
 
 export async function hoursReport(
   companyId: string,
@@ -50,14 +57,17 @@ export async function hoursReport(
   for (const p of punches) {
     const day = localDate(p.clockIn, company.timezone)
     const key = groups
-      .map((g) => (g === 'person' ? p.personId : g === 'job' ? p.jobId : g === 'phase' ? p.phaseId ?? '-' : day))
+      .map((g) =>
+        g === 'person' ? p.personId : g === 'job' ? p.jobId : g === 'phase' ? p.phaseId ?? '-' : g === 'laborCategory' ? categoryOf(p.phase) : day,
+      )
       .join('|')
     let row = rows.get(key)
     if (!row) {
       row = { hours: 0, segments: 0 }
-      if (groups.includes('person')) Object.assign(row, { personId: p.personId, personName: p.person.name })
+      if (groups.includes('person')) Object.assign(row, { personId: p.personId, personName: p.person.name, personEmail: p.person.email })
       if (groups.includes('job')) Object.assign(row, { jobId: p.jobId, jobName: p.job.name, jobCode: p.job.code })
       if (groups.includes('phase')) Object.assign(row, { phaseKey: p.phase?.key ?? null, phaseName: p.phase?.name ?? '' })
+      if (groups.includes('laborCategory')) row.laborCategory = categoryOf(p.phase)
       if (groups.includes('day')) row.day = day
       rows.set(key, row)
     }

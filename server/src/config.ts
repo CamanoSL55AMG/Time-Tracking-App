@@ -12,6 +12,12 @@ export const config = {
   jwtSecret: process.env.JWT_SECRET ?? '',
   addonSsoSecret: process.env.ADDON_SSO_SECRET ?? '',
   ssoAutoProvision: (process.env.SSO_AUTO_PROVISION ?? 'true').toLowerCase() !== 'false',
+  // "Sign in with Google": the OAuth web client id (the same one GED uses is fine).
+  // Empty = the Google button is not shown.
+  googleClientId: (process.env.GOOGLE_CLIENT_ID ?? '').trim(),
+  // Google Workspace domain whose people may be added automatically on their first
+  // Google sign-in (e.g. morgansound.com). Empty = only people already in the app.
+  googleAllowedDomain: (process.env.GOOGLE_ALLOWED_DOMAIN ?? '').trim().toLowerCase(),
   corsOrigins: (process.env.CORS_ORIGINS ?? '')
     .split(',')
     .map((s) => s.trim())

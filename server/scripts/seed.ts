@@ -15,6 +15,11 @@ const PHASES = [
   { key: 'cleanup', name: 'Clean up', short: 'Clean up', atShop: false },
   { key: 'travel-back', name: 'Drive to shop', short: 'Drive back', atShop: false },
   { key: 'shop-unload', name: 'Shop — unload / put away', short: 'Put away', atShop: true },
+  // Office work. Picked directly, not stepped through with "Next"; each rolls up to
+  // its own sold-labor line.
+  { key: 'engineering', name: 'Engineering / design', short: 'Engineering', atShop: false, laborCategory: 'engineering', dayFlow: false },
+  { key: 'programming', name: 'Programming', short: 'Programming', atShop: false, laborCategory: 'programming', dayFlow: false },
+  { key: 'project-management', name: 'Project management', short: 'PM', atShop: false, laborCategory: 'management', dayFlow: false },
 ]
 
 const num = (v: string | undefined) => (v && v.trim() !== '' && Number.isFinite(Number(v)) ? Number(v) : null)

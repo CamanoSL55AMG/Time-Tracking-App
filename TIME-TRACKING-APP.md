@@ -109,7 +109,7 @@ deploy    Dockerfile + docker-compose, same as the other add-ons
 | Company | Tenant | name, timezone, weekStart, payPeriodRule |
 | Person | Anyone who punches or approves | email, name, initials, role, pin, active |
 | Job | Something hours are charged to | kind (project / service / shop / other), name, code, active, siteLat, siteLng, siteRadiusM |
-| Phase | Task picker entries | name, short, sortOrder, atShop, active |
+| Phase | Task picker entries | name, short, sortOrder, atShop, active, laborCategory (sold-labor line the hours roll up to: engineering / install / programming / management / other), dayFlow (a step "Next" walks through; office phases are not) |
 | Punch | One segment of work | personId, jobId, phaseId, clockIn, clockOut, source, in/out lat-lng-accuracy, notes, clientId |
 | PunchEdit | Audit trail | punchId, editedBy, at, before, after, reason |
 | PayPeriod | Payroll window | start, end, status (open / locked / exported) |

@@ -55,8 +55,15 @@ try {
   if (!admin) throw new Error('Cannot continue without signing in. Check ADMIN_EMAIL / ADMIN_PASSWORD in .env and that `npm run seed` has run.')
 
   r = await call('GET', '/phases', { token: admin })
-  const phases = r.json?.data ?? []
+  const allPhases = r.json?.data ?? []
+  // The walk below steps through the field day; office phases are not steps in it.
+  const phases = allPhases.filter((p) => p.dayFlow !== false)
   check('phases are seeded', phases.length >= 2, `got ${phases.length}`)
+  check(
+    'every phase names its labor category',
+    allPhases.every((p) => typeof p.laborCategory === 'string' && p.laborCategory !== '' && typeof p.dayFlow === 'boolean'),
+    JSON.stringify(allPhases.map((p) => [p.key, p.laborCategory, p.dayFlow])),
+  )
 
   r = await call('POST', '/api-keys', { token: admin, body: { name: `smoke ${stamp}`, scopes: ['punch:read', 'punch:write:any', 'jobs:read', 'jobs:write', 'people:read', 'people:write', 'reports:read', 'events:read', 'assignments:write'] } })
   check('create integration key', r.status === 201 && r.json?.key?.startsWith('tt_live_'), JSON.stringify(r.json))
@@ -109,6 +116,7 @@ try {
 
   r = await call('POST', '/punches/out', { token: key, headers: as, body: { at: minutesAgo(10) } })
   check('clock out', r.status === 200 && r.json?.state?.onClock === false && Math.abs(r.json?.state?.hoursToday - 40 / 60) < 0.01, `hoursToday=${r.json?.state?.hoursToday}`)
+  check('the day remembers the last job for next time', r.json?.state?.lastJob?.id === jobId, JSON.stringify(r.json?.state?.lastJob ?? null))
 
   r = await call('PATCH', `/punches/${secondId}`, { token: key, body: { clockOut: minutesAgo(5) } })
   check('a correction without a reason is refused', r.status === 400)
@@ -121,6 +129,12 @@ try {
 
   r = await call('GET', `/reports/hours?groupBy=job,phase&jobId=${jobId}`, { token: key })
   check('hours report', r.status === 200 && r.json?.rows?.length === 2 && Math.abs(r.json?.totalHours - 45 / 60) < 0.02, JSON.stringify(r.json))
+  r = await call('GET', `/reports/hours?groupBy=laborCategory&jobId=${jobId}`, { token: key })
+  check(
+    'field-day hours roll up to install',
+    r.status === 200 && r.json?.rows?.length === 1 && r.json.rows[0].laborCategory === 'install' && Math.abs(r.json.rows[0].hours - 45 / 60) < 0.02,
+    JSON.stringify(r.json),
+  )
 
   // The day's schedule pushed in by another app pre-selects the job.
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())

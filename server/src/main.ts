@@ -21,7 +21,21 @@ assertConfig()
 
 const app = express()
 app.set('trust proxy', 1) // behind the Cloudflare tunnel / a reverse proxy
-app.use(helmet())
+app.use(
+  helmet({
+    // The built sign-in page loads Google Identity Services for "Sign in with Google".
+    contentSecurityPolicy: {
+      directives: {
+        scriptSrc: ["'self'", 'https://accounts.google.com/gsi/client'],
+        frameSrc: ["'self'", 'https://accounts.google.com/gsi/'],
+        connectSrc: ["'self'", 'https://accounts.google.com/gsi/'],
+        styleSrc: ["'self'", "'unsafe-inline'", 'https://accounts.google.com/gsi/style'],
+      },
+    },
+    // Google's sign-in popup needs to talk back to the page that opened it.
+    crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' },
+  }),
+)
 app.use(morgan(config.isProduction ? 'combined' : 'dev'))
 if (config.corsOrigins.length) {
   app.use(cors({ origin: config.corsOrigins, allowedHeaders: ['Authorization', 'Content-Type', 'Idempotency-Key', 'X-Act-As'] }))
