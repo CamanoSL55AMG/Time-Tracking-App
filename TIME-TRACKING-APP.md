@@ -1,6 +1,6 @@
 # Time Tracking — Standalone App Spec
 
-**Status:** Draft 4; Phase 0 and the core of Phase 1 built 2026-10-07 (see README) · **Date:** 2026-10-07 · **Author:** Art Howard + Claude
+**Status:** Draft 5; Phase 0 and the core of Phase 1 built 2026-10-07; Phase 3 and the core of Phase 5 built 2026-10-17 (see §13) · **Date:** 2026-10-17 · **Author:** Art Howard + Claude
 **Supersedes:** the GED-embedded punch clock built 2026-10-05 (code to be moved here, see §11)
 
 ## 1. Decision
@@ -427,3 +427,43 @@ Decided 2026-10-07
 - The construction-worker sick-leave payout rule does not apply to Morgan Sound.
 - Sick leave and vacation are separate banks.
 - Sick and vacation balances are kept today in a spreadsheet maintained by Gary (finance).
+
+## 13. Built 2026-10-17: expenses and leave
+
+Branch `feature/expenses-and-leave`. `npm test` 29 pass, `npm run smoke` 99 pass.
+
+Expenses (Phase 3)
+- Phone screen **Expenses**: add a line (category, date, amount or miles, job, who paid,
+  vendor, note, receipt photo shrunk to 1600 px), submit the open lines as one report.
+- Managers approve or send back with a note; sent-back lines can be fixed and resubmitted.
+  Nobody approves their own report except an admin.
+- **Manage → Expenses**: categories and their account codes, mileage rates by date
+  (IRS 2025 70¢ and 2026 72.5¢ seeded), approved reports marked paid / posted.
+- Receipts are stored in the database (`Receipt`), 10 MB max, jpeg/png/webp/heic/pdf.
+- `/reports/expenses` gives totals by person, job, category, paidBy, month.
+
+Leave (Phase 5 core)
+- Phone screen **Time off**: balances, the one-time sick-leave notice with acknowledgment,
+  requests with cancel, monthly statement. Leads and managers approve or deny.
+- **Manage → Leave**: start dates, vacation rules and who is on which, opening balances
+  from the finance spreadsheet saved as CSV (dry run first, re-import safe), corrections
+  with a reason, every ledger line, monthly statements for everyone.
+- WA sick leave preset applies to everyone: 1 h per 40 worked, usable from day 90, 40 h
+  carryover. A sick rule below that floor is refused.
+- Accruals run nightly through the week that ended 8 days ago (so corrections land
+  first); year-end carryover runs in January. Both are safe to run again. Set
+  `LEAVE_AUTO_ACCRUE=false` to turn the nightly run off.
+- The Tower board shows people on approved leave as off.
+- `/reports/pfml-quarterly` gives hours worked and paid leave hours per person per quarter.
+
+Roles: lead gets `leave:read`, `leave:approve`; manager adds `expenses:*` and `leave:write`;
+payroll gets `expenses:read`, `leave:read`, `leave:write`.
+
+Not done yet
+- Leave hours and approved reimbursements in the payroll export (Phase 4).
+- Adding approved leave to the shared calendar ("TB OFF").
+- Opening-balance import reads CSV, not xlsx.
+- Optional verification flag for sick leave over 3 days.
+- Accrual counts closed punch hours. Confirm with payroll which hours count (overtime,
+  travel, paid leave) before relying on it for payroll.
+- Have Gary or counsel review the sick-leave notice wording on the Time off screen.
