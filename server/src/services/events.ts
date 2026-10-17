@@ -11,6 +11,16 @@ export type EventType =
   | 'punch.edited'
   | 'job.upserted'
   | 'person.upserted'
+  | 'expense.submitted'
+  | 'expense.approved'
+  | 'expense.rejected'
+  | 'expense.exported'
+  | 'leave.requested'
+  | 'leave.approved'
+  | 'leave.denied'
+  | 'leave.cancelled'
+  | 'leave.accrued'
+  | 'leave.adjusted'
 
 export async function emit(tx: Tx, companyId: string, type: EventType, payload: Record<string, unknown>): Promise<void> {
   await tx.event.create({

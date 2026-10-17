@@ -16,6 +16,9 @@ import { jobsRouter } from './routes/jobs.js'
 import { punchesRouter } from './routes/punches.js'
 import { systemRouter } from './routes/system.js'
 import { assignmentsRouter } from './routes/assignments.js'
+import { expensesRouter } from './routes/expenses.js'
+import { leaveRouter } from './routes/leave.js'
+import { startNightly } from './services/nightly.js'
 
 assertConfig()
 
@@ -52,6 +55,8 @@ v1.use(peopleRouter)
 v1.use(jobsRouter)
 v1.use(punchesRouter)
 v1.use(assignmentsRouter)
+v1.use(expensesRouter)
+v1.use(leaveRouter)
 v1.use((req, _res, next) => next(new ApiError(404, 'not_found', `No such endpoint: ${req.method} ${req.originalUrl}`)))
 app.use('/api/v1', v1)
 app.use('/api', (req, _res, next) => next(new ApiError(404, 'not_found', `No such endpoint: ${req.method} ${req.originalUrl}. The API lives under /api/v1.`)))
@@ -104,8 +109,10 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
 const server = app.listen(config.port, () => {
   console.log(`Time Tracking API on http://localhost:${config.port}  (docs: /api/v1/docs)`)
 })
+const stopNightly = startNightly()
 
 const shutdown = () => {
+  stopNightly()
   server.close(() => {
     prisma.$disconnect().finally(() => process.exit(0))
   })

@@ -36,12 +36,21 @@ model Person {
   role         String   @default("tech") // tech | lead | manager | payroll | admin
   passwordHash String?
   active       Boolean  @default(true)
+  // First day of work, YYYY-MM-DD. Sets when sick leave becomes usable (day 90),
+  // years-of-service tiers and anniversary grants.
+  hireDate        String?
+  // When the person acknowledged the written notice of their sick-leave rights.
+  sickNoticeAckAt DateTime?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  company     Company      @relation(fields: [companyId], references: [id])
-  punches     Punch[]
-  assignments Assignment[]
+  company       Company             @relation(fields: [companyId], references: [id])
+  punches       Punch[]
+  assignments   Assignment[]
+  expenses      Expense[]
+  leaveRequests LeaveRequest[]
+  leavePolicies PersonLeavePolicy[]
+  leaveLedger   LeaveLedger[]
 
   @@index([companyId, active])
 }
@@ -62,6 +71,7 @@ model Job {
   company     Company      @relation(fields: [companyId], references: [id])
   punches     Punch[]
   assignments Assignment[]
+  expenses    Expense[]
 
   @@index([companyId, active])
 }
@@ -225,4 +235,215 @@ model IdempotencyKey {
 model SsoNonce {
   jti    String   @id
   usedAt DateTime @default(now())
+}
+
+// ─── Expenses and mileage ───────────────────────────────────────────────────
+// Money is whole cents. A mileage line's amount is miles × the rate in force on
+// its date, worked out when the line is saved and kept, so a later rate change
+// never rewrites an old claim.
+
+model ExpenseCategory {
+  id          String  @id @default(uuid())
+  companyId   String
+  name        String
+  accountCode String  @default("") // where accounting posts it; filled in by finance
+  mileage     Boolean @default(false) // lines in this category are miles × rate
+  sortOrder   Int     @default(0)
+  active      Boolean @default(true)
+
+  expenses Expense[]
+
+  @@unique([companyId, name])
+  @@index([companyId, sortOrder])
+}
+
+model MileageRate {
+  id            String   @id @default(uuid())
+  companyId     String
+  effectiveFrom String // YYYY-MM-DD; the rate applies from this date until the next one
+  rateMills     Int // tenths of a cent per mile: 725 = 72.5¢
+  note          String   @default("")
+  createdAt     DateTime @default(now())
+
+  @@unique([companyId, effectiveFrom])
+}
+
+model ExpenseReport {
+  id           String    @id @default(uuid())
+  companyId    String
+  personId     String
+  title        String    @default("")
+  status       String    @default("draft") // draft | submitted | approved | rejected | exported
+  submittedAt  DateTime?
+  decidedById  String?
+  decidedAt    DateTime?
+  decisionNote String    @default("")
+  exportedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  expenses Expense[]
+
+  @@index([companyId, status])
+  @@index([personId])
+}
+
+model Expense {
+  id          String   @id @default(uuid())
+  companyId   String
+  personId    String
+  reportId    String?
+  jobId       String?
+  categoryId  String
+  date        String // YYYY-MM-DD the money was spent or the trip was made
+  amountCents Int
+  miles       Float?
+  rateMills   Int? // the mileage rate used, kept with the line
+  paidBy      String   @default("employee") // employee (reimburse) | company (company card)
+  vendor      String   @default("")
+  notes       String   @default("")
+  clientId    String? // generated on the phone; makes re-sends harmless
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  person   Person          @relation(fields: [personId], references: [id])
+  job      Job?            @relation(fields: [jobId], references: [id])
+  category ExpenseCategory @relation(fields: [categoryId], references: [id])
+  report   ExpenseReport?  @relation(fields: [reportId], references: [id])
+  receipt  Receipt?
+
+  @@unique([companyId, clientId])
+  @@index([companyId, date])
+  @@index([personId, date])
+  @@index([reportId])
+  @@index([jobId])
+}
+
+// Receipt photo or PDF, kept in the database so it is backed up with the record.
+model Receipt {
+  id        String   @id @default(uuid())
+  companyId String
+  expenseId String   @unique
+  mimeType  String
+  bytes     Int
+  data      Bytes
+  createdAt DateTime @default(now())
+
+  expense Expense @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+}
+
+// ─── Leave ──────────────────────────────────────────────────────────────────
+// A balance is never stored. It is the sum of LeaveLedger rows, so every balance
+// can be explained line by line.
+
+model LeaveType {
+  id           String  @id @default(uuid())
+  companyId    String
+  key          String // stable slug, e.g. "sick", "vacation"
+  name         String
+  paid         Boolean @default(true)
+  drawsBalance Boolean @default(true) // false: holiday, jury duty, unpaid…
+  statutory    String  @default("none") // wa_sick | wa_pfml | none
+  sortOrder    Int     @default(0)
+  active       Boolean @default(true)
+
+  policies PersonLeavePolicy[]
+  ledger   LeaveLedger[]
+  requests LeaveRequest[]
+  rules    LeavePolicy[]
+
+  @@unique([companyId, key])
+}
+
+model LeavePolicy {
+  id           String  @id @default(uuid())
+  companyId    String
+  leaveTypeId  String
+  name         String
+  // per_hours_worked: rateHours for every perHours worked (WA sick: 1 per 40)
+  // per_month:        rateHours each calendar month
+  // annual_grant:     rateHours once a year, on 1 January or the work anniversary
+  method       String  @default("per_hours_worked")
+  rateHours    Float
+  perHours     Float   @default(40)
+  grantOn      String  @default("calendar") // annual_grant: calendar | anniversary
+  capHours     Float? // accrual stops while the balance is at or above this
+  carryoverMax Float? // at year end, hours above this are forfeited
+  waitingDays  Int     @default(0) // usable from this many calendar days after hireDate
+  // Years-of-service steps: [{ "afterYears": 3, "rateHours": 1.5 }]
+  tiers        Json    @default("[]")
+  // Applies to every active person without being assigned (the WA sick preset).
+  appliesToAll Boolean @default(false)
+  active       Boolean @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  leaveType LeaveType           @relation(fields: [leaveTypeId], references: [id])
+  people    PersonLeavePolicy[]
+
+  @@index([companyId])
+}
+
+model PersonLeavePolicy {
+  id            String  @id @default(uuid())
+  companyId     String
+  personId      String
+  leavePolicyId String
+  leaveTypeId   String
+  effectiveFrom String // YYYY-MM-DD
+  effectiveTo   String? // YYYY-MM-DD, inclusive; null = still in force
+
+  person    Person      @relation(fields: [personId], references: [id])
+  policy    LeavePolicy @relation(fields: [leavePolicyId], references: [id])
+  leaveType LeaveType   @relation(fields: [leaveTypeId], references: [id])
+
+  @@index([personId])
+}
+
+model LeaveLedger {
+  id          String   @id @default(uuid())
+  companyId   String
+  personId    String
+  leaveTypeId String
+  // accrual | use | adjustment | carryover | forfeit | payout | reinstate
+  kind        String
+  hours       Float // positive adds to the balance, negative takes from it
+  date        String // YYYY-MM-DD the change counts on
+  // What caused it. Unique per person and type, so re-running an accrual or
+  // approving twice cannot double-count: accrual:<policy>:<week>, request:<id>…
+  sourceRef   String
+  note        String   @default("")
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  person    Person    @relation(fields: [personId], references: [id])
+  leaveType LeaveType @relation(fields: [leaveTypeId], references: [id])
+
+  @@unique([companyId, personId, leaveTypeId, sourceRef])
+  @@index([personId, leaveTypeId, date])
+  @@index([companyId, date])
+}
+
+model LeaveRequest {
+  id           String    @id @default(uuid())
+  companyId    String
+  personId     String
+  leaveTypeId  String
+  startDate    String // YYYY-MM-DD
+  endDate      String // YYYY-MM-DD, inclusive
+  hours        Float
+  // Free text from the person. Never a medical reason; the app does not ask for one.
+  note         String    @default("")
+  status       String    @default("requested") // requested | approved | denied | cancelled
+  decidedById  String?
+  decidedAt    DateTime?
+  decisionNote String    @default("")
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  person    Person    @relation(fields: [personId], references: [id])
+  leaveType LeaveType @relation(fields: [leaveTypeId], references: [id])
+
+  @@index([companyId, status])
+  @@index([personId, startDate])
 }

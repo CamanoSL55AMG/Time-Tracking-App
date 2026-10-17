@@ -65,7 +65,7 @@ try {
     JSON.stringify(allPhases.map((p) => [p.key, p.laborCategory, p.dayFlow])),
   )
 
-  r = await call('POST', '/api-keys', { token: admin, body: { name: `smoke ${stamp}`, scopes: ['punch:read', 'punch:write:any', 'jobs:read', 'jobs:write', 'people:read', 'people:write', 'reports:read', 'events:read', 'assignments:write'] } })
+  r = await call('POST', '/api-keys', { token: admin, body: { name: `smoke ${stamp}`, scopes: ['punch:read', 'punch:write:any', 'jobs:read', 'jobs:write', 'people:read', 'people:write', 'reports:read', 'events:read', 'assignments:write', 'expenses:read', 'expenses:write', 'expenses:approve', 'leave:read', 'leave:write', 'leave:approve'] } })
   check('create integration key', r.status === 201 && r.json?.key?.startsWith('tt_live_'), JSON.stringify(r.json))
   const key = r.json?.key
   const keyId = r.json?.apiKey?.id
@@ -176,7 +176,133 @@ try {
   r = await call('PATCH', `/punches/${secondId}`, { token: tech, body: { notes: 'x', reason: 'x' } })
   check('a tech cannot edit punches', r.status === 403)
   r = await call('GET', '/me/state', { token: tech })
-  check('a tech sees their own day', r.status === 200 && r.json?.today?.length >= 2 && r.json?.phases?.length === phases.length)
+  check('a tech sees their own day', r.status === 200 && r.json?.today?.length >= 2 && r.json?.phases?.length === allPhases.length)
+
+
+  // ─── Expenses ───────────────────────────────────────────────────────────────
+  r = await call('GET', '/expense-categories', { token: tech })
+  const cats = r.json?.data ?? []
+  const fuel = cats.find((c) => !c.mileage)
+  const mileCat = cats.find((c) => c.mileage)
+  check('a tech sees the expense categories', r.status === 200 && Boolean(fuel) && Boolean(mileCat), JSON.stringify(cats.map((c) => c.name)))
+  r = await call('GET', '/mileage-rates', { token: tech })
+  const rateMills = r.json?.current?.rateMills
+  check('a mileage rate is in force', r.status === 200 && Number.isInteger(rateMills), JSON.stringify(r.json?.current ?? null))
+
+  r = await call('POST', '/expenses', { token: tech, body: { date: today, categoryId: fuel?.id, jobId, amount: '45.67', vendor: 'Smoke Fuel', clientId: `e1-${stamp}` } })
+  check('a tech adds an expense', r.status === 201 && r.json?.expense?.amountCents === 4567 && r.json?.expense?.editable === true, JSON.stringify(r.json))
+  const fuelLine = r.json?.expense?.id
+  r = await call('POST', '/expenses', { token: tech, body: { date: today, categoryId: fuel?.id, amount: '45.67', clientId: `e1-${stamp}` } })
+  check('re-sending the same expense clientId does nothing', r.json?.duplicate === true && r.json?.expense?.id === fuelLine)
+  r = await call('POST', '/expenses', { token: tech, body: { date: today, categoryId: mileCat?.id, jobId, miles: 42.3 } })
+  check('mileage is miles × the rate', r.status === 201 && r.json?.expense?.amountCents === Math.round((42.3 * rateMills) / 10), JSON.stringify(r.json?.expense ?? r.json))
+  const mileLine = r.json?.expense?.id
+  r = await call('POST', '/expenses', { token: tech, body: { date: today, categoryId: fuel?.id, amount: '12.345' } })
+  check('an amount with three decimals is refused', r.status === 400)
+  r = await call('POST', '/expenses', { token: tech, body: { date: today, categoryId: mileCat?.id } })
+  check('mileage without miles is refused', r.status === 400)
+
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64')
+  let raw = await fetch(`${api}/expenses/${fuelLine}/receipt`, { method: 'POST', headers: { Authorization: `Bearer ${tech}`, 'Content-Type': 'image/png' }, body: png })
+  check('attach a receipt photo', raw.status === 200, String(raw.status))
+  raw = await fetch(`${api}/expenses/${fuelLine}/receipt`, { headers: { Authorization: `Bearer ${tech}` } })
+  check('the receipt comes back as the file', raw.status === 200 && raw.headers.get('content-type') === 'image/png' && (await raw.arrayBuffer()).byteLength === png.length)
+  raw = await fetch(`${api}/expenses/${fuelLine}/receipt`, { method: 'POST', headers: { Authorization: `Bearer ${tech}`, 'Content-Type': 'text/plain' }, body: 'nope' })
+  check('a receipt that is not a photo or PDF is refused', raw.status === 415, String(raw.status))
+
+  r = await call('POST', '/expense-reports', { token: tech, body: { title: `Smoke ${stamp}`, submit: true } })
+  const report = r.json?.report
+  check('submit the lines as one report', r.status === 201 && report?.status === 'submitted' && report?.lines?.length === 2 && report?.missingReceipts === 0, JSON.stringify(r.json?.error ?? report))
+  r = await call('PATCH', `/expenses/${fuelLine}`, { token: tech, body: { amount: '1.00' } })
+  check('a submitted line is locked', r.status === 409 && r.json?.error?.code === 'expense_locked')
+  r = await call('POST', `/expense-reports/${report?.id}/approve`, { token: tech })
+  check('a tech cannot approve expenses', r.status === 403)
+  r = await call('POST', `/expense-reports/${report?.id}/reject`, { token: key })
+  check('sending back needs a note', r.status === 400)
+  r = await call('POST', `/expense-reports/${report?.id}/reject`, { token: key, body: { note: 'Add the job to the fuel line' } })
+  check('send a report back', r.status === 200 && r.json?.report?.status === 'rejected')
+  r = await call('PATCH', `/expenses/${fuelLine}`, { token: tech, body: { amount: '40.00' } })
+  check('a sent-back line can be fixed', r.status === 200 && r.json?.expense?.amountCents === 4000)
+  r = await call('POST', `/expense-reports/${report?.id}/submit`, { token: tech })
+  check('submit it again', r.status === 200 && r.json?.report?.status === 'submitted')
+  r = await call('POST', `/expense-reports/${report?.id}/approve`, { token: key, body: { note: 'ok' } })
+  check('approve the report', r.status === 200 && r.json?.report?.status === 'approved')
+  r = await call('DELETE', `/expenses/${mileLine}`, { token: tech })
+  check('an approved line cannot be deleted', r.status === 409)
+  r = await call('POST', `/expense-reports/${report?.id}/mark-exported`, { token: key })
+  check('mark it exported', r.status === 200 && r.json?.report?.status === 'exported')
+  r = await call('GET', `/reports/expenses?groupBy=job,category&jobId=${jobId}`, { token: key })
+  check('expense totals by job', r.status === 200 && r.json?.totalCents === 4000 + Math.round((42.3 * rateMills) / 10) && r.json?.rows?.length === 2, JSON.stringify(r.json))
+  r = await call('GET', '/expenses', { token: tech })
+  check('a tech lists only their own expenses', r.status === 200 && r.json?.data?.length === 2 && r.json.data.every((e) => e.personId === row?.personId))
+
+  // ─── Leave ──────────────────────────────────────────────────────────────────
+  const personId = row?.personId
+  r = await call('GET', '/leave/types', { token: tech })
+  const leaveTypes = r.json?.data ?? []
+  const sickType = leaveTypes.find((x) => x.statutory === 'wa_sick')
+  const vacType = leaveTypes.find((x) => x.key === 'vacation')
+  check('sick leave and vacation are separate kinds', Boolean(sickType) && Boolean(vacType) && sickType.id !== vacType.id)
+  const ymdAgo = (d) => new Date(Date.now() - d * 86_400_000).toISOString().slice(0, 10)
+  const ahead = (d) => new Date(Date.now() + d * 86_400_000).toISOString().slice(0, 10)
+
+  r = await call('PUT', `/people/${personId}/hire-date`, { token: key, body: { hireDate: ymdAgo(10) } })
+  check('set a start date', r.status === 200 && r.json?.person?.hireDate === ymdAgo(10))
+  r = await call('POST', '/leave/requests', { token: tech, body: { leaveTypeId: sickType?.id, startDate: ahead(5), hours: 8 } })
+  check('sick leave before day 90 is refused with the date', r.status === 409 && r.json?.error?.code === 'not_yet_usable' && Boolean(r.json?.error?.details?.usableFrom), JSON.stringify(r.json))
+  await call('PUT', `/people/${personId}/hire-date`, { token: key, body: { hireDate: ymdAgo(200) } })
+  r = await call('POST', '/leave/requests', { token: tech, body: { leaveTypeId: sickType?.id, startDate: ahead(5), hours: 8 } })
+  check('sick leave with no hours earned is refused', r.status === 409 && r.json?.error?.code === 'insufficient_balance')
+
+  const opening = { date: today, rows: [{ email: testEmail, leaveType: 'vacation', hours: 16 }] }
+  r = await call('POST', '/leave/opening-balances', { token: key, body: { ...opening, dryRun: true } })
+  check('opening balances: dry run matches the row', r.status === 200 && r.json?.ready === 1 && r.json?.imported === 0, JSON.stringify(r.json))
+  r = await call('POST', '/leave/opening-balances', { token: key, body: opening })
+  check('opening balances: import', r.status === 200 && r.json?.imported === 1)
+  r = await call('POST', '/leave/opening-balances', { token: key, body: opening })
+  check('opening balances: importing twice does not double', r.status === 200 && r.json?.alreadyImported === 1 && r.json?.imported === 0)
+
+  r = await call('POST', '/leave/requests', { token: tech, body: { leaveTypeId: vacType?.id, startDate: ahead(30), endDate: ahead(30), hours: 8, note: 'smoke' } })
+  check('a tech asks for time off', r.status === 201 && r.json?.request?.status === 'requested', JSON.stringify(r.json))
+  const leaveId = r.json?.request?.id
+  r = await call('POST', '/leave/requests', { token: tech, body: { leaveTypeId: vacType?.id, startDate: ahead(40), hours: 9 } })
+  check('asking for more than is left after pending requests is refused', r.status === 409 && r.json?.error?.code === 'insufficient_balance' && r.json?.error?.details?.available === 8, JSON.stringify(r.json))
+  r = await call('POST', '/leave/requests', { token: tech, body: { leaveTypeId: vacType?.id, startDate: ahead(30), hours: 1 } })
+  check('overlapping requests are refused', r.status === 409 && r.json?.error?.code === 'leave_overlap')
+  r = await call('POST', `/leave/requests/${leaveId}/approve`, { token: tech })
+  check('a tech cannot approve time off', r.status === 403)
+  r = await call('POST', `/leave/requests/${leaveId}/deny`, { token: key })
+  check('denying needs a note', r.status === 400)
+  r = await call('POST', `/leave/requests/${leaveId}/approve`, { token: key })
+  check('approve the time off', r.status === 200 && r.json?.request?.status === 'approved')
+  r = await call('POST', `/leave/requests/${leaveId}/approve`, { token: key })
+  check('approving twice is refused', r.status === 409)
+  r = await call('GET', '/me/leave', { token: tech })
+  const vacBal = r.json?.types?.find((x) => x.leaveType.id === vacType?.id)
+  check('the balance shows the approved hours used', r.status === 200 && vacBal?.balance === 8 && vacBal?.available === 8, JSON.stringify(vacBal))
+  r = await call('POST', `/leave/requests/${leaveId}/cancel`, { token: tech })
+  check('a tech cancels approved time off before it starts', r.status === 200 && r.json?.request?.status === 'cancelled')
+  r = await call('GET', `/people/${personId}/leave`, { token: key })
+  check('cancelling puts the hours back', r.json?.types?.find((x) => x.leaveType.id === vacType?.id)?.balance === 16, JSON.stringify(r.json?.types))
+  r = await call('GET', `/leave/ledger?personId=${personId}&leaveTypeId=${vacType?.id}`, { token: key })
+  check('the ledger explains the balance line by line', r.status === 200 && r.json?.data?.length === 3 && r.json.data[2].balanceAfter === 16, JSON.stringify(r.json?.data))
+
+  r = await call('POST', '/leave/adjustments', { token: key, body: { personId, leaveTypeId: vacType?.id, hours: -2 } })
+  check('a correction without a reason is refused', r.status === 400)
+  r = await call('POST', '/leave/adjustments', { token: key, body: { personId, leaveTypeId: vacType?.id, hours: -2, reason: 'smoke correction' } })
+  check('correct a balance', r.status === 201 && r.json?.balance === 14, JSON.stringify(r.json))
+  r = await call('POST', '/leave/policies', { token: key, body: { leaveTypeId: sickType?.id, name: 'too stingy', rateHours: 1, perHours: 60 } })
+  check('a sick policy below the Washington minimum is refused', r.status === 400)
+
+  r = await call('POST', '/leave/accruals/run', { token: key, body: {} })
+  check('run accruals', r.status === 200 && typeof r.json?.entries === 'number', JSON.stringify(r.json))
+  r = await call('POST', '/leave/accruals/run', { token: key, body: {} })
+  check('running accruals again adds nothing', r.status === 200 && r.json?.entries === 0, JSON.stringify(r.json))
+  r = await call('GET', `/leave/statements?month=${today.slice(0, 7)}&personId=${personId}`, { token: key })
+  const stmt = r.json?.statements?.[0]?.lines?.find((l) => l.leaveType.id === vacType?.id)
+  check('monthly statement', r.status === 200 && stmt?.closing === 14, JSON.stringify(r.json))
+  r = await call('GET', '/board', { token: key })
+  check('the board still loads with leave on it', r.status === 200 && Array.isArray(r.json?.rows))
 
   // One-click sign-in from GED, when the shared secret is configured.
   const sso = process.env.ADDON_SSO_SECRET
@@ -201,7 +327,7 @@ try {
 
   r = await call('GET', '/events?after=0&limit=500', { token: key })
   const types = new Set((r.json?.data ?? []).map((e) => e.type))
-  check('change feed has the events', ['job.upserted', 'person.upserted', 'punch.started', 'punch.switched', 'punch.ended', 'punch.edited'].every((t) => types.has(t)), [...types].join(','))
+  check('change feed has the events', ['job.upserted', 'person.upserted', 'punch.started', 'punch.switched', 'punch.ended', 'punch.edited', 'expense.submitted', 'expense.rejected', 'expense.approved', 'expense.exported', 'leave.requested', 'leave.approved', 'leave.cancelled', 'leave.adjusted'].every((t) => types.has(t)), [...types].join(','))
 
   r = await call('GET', '/openapi.json')
   check('API describes itself', r.status === 200 && Boolean(r.json?.paths?.['/punches/in']?.post))

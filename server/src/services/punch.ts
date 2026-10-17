@@ -402,6 +402,8 @@ export interface BoardRow {
   lastOut: Date | null
   hoursToday: number
   atShop: boolean | null
+  /** Name of the approved leave covering today, if any. */
+  onLeave: string | null
 }
 
 /** Tower board: everyone who has punched today, who is on the clock first. */
@@ -440,6 +442,7 @@ export async function board(companyId: string) {
         lastOut: null,
         hoursToday: 0,
         atShop: null,
+        onLeave: null,
       }
       rows.set(p.personId, r)
     }
@@ -458,6 +461,33 @@ export async function board(companyId: string) {
     } else if (!r.onClock) {
       r.lastOut = p.clockOut
     }
+  }
+
+  // Approved time off covering today: shown as "off" so nobody expects punches.
+  const away = await prisma.leaveRequest.findMany({
+    where: { companyId, status: 'approved', startDate: { lte: date }, endDate: { gte: date } },
+    include: { leaveType: true, person: true },
+  })
+  for (const a of away) {
+    const r = rows.get(a.personId)
+    if (r) r.onLeave = a.leaveType.name
+    else if (a.person.active)
+      rows.set(a.personId, {
+        personId: a.personId,
+        name: a.person.name,
+        email: a.person.email,
+        onClock: false,
+        jobId: null,
+        jobName: '',
+        phaseKey: null,
+        phaseName: '',
+        phaseIndex: null,
+        since: null,
+        lastOut: null,
+        hoursToday: 0,
+        atShop: null,
+        onLeave: a.leaveType.name,
+      })
   }
 
   return {
