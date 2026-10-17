@@ -20,6 +20,7 @@ export const publicPerson = (p: Person) => ({
   initials: p.initials,
   role: p.role,
   active: p.active,
+  hireDate: p.hireDate,
   scopes: ROLE_SCOPES[isRole(p.role) ? p.role : 'tech'],
 })
 

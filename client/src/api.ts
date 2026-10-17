@@ -49,6 +49,7 @@ export interface Person {
   initials: string
   role: 'tech' | 'lead' | 'manager' | 'payroll' | 'admin'
   active: boolean
+  hireDate?: string | null
   scopes: string[]
 }
 export interface Job {
@@ -115,6 +116,8 @@ export interface BoardRow {
   lastOut: string | null
   hoursToday: number
   atShop: boolean | null
+  /** Approved leave covering today, by name. */
+  onLeave?: string | null
 }
 export interface Board {
   date: string
@@ -180,6 +183,221 @@ export const api = {
   createKey: (name: string, scopes: string[]) => http.post<{ key: string; apiKey: ApiKey }>('/api-keys', { name, scopes }).then((r) => r.data),
   revokeKey: (id: string) => http.delete(`/api-keys/${id}`).then((r) => r.data),
 }
+
+// ─── Expenses ───────────────────────────────────────────────────────────────
+
+export interface ExpenseCategory {
+  id: string
+  name: string
+  accountCode: string
+  mileage: boolean
+  sortOrder: number
+  active: boolean
+}
+export interface MileageRate {
+  id: string
+  effectiveFrom: string
+  rateMills: number
+  centsPerMile: number
+  note: string
+}
+export type ExpenseStatus = 'draft' | 'submitted' | 'approved' | 'rejected' | 'exported'
+export interface Expense {
+  id: string
+  personId: string
+  person: { id: string; name: string; email: string }
+  date: string
+  category: { id: string; name: string; mileage: boolean; accountCode: string }
+  job: { id: string; name: string; code: string; kind: string } | null
+  amountCents: number
+  miles: number | null
+  rateMills: number | null
+  paidBy: 'employee' | 'company'
+  vendor: string
+  notes: string
+  reportId: string | null
+  status: ExpenseStatus
+  editable: boolean
+  receipt: { mimeType: string; bytes: number } | null
+}
+export interface ExpenseReport {
+  id: string
+  personId: string
+  person: { id: string; name: string; email: string } | null
+  title: string
+  status: ExpenseStatus
+  submittedAt: string | null
+  decidedBy: { id: string; name: string } | null
+  decidedAt: string | null
+  decisionNote: string
+  totalCents: number
+  reimbursableCents: number
+  companyCardCents: number
+  missingReceipts: number
+  lines: Expense[]
+}
+export interface ExpenseInput {
+  date: string
+  categoryId: string
+  jobId: string | null
+  amount?: string
+  miles?: number
+  paidBy: 'employee' | 'company'
+  vendor: string
+  notes: string
+}
+
+// ─── Leave ──────────────────────────────────────────────────────────────────
+
+export interface LeaveType {
+  id: string
+  key: string
+  name: string
+  paid: boolean
+  drawsBalance: boolean
+  statutory: 'wa_sick' | 'wa_pfml' | 'none'
+  sortOrder: number
+  active: boolean
+}
+export interface LeavePolicy {
+  id: string
+  leaveTypeId: string
+  name: string
+  method: 'per_hours_worked' | 'per_month' | 'annual_grant'
+  rateHours: number
+  perHours: number
+  grantOn: 'calendar' | 'anniversary'
+  capHours: number | null
+  carryoverMax: number | null
+  waitingDays: number
+  tiers: { afterYears: number; rateHours: number }[]
+  appliesToAll: boolean
+  active: boolean
+  assignedPeople?: number
+}
+export interface LeaveBalance {
+  leaveType: LeaveType
+  policy: LeavePolicy | null
+  balance: number
+  pending: number
+  available: number | null
+  earnedThisYear: number
+  usedThisYear: number
+  usableFrom: string | null
+  usableNow: boolean | null
+}
+export interface LeaveRequest {
+  id: string
+  personId: string
+  person: { id: string; name: string; email: string }
+  leaveTypeId: string
+  leaveType: LeaveType
+  startDate: string
+  endDate: string
+  hours: number
+  note: string
+  status: 'requested' | 'approved' | 'denied' | 'cancelled'
+  decisionNote: string
+  decidedAt: string | null
+}
+export interface MyLeave {
+  asOf: string
+  hireDate: string | null
+  sickNoticeAcknowledgedAt: string | null
+  types: LeaveBalance[]
+  requests: LeaveRequest[]
+}
+export interface PersonLeave extends Omit<MyLeave, 'requests'> {
+  person: { id: string; name: string; email: string }
+  assignments: { id: string; leavePolicyId: string; policyName: string; leaveTypeId: string; effectiveFrom: string; effectiveTo: string | null }[]
+}
+export interface LedgerRow {
+  id: string
+  leaveTypeId: string
+  leaveType: { id: string; name: string }
+  kind: string
+  hours: number
+  date: string
+  note: string
+  balanceAfter: number
+}
+export interface StatementLine {
+  leaveType: LeaveType
+  opening: number
+  earned: number
+  used: number
+  otherChanges: number
+  closing: number
+}
+export interface Statements {
+  month: string
+  statements: { person: { id: string; name: string; email: string }; lines: StatementLine[] }[]
+}
+export interface OpeningResult {
+  date: string
+  dryRun: boolean
+  ready: number
+  imported: number
+  alreadyImported: number
+  errors: number
+  rows: { row: number; email: string; leaveType: string; hours: number; personName: string | null; status: string; problem: string | null }[]
+}
+
+const d = <T,>(p: Promise<{ data: T }>) => p.then((r) => r.data)
+
+export const money = {
+  categories: (all = false) => d(http.get<{ data: ExpenseCategory[] }>('/expense-categories', { params: { active: all ? 'all' : undefined } })).then((r) => r.data),
+  addCategory: (c: { name: string; accountCode: string; mileage: boolean }) => d(http.post<{ category: ExpenseCategory }>('/expense-categories', c)),
+  saveCategory: (id: string, c: Partial<Pick<ExpenseCategory, 'name' | 'accountCode' | 'active' | 'sortOrder'>>) => d(http.patch<{ category: ExpenseCategory }>(`/expense-categories/${id}`, c)),
+  rates: () => d(http.get<{ data: MileageRate[]; current: MileageRate | null }>('/mileage-rates')),
+  addRate: (r: { effectiveFrom: string; centsPerMile: number; note: string }) => d(http.post('/mileage-rates', r)),
+
+  expenses: (params: { status?: string; personId?: string } = {}) => d(http.get<{ data: Expense[] }>('/expenses', { params: { ...params, limit: 200 } })).then((r) => r.data),
+  addExpense: (e: ExpenseInput) => d(http.post<{ expense: Expense }>('/expenses', { ...e, clientId: newId() })).then((r) => r.expense),
+  saveExpense: (id: string, e: Partial<ExpenseInput>) => d(http.patch<{ expense: Expense }>(`/expenses/${id}`, e)).then((r) => r.expense),
+  deleteExpense: (id: string) => http.delete(`/expenses/${id}`),
+  uploadReceipt: (id: string, file: Blob) => http.post(`/expenses/${id}/receipt`, file, { headers: { 'Content-Type': file.type || 'image/jpeg' }, timeout: 60_000 }),
+  /** The receipt as a blob URL the page can show. Revoke it when done. */
+  receiptUrl: (id: string) => http.get<Blob>(`/expenses/${id}/receipt`, { responseType: 'blob' }).then((r) => URL.createObjectURL(r.data)),
+
+  reports: (params: { status?: string } = {}) => d(http.get<{ data: ExpenseReport[] }>('/expense-reports', { params })).then((r) => r.data),
+  submitDrafts: (title: string) => d(http.post<{ report: ExpenseReport }>('/expense-reports', { title, submit: true })).then((r) => r.report),
+  resubmit: (id: string) => d(http.post<{ report: ExpenseReport }>(`/expense-reports/${id}/submit`)).then((r) => r.report),
+  decide: (id: string, action: 'approve' | 'reject', note: string) => d(http.post<{ report: ExpenseReport }>(`/expense-reports/${id}/${action}`, { note })).then((r) => r.report),
+  markExported: (id: string) => d(http.post<{ report: ExpenseReport }>(`/expense-reports/${id}/mark-exported`)).then((r) => r.report),
+}
+
+export const leave = {
+  mine: () => d(http.get<MyLeave>('/me/leave')),
+  acknowledge: () => http.post('/me/leave/acknowledge-notice'),
+  types: (all = false) => d(http.get<{ data: LeaveType[] }>('/leave/types', { params: { active: all ? 'all' : undefined } })).then((r) => r.data),
+  request: (r: { leaveTypeId: string; startDate: string; endDate: string; hours: number; note: string }) => d(http.post<{ request: LeaveRequest }>('/leave/requests', r)),
+  requests: (params: { status?: string; personId?: string } = {}) => d(http.get<{ data: LeaveRequest[] }>('/leave/requests', { params })).then((r) => r.data),
+  decide: (id: string, action: 'approve' | 'deny' | 'cancel', note = '') => d(http.post<{ request: LeaveRequest }>(`/leave/requests/${id}/${action}`, { note })),
+
+  policies: () => d(http.get<{ data: LeavePolicy[] }>('/leave/policies')).then((r) => r.data),
+  addPolicy: (p: Partial<LeavePolicy> & { leaveTypeId: string; name: string; rateHours: number }) => d(http.post<{ policy: LeavePolicy }>('/leave/policies', p)),
+  savePolicy: (id: string, p: Partial<LeavePolicy>) => d(http.patch<{ policy: LeavePolicy }>(`/leave/policies/${id}`, p)),
+  person: (id: string) => d(http.get<PersonLeave>(`/people/${id}/leave`)),
+  setHireDate: (id: string, hireDate: string | null) => http.put(`/people/${id}/hire-date`, { hireDate }),
+  setAssignments: (id: string, assignments: { leavePolicyId: string; effectiveFrom: string; effectiveTo?: string | null }[]) => http.put(`/people/${id}/leave/policies`, { assignments }),
+  ledger: (personId: string, leaveTypeId?: string) => d(http.get<{ data: LedgerRow[] }>('/leave/ledger', { params: { personId, leaveTypeId } })).then((r) => r.data),
+  adjust: (a: { personId: string; leaveTypeId: string; hours: number; date: string; reason: string }) => http.post('/leave/adjustments', a),
+  opening: (date: string, rows: { email: string; leaveType: string; hours: number }[], dryRun: boolean) =>
+    d(http.post<OpeningResult>('/leave/opening-balances', { date, rows, dryRun }, { timeout: 120_000 })),
+  runAccruals: (through?: string) => d(http.post<{ through: string; entries: number; hours: number; people: number }>('/leave/accruals/run', { through }, { timeout: 120_000 })),
+  statements: (month: string) => d(http.get<Statements>('/leave/statements', { params: { month } })),
+  myStatement: (month: string) => d(http.get<Statements>('/me/leave/statements', { params: { month } })),
+}
+
+export const fmtMoney = (cents: number) => (cents / 100).toLocaleString(undefined, { style: 'currency', currency: 'USD' })
+/** Today as YYYY-MM-DD on this phone. */
+export const todayYmd = () => {
+  const n = new Date()
+  return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}`
+}
+export const fmtDay = (ymd: string) => new Date(`${ymd}T12:00:00`).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
+export const fmtH = (h: number | null | undefined) => (h === null || h === undefined ? '—' : `${Math.round(h * 100) / 100} h`)
 
 // ─── Formatting ─────────────────────────────────────────────────────────────
 

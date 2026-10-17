@@ -20,24 +20,37 @@ import {
   Typography,
 } from '@mui/material'
 import { api, errorText, fmtTime, type ApiKey, type Job, type Person } from '../api'
+import ManageLeave from './ManageLeave'
+import ManageExpenses from './ManageExpenses'
 
 // People, jobs and integration keys. Most jobs arrive from GED through the API;
 // this page is for the ones added by hand and for seeing what is there.
 
-type Section = 'people' | 'jobs' | 'keys'
+type Section = 'people' | 'jobs' | 'leave' | 'expenses' | 'keys'
 
 export default function AdminPage({ me }: { me: Person }) {
-  const isAdmin = me.scopes.includes('keys:manage')
-  const [section, setSection] = useState<Section>('people')
+  const can = (s: string) => me.scopes.includes(s)
+  const isAdmin = can('keys:manage')
+  const sections: { value: Section; label: string }[] = [
+    ...(can('people:write') ? [{ value: 'people' as const, label: 'People' }] : []),
+    ...(can('jobs:write') ? [{ value: 'jobs' as const, label: 'Jobs' }] : []),
+    ...(can('leave:write') ? [{ value: 'leave' as const, label: 'Leave' }] : []),
+    ...(can('expenses:write') ? [{ value: 'expenses' as const, label: 'Expenses' }] : []),
+    ...(isAdmin ? [{ value: 'keys' as const, label: 'API keys' }] : []),
+  ]
+  const [picked, setSection] = useState<Section>(sections[0]?.value ?? 'people')
+  const section = sections.some((s) => s.value === picked) ? picked : sections[0]?.value
   return (
     <Stack spacing={2}>
-      <Tabs value={section} onChange={(_, v: Section) => setSection(v)}>
-        <Tab value="people" label="People" />
-        <Tab value="jobs" label="Jobs" />
-        {isAdmin && <Tab value="keys" label="API keys" />}
+      <Tabs value={section} onChange={(_, v: Section) => setSection(v)} variant="scrollable" allowScrollButtonsMobile>
+        {sections.map((s) => (
+          <Tab key={s.value} value={s.value} label={s.label} />
+        ))}
       </Tabs>
       {section === 'people' && <People isAdmin={isAdmin} />}
       {section === 'jobs' && <Jobs />}
+      {section === 'leave' && <ManageLeave />}
+      {section === 'expenses' && <ManageExpenses canApprove={can('expenses:approve')} />}
       {section === 'keys' && isAdmin && <Keys />}
     </Stack>
   )

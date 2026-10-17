@@ -35,13 +35,15 @@ export default function BoardPage() {
   }
 
   const on = board.rows.filter((r) => r.onClock)
-  const off = board.rows.filter((r) => !r.onClock)
+  const away = board.rows.filter((r) => !r.onClock && r.onLeave)
+  const off = board.rows.filter((r) => !r.onClock && !r.onLeave)
 
   return (
     <Stack spacing={2}>
       <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap" useFlexGap>
         <Chip color="success" label={`${on.length} on the clock`} sx={{ fontWeight: 700 }} />
         <Chip variant="outlined" label={`${off.length} done for now`} />
+        {away.length > 0 && <Chip variant="outlined" color="info" label={`${away.length} off today`} />}
         <Box sx={{ flex: 1 }} />
         <Typography variant="caption" color="text.secondary">
           as of {fmtTime(board.asOf)}
@@ -59,6 +61,7 @@ export default function BoardPage() {
                 <Typography sx={{ fontWeight: 700, flex: 1, minWidth: 0 }} noWrap>
                   {r.name}
                 </Typography>
+                {r.onLeave && !r.onClock && <Chip size="small" color="info" label={`Off · ${r.onLeave}`} sx={{ flexShrink: 0 }} />}
                 {r.phaseName && (
                   <Chip
                     size="small"
@@ -73,7 +76,7 @@ export default function BoardPage() {
                 {[r.jobName || '—', r.atShop === true ? 'at the shop' : r.atShop === false ? 'away from the shop' : ''].filter(Boolean).join(' · ')}
               </Typography>
               <Typography variant="caption" color="text.secondary" sx={{ fontVariantNumeric: 'tabular-nums' }}>
-                {r.onClock ? `since ${fmtTime(r.since)} · ${fmtElapsed(r.since, now)}` : `out ${fmtTime(r.lastOut)}`} · {r.hoursToday.toFixed(1)} h today
+                {r.onClock ? `since ${fmtTime(r.since)} · ${fmtElapsed(r.since, now)}` : r.lastOut ? `out ${fmtTime(r.lastOut)}` : 'no punches today'} · {r.hoursToday.toFixed(1)} h today
               </Typography>
             </Box>
           </Stack>
