@@ -26,8 +26,10 @@ import Login from './pages/Login'
 import PunchPage from './pages/Punch'
 import BoardPage from './pages/Board'
 import AdminPage from './pages/Admin'
+import WeekPage from './pages/Week'
+import ReviewPage from './pages/Review'
 
-type Tab = 'clock' | 'board' | 'admin'
+type Tab = 'clock' | 'week' | 'board' | 'review' | 'admin'
 
 const ClockIcon = () => (
   <SvgIcon>
@@ -37,6 +39,16 @@ const ClockIcon = () => (
 const BoardIcon = () => (
   <SvgIcon>
     <path d="M3 5h18v2H3V5Zm0 6h18v2H3v-2Zm0 6h18v2H3v-2Z" />
+  </SvgIcon>
+)
+const WeekIcon = () => (
+  <SvgIcon>
+    <path d="M7 2v2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-2V2h-2v2H9V2H7Zm12 8v10H5V10h14ZM7 12v2h2v-2H7Zm4 0v2h2v-2h-2Zm4 0v2h2v-2h-2Z" />
+  </SvgIcon>
+)
+const ReviewIcon = () => (
+  <SvgIcon>
+    <path d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4L9 16.2Z" />
   </SvgIcon>
 )
 const AdminIcon = () => (
@@ -99,7 +111,11 @@ export default function App() {
   const can = (scope: string) => person.scopes.includes(scope)
   const showBoard = can('punch:read')
   const showAdmin = can('people:write') || can('jobs:write')
-  const current: Tab = (tab === 'board' && !showBoard) || (tab === 'admin' && !showAdmin) ? 'clock' : tab
+  const showWeek = can('punch:self')
+  // Leads look at the week; managers and payroll approve it.
+  const showReview = can('punch:read')
+  const hidden = (tab === 'board' && !showBoard) || (tab === 'admin' && !showAdmin) || (tab === 'week' && !showWeek) || (tab === 'review' && !showReview)
+  const current: Tab = hidden ? 'clock' : tab
 
   return (
     <Box sx={{ minHeight: '100dvh', pb: 'calc(72px + env(safe-area-inset-bottom))' }}>
@@ -130,17 +146,21 @@ export default function App() {
         </Toolbar>
       </AppBar>
 
-      <Container maxWidth={current === 'clock' ? 'sm' : 'md'} sx={{ py: 2 }}>
-        {current === 'clock' && <PunchPage />}
+      <Container maxWidth={current === 'clock' || current === 'week' ? 'sm' : 'md'} sx={{ py: 2 }}>
+        {current === 'clock' && <PunchPage canCrew={can('punch:crew')} meId={person.id} />}
+        {current === 'week' && <WeekPage />}
+        {current === 'review' && <ReviewPage canApprove={can('timesheets:approve')} canEdit={can('punch:write:any')} />}
         {current === 'board' && <BoardPage />}
         {current === 'admin' && <AdminPage me={person} />}
       </Container>
 
-      {(showBoard || showAdmin) && (
+      {(showWeek || showBoard || showAdmin) && (
         <Paper square sx={{ position: 'fixed', bottom: 0, left: 0, right: 0, borderWidth: '1px 0 0', pb: 'env(safe-area-inset-bottom)', zIndex: 10 }}>
-          <BottomNavigation showLabels value={current} onChange={(_, v: Tab) => setTab(v)}>
+          <BottomNavigation showLabels value={current} onChange={(_, v: Tab) => setTab(v)} sx={{ '& .MuiBottomNavigationAction-root': { minWidth: 0, px: 0.5 } }}>
             <BottomNavigationAction value="clock" label="Clock" icon={<ClockIcon />} />
+            {showWeek && <BottomNavigationAction value="week" label="My week" icon={<WeekIcon />} />}
             {showBoard && <BottomNavigationAction value="board" label="Board" icon={<BoardIcon />} />}
+            {showReview && <BottomNavigationAction value="review" label="Review" icon={<ReviewIcon />} />}
             {showAdmin && <BottomNavigationAction value="admin" label="Manage" icon={<AdminIcon />} />}
           </BottomNavigation>
         </Paper>

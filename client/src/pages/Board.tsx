@@ -70,7 +70,7 @@ export default function BoardPage() {
                 )}
               </Stack>
               <Typography variant="body2" color="text.secondary" noWrap>
-                {[r.jobName || '—', r.atShop === true ? 'at the shop' : r.atShop === false ? 'away from the shop' : ''].filter(Boolean).join(' · ')}
+                {[r.jobName || '—', whereLabel(r.atShop, r.atSite)].filter(Boolean).join(' · ')}
               </Typography>
               <Typography variant="caption" color="text.secondary" sx={{ fontVariantNumeric: 'tabular-nums' }}>
                 {r.onClock ? `since ${fmtTime(r.since)} · ${fmtElapsed(r.since, now)}` : `out ${fmtTime(r.lastOut)}`} · {r.hoursToday.toFixed(1)} h today
@@ -81,4 +81,13 @@ export default function BoardPage() {
       ))}
     </Stack>
   )
+}
+
+/** Where the clock-in happened: the shop, the job site, or neither. */
+function whereLabel(atShop: boolean | null, atSite: boolean | null | undefined): string {
+  if (atShop === true) return 'at the shop'
+  if (atSite === true) return 'at the site'
+  if (atSite === false) return 'away from the site'
+  if (atShop === false) return 'away from the shop'
+  return ''
 }

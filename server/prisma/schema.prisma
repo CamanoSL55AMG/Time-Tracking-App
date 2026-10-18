@@ -17,6 +17,9 @@ model Company {
   shopLat     Float?
   shopLng     Float?
   shopRadiusM Int      @default(150)
+  // First day of the timesheet week, 0 = Sunday … 6 = Saturday. Monday until the
+  // pay period is settled with payroll.
+  weekStartDay Int     @default(1)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -25,6 +28,7 @@ model Company {
   phases  Phase[]
   punches Punch[]
   apiKeys ApiKey[]
+  timesheets Timesheet[]
 }
 
 model Person {
@@ -42,6 +46,7 @@ model Person {
   company     Company      @relation(fields: [companyId], references: [id])
   punches     Punch[]
   assignments Assignment[]
+  timesheets  Timesheet[]
 
   @@index([companyId, active])
 }
@@ -56,6 +61,7 @@ model Job {
   siteLat     Float?
   siteLng     Float?
   siteRadiusM Int?
+  siteAddress String   @default("") // street address of the job site, for directions
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -110,6 +116,7 @@ model Punch {
   notes        String    @default("")
   clientId     String? // generated on the phone; makes offline re-sends harmless
   apiKeyId     String? // set when an integration punched on the person's behalf
+  punchedById  String? // the crew lead, when a lead punched for this person
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
@@ -163,6 +170,62 @@ model PunchEdit {
   punch Punch @relation(fields: [punchId], references: [id])
 
   @@index([punchId])
+}
+
+// One person's week: the tech signs it, a manager or payroll approves it. An
+// approved week is locked: punches and corrections inside it are refused until an
+// approver reopens it. A change inside a signed week sends it back for signing.
+model Timesheet {
+  id           String    @id @default(uuid())
+  companyId    String
+  personId     String
+  weekStart    String // YYYY-MM-DD, local date of the week's first day
+  status       String    @default("open") // open | signed | approved
+  hours        Float     @default(0) // total when last signed or approved
+  signedAt     DateTime?
+  signedById   String?
+  approvedAt   DateTime?
+  approvedById String?
+  note         String    @default("") // why it was reopened, or the approver's note
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id])
+  person  Person  @relation(fields: [personId], references: [id])
+
+  @@unique([personId, weekStart])
+  @@index([companyId, weekStart])
+}
+
+// A person asks for their own time to be changed: a segment's times, job, phase
+// or note, or a missing segment added. Nothing changes until a supervisor approves;
+// the approved change is applied as an audited correction.
+model ChangeRequest {
+  id            String    @id @default(uuid())
+  companyId     String
+  personId      String // whose time
+  requestedById String
+  kind          String // edit | add
+  punchId       String? // the segment to change (edit)
+  weekStart     String // week the change falls in; a pending request holds up approving that week
+  clockIn       DateTime? // requested values; null = leave as it is
+  clockOut      DateTime?
+  jobId         String?
+  phaseId       String?
+  notes         String?
+  reason        String
+  before        Json? // the segment when the request was made
+  status        String    @default("pending") // pending | approved | rejected | withdrawn
+  decidedById   String?
+  decidedAt     DateTime?
+  decisionNote  String    @default("")
+  resultPunchId String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([companyId, status])
+  @@index([personId, createdAt])
+  @@index([personId, weekStart, status])
 }
 
 // Ids in other systems (ged, jetbuilt, timesheets, accountedge) pointing at our rows.

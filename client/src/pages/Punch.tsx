@@ -1,5 +1,25 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Alert, Autocomplete, Box, Button, Chip, CircularProgress, Divider, MenuItem, Paper, Stack, TextField, Typography } from '@mui/material'
+import {
+  Alert,
+  Autocomplete,
+  Box,
+  Button,
+  Checkbox,
+  Chip,
+  CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  Divider,
+  FormControlLabel,
+  MenuItem,
+  Paper,
+  Stack,
+  Switch,
+  TextField,
+  Typography,
+} from '@mui/material'
 import {
   api,
   clearFailedPunches,
@@ -11,8 +31,10 @@ import {
   fmtTime,
   onQueueChange,
   queuedPunches,
+  type CrewResult,
   type DayState,
   type Job,
+  type Person,
   type Phase,
   type PunchKind,
   type PunchOutcome,
@@ -24,9 +46,9 @@ import {
 // day; Switch job and Clock Out sit under it. With no signal, taps are kept on the
 // phone and the screen carries on as if they had gone through.
 
-type Group = 'Today' | 'Projects' | 'Service' | 'Shop' | 'Other'
-const KIND_GROUP: Record<Job['kind'], Group> = { project: 'Projects', service: 'Service', shop: 'Shop', other: 'Other' }
-const GROUP_ORDER: Group[] = ['Today', 'Projects', 'Service', 'Shop', 'Other']
+type Group = 'Today' | 'Projects' | 'Service' | 'Shop' | 'Office'
+const KIND_GROUP: Record<Job['kind'], Group> = { project: 'Projects', service: 'Service', shop: 'Shop', other: 'Office' }
+const GROUP_ORDER: Group[] = ['Today', 'Projects', 'Service', 'Shop', 'Office']
 interface Choice {
   job: Job
   group: Group
@@ -50,7 +72,25 @@ const useQueue = () => {
 
 const labelOf = (j: Job) => (j.kind === 'project' && j.code && !j.name.includes(j.code) ? `${j.code} ${j.name}` : j.name)
 
-export default function PunchPage() {
+// A crew lead's crew, remembered on this phone.
+const CREW_KEY = 'tt_crew'
+const readCrew = (): string[] => {
+  try {
+    const v = JSON.parse(localStorage.getItem(CREW_KEY) ?? '[]')
+    return Array.isArray(v) ? v.filter((x) => typeof x === 'string') : []
+  } catch {
+    return []
+  }
+}
+const writeCrew = (ids: string[]) => {
+  try {
+    localStorage.setItem(CREW_KEY, JSON.stringify(ids))
+  } catch {
+    /* storage blocked: the crew is kept for this visit only */
+  }
+}
+
+export default function PunchPage({ canCrew = false, meId = '' }: { canCrew?: boolean; meId?: string }) {
   const [state, setState] = useState<DayState | null>(null)
   const [jobs, setJobs] = useState<Job[]>([])
   const [choice, setChoice] = useState<Choice | null>(null)
@@ -58,8 +98,39 @@ export default function PunchPage() {
   const [switching, setSwitching] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  // Which punch to repeat in Timesheets.com, shown after each punch during the parallel run.
+  const [mirror, setMirror] = useState<PunchKind | null>(null)
   const now = useNow(15_000)
   const queue = useQueue()
+  // Crew punch: the lead's taps also punch the crew, with the same job and phase.
+  const [crewIds, setCrewIds] = useState<string[]>(() => (canCrew ? readCrew() : []))
+  const [crewOn, setCrewOn] = useState(false)
+  const [crewPick, setCrewPick] = useState(false)
+  const [people, setPeople] = useState<Person[]>([])
+  const [crewMsg, setCrewMsg] = useState<{ severity: 'success' | 'warning'; text: string } | null>(null)
+
+  useEffect(() => {
+    if (canCrew) api.people().then((p) => setPeople(p.filter((x) => x.active && x.id !== meId)), () => undefined)
+  }, [canCrew, meId])
+  const crewNames = crewIds.map((id) => people.find((p) => p.id === id)?.name).filter(Boolean) as string[]
+
+  const punchCrew = async (kind: PunchKind, sent: boolean, next: DayState, job?: Job) => {
+    if (!crewOn || !crewIds.length) return
+    if (!sent) {
+      setCrewMsg({ severity: 'warning', text: 'No signal, so your crew was not punched. Punch them once the signal is back.' })
+      return
+    }
+    try {
+      const r = await api.crew(kind, {
+        personIds: crewIds,
+        jobId: kind === 'in' ? job?.id : undefined,
+        phaseId: kind === 'out' ? undefined : next.open?.phaseId ?? undefined,
+      })
+      setCrewMsg(crewSummary(r.results))
+    } catch (err) {
+      setCrewMsg({ severity: 'warning', text: `Your crew was not punched: ${errorText(err)}` })
+    }
+  }
 
   const load = useCallback(async () => {
     // While punches are waiting on this phone, the server's view is behind ours.
@@ -130,6 +201,9 @@ export default function PunchPage() {
       setState(next)
       setSwitching(false)
       setPhaseId(next.nextPhase?.id ?? '')
+      if (next.parallelRun ?? state.parallelRun) setMirror(kind)
+      setCrewMsg(null)
+      await punchCrew(kind, r.sent, next, local.job)
     } catch (err) {
       setError(errorText(err))
     } finally {
@@ -191,6 +265,7 @@ export default function PunchPage() {
               <Typography color="text.secondary">
                 {open.phase?.name ?? 'No phase'} · since {fmtTime(open.clockIn)} · {fmtElapsed(open.clockIn, now)}
               </Typography>
+              <SiteLine job={open.job} />
             </Box>
           ) : (
             <Typography variant="h5" sx={{ fontWeight: 700 }}>
@@ -216,6 +291,21 @@ export default function PunchPage() {
       </Paper>
 
       {error && <Alert severity="error">{error}</Alert>}
+
+      {mirror && state.parallelRun && (
+        <Alert
+          severity="warning"
+          onClose={() => setMirror(null)}
+          action={
+            <Button color="inherit" variant="outlined" size="small" href={state.parallelRun.url} target="_blank" rel="noopener" onClick={() => setMirror(null)}>
+              Open Timesheets
+            </Button>
+          }
+        >
+          <strong>{mirror === 'out' ? 'Now clock out in Timesheets.com too.' : mirror === 'next' ? 'Now switch your task in Timesheets.com too.' : 'Now clock in to Timesheets.com too.'}</strong>{' '}
+          Payroll still runs from Timesheets.com until {fmtUntil(state.parallelRun.until)}.
+        </Alert>
+      )}
 
       {picking && (
         <Paper sx={{ p: 2 }}>
@@ -245,6 +335,7 @@ export default function PunchPage() {
               renderInput={(params) => <TextField {...params} label={switching ? 'Switch to job' : 'Job'} placeholder="Search by name or number" />}
               noOptionsText="No matching job"
             />
+            <SiteLine job={choice?.job} />
             <TextField select label="Phase" value={phaseId} onChange={(e) => setPhaseId(e.target.value)}>
               {state.phases.map((p) => (
                 <MenuItem key={p.id} value={p.id}>
@@ -299,6 +390,82 @@ export default function PunchPage() {
         </Stack>
       )}
 
+      {crewMsg && (
+        <Alert severity={crewMsg.severity} onClose={() => setCrewMsg(null)}>
+          {crewMsg.text}
+        </Alert>
+      )}
+
+      {canCrew && (
+        <Paper sx={{ p: 1.5 }}>
+          <Stack direction="row" alignItems="center" spacing={1}>
+            <FormControlLabel
+              sx={{ flex: 1, mr: 0 }}
+              control={<Switch checked={crewOn && crewIds.length > 0} disabled={!crewIds.length} onChange={(e) => setCrewOn(e.target.checked)} />}
+              label={crewIds.length ? `Punch my crew too (${crewIds.length})` : 'Punch my crew too'}
+            />
+            <Button size="small" onClick={() => setCrewPick(true)}>
+              {crewIds.length ? 'Edit crew' : 'Pick crew'}
+            </Button>
+          </Stack>
+          {crewNames.length > 0 && (
+            <Typography variant="caption" color="text.secondary">
+              {crewNames.join(', ')}
+            </Typography>
+          )}
+        </Paper>
+      )}
+
+      <Dialog open={crewPick} onClose={() => setCrewPick(false)} fullWidth maxWidth="xs">
+        <DialogTitle>Your crew</DialogTitle>
+        <DialogContent dividers>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+            With "Punch my crew too" on, each of your punches also clocks these people in, to the same phase, or out.
+          </Typography>
+          <Stack>
+            {people.map((p) => (
+              <FormControlLabel
+                key={p.id}
+                control={
+                  <Checkbox
+                    checked={crewIds.includes(p.id)}
+                    onChange={(e) => {
+                      const next = e.target.checked ? [...crewIds, p.id] : crewIds.filter((x) => x !== p.id)
+                      setCrewIds(next)
+                      writeCrew(next)
+                    }}
+                  />
+                }
+                label={p.name}
+              />
+            ))}
+            {!people.length && <Typography color="text.secondary">Loading people…</Typography>}
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          {crewIds.length > 0 && (
+            <Button
+              onClick={() => {
+                setCrewIds([])
+                writeCrew([])
+              }}
+            >
+              Clear
+            </Button>
+          )}
+          <Box sx={{ flex: 1 }} />
+          <Button
+            variant="contained"
+            onClick={() => {
+              setCrewPick(false)
+              if (crewIds.length) setCrewOn(true)
+            }}
+          >
+            Done
+          </Button>
+        </DialogActions>
+      </Dialog>
+
       {state.today.length > 0 && (
         <Paper sx={{ p: 2 }}>
           <Typography variant="subtitle2" color="text.secondary" gutterBottom>
@@ -330,6 +497,18 @@ export default function PunchPage() {
       </Typography>
     </Stack>
   )
+}
+
+/** One line for the lead: who was punched, who was not and why. */
+function crewSummary(results: CrewResult[]): { severity: 'success' | 'warning'; text: string } {
+  const ok = results.filter((r) => r.ok)
+  const bad = results.filter((r) => !r.ok)
+  const first = (n: string) => n.split(' ')[0]
+  if (!bad.length) return { severity: 'success', text: `Crew punched: ${ok.map((r) => first(r.name)).join(', ')}.` }
+  return {
+    severity: 'warning',
+    text: `${ok.length ? `Crew punched: ${ok.map((r) => first(r.name)).join(', ')}. ` : ''}Not punched: ${bad.map((r) => `${r.name || 'unknown'} (${r.message})`).join('; ')}`,
+  }
 }
 
 /** Hours today, counting the open segment up to this minute. */
@@ -384,4 +563,25 @@ function PhaseTrack({ phases, current }: { phases: Phase[]; current: number }) {
       )}
     </Box>
   )
+}
+
+/** The job site's address with a link that opens directions in the phone's maps app. */
+function SiteLine({ job }: { job: Job | null | undefined }) {
+  const address = job?.siteAddress?.trim()
+  if (!address) return null
+  const href = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(address)}`
+  return (
+    <Typography variant="body2" color="text.secondary">
+      {address} ·{' '}
+      <Box component="a" href={href} target="_blank" rel="noopener" sx={{ color: 'primary.main', fontWeight: 600 }}>
+        Directions
+      </Box>
+    </Typography>
+  )
+}
+
+/** "2026-12-31" -> "Dec 31". */
+function fmtUntil(ymd: string): string {
+  const d = new Date(`${ymd}T12:00:00`)
+  return Number.isNaN(d.getTime()) ? ymd : d.toLocaleDateString([], { month: 'short', day: 'numeric' })
 }

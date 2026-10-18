@@ -3,8 +3,16 @@ import react from '@vitejs/plugin-react-swc'
 
 // Dev: the page runs on :5195 and forwards /api to the server on :5400.
 // Build: the page is written into server/public, and the server serves it.
+// allowedHosts: phones reach the dev page through the Cloudflare tunnel
+// (https://time.morgansound-dev.com); Vite refuses unknown host names otherwise.
 export default defineConfig({
   plugins: [react()],
-  server: { port: 5195, strictPort: true, host: true, proxy: { '/api': 'http://localhost:5400' } },
+  server: {
+    port: 5195,
+    strictPort: true,
+    host: true,
+    allowedHosts: ['.morgansound-dev.com'],
+    proxy: { '/api': 'http://localhost:5400' },
+  },
   build: { outDir: '../server/public', emptyOutDir: true },
 })

@@ -59,6 +59,12 @@ try {
   // The walk below steps through the field day; office phases are not steps in it.
   const phases = allPhases.filter((p) => p.dayFlow !== false)
   check('phases are seeded', phases.length >= 2, `got ${phases.length}`)
+  r = await call('GET', '/phases?all=true', { token: admin })
+  check('an admin sees every phase, switched off or not', r.status === 200 && (r.json?.data?.length ?? 0) >= allPhases.length)
+  r = await call('PATCH', `/phases/${phases[0].id}`, { token: admin, body: { short: phases[0].short } })
+  check('an admin can change a phase', r.status === 200 && r.json?.phase?.short === phases[0].short, JSON.stringify(r.json))
+  r = await call('POST', '/phases', { token: admin, body: { name: 'Smoke never created', laborCategory: 'nonsense' } })
+  check('a phase with an unknown labor category is refused', r.status === 400)
   check(
     'every phase names its labor category',
     allPhases.every((p) => typeof p.laborCategory === 'string' && p.laborCategory !== '' && typeof p.dayFlow === 'boolean'),
@@ -78,6 +84,8 @@ try {
   const jobId = r.json?.job?.id
   r = await call('PUT', `/jobs/by-ref/smoke/${stamp}`, { token: key, body: { code: `SMK2-${stamp}` } })
   check('repeat updates the same job', r.status === 200 && r.json?.created === false && r.json?.job?.id === jobId && r.json?.job?.code === `SMK2-${stamp}`)
+  r = await call('PUT', `/jobs/by-ref/smoke/${stamp}`, { token: key, body: { siteAddress: '6621 220th St SW, Mountlake Terrace, WA 98043' } })
+  check('a job keeps its site address', r.status === 200 && r.json?.job?.siteAddress === '6621 220th St SW, Mountlake Terrace, WA 98043', JSON.stringify(r.json?.job ?? r.json))
 
   r = await call('PUT', `/people/by-email/${encodeURIComponent(testEmail)}`, { token: key, body: { name: 'Smoke Test', initials: 'ZZ' } })
   check('create person by email', r.status === 200 && r.json?.created === true, JSON.stringify(r.json))
@@ -176,7 +184,122 @@ try {
   r = await call('PATCH', `/punches/${secondId}`, { token: tech, body: { notes: 'x', reason: 'x' } })
   check('a tech cannot edit punches', r.status === 403)
   r = await call('GET', '/me/state', { token: tech })
-  check('a tech sees their own day', r.status === 200 && r.json?.today?.length >= 2 && r.json?.phases?.length === phases.length)
+  check(
+    'the day says whether the Timesheets.com parallel run is on',
+    r.status === 200 && 'parallelRun' in (r.json ?? {}) && (r.json.parallelRun === null || /^\d{4}-\d{2}-\d{2}$/.test(r.json.parallelRun.until)),
+    JSON.stringify(r.json?.parallelRun),
+  )
+  check('a tech sees their own day', r.status === 200 && r.json?.today?.length >= 2 && r.json?.phases?.length === allPhases.length, `phases=${r.json?.phases?.length} expected=${allPhases.length}`)
+
+  // Weekly timesheets: sign, approve, the lock, reopen. A second throwaway person
+  // works one long day a week ago, so that week is over and can be approved.
+  const adminMe = await call('GET', '/auth/me', { token: admin })
+  const adminId = adminMe.json?.person?.id
+  const crewEmail = `smoke-${stamp}-b@example.invalid`
+  r = await call('PUT', `/people/by-email/${encodeURIComponent(crewEmail)}`, { token: key, body: { name: 'Smoke Crew', initials: 'ZY' } })
+  const crewId = r.json?.person?.id
+  const asB = { 'X-Act-As': crewEmail }
+  const tz = 'America/Los_Angeles'
+  const ymd = (d) => new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(d)
+  const t0 = new Date(Date.now() - 7 * 86_400_000 - 14 * 3_600_000)
+  const lastWeek = ymd(t0)
+  r = await call('POST', '/punches/in', { token: key, headers: asB, body: { jobId, at: t0.toISOString() } })
+  const oldId = r.json?.punch?.id
+  r = await call('POST', '/punches/out', { token: key, headers: asB, body: { at: new Date(t0.getTime() + 13 * 3_600_000).toISOString() } })
+  check('a back-dated day last week is recorded', r.status === 200 && Boolean(oldId), JSON.stringify(r.json?.error ?? ''))
+
+  r = await call('GET', `/timesheets?week=${lastWeek}`, { token: admin })
+  const sheetRow = r.json?.rows?.find((x) => x.person.id === crewId)
+  check('the week view lists the person, hours and the long day', r.status === 200 && Math.abs((sheetRow?.hours ?? 0) - 13) < 0.02 && sheetRow?.status === 'open' && sheetRow?.problems >= 1, JSON.stringify(sheetRow ?? r.json))
+  r = await call('GET', `/reports/exceptions?from=${lastWeek}&to=${lastWeek}&personId=${crewId}`, { token: key })
+  check('exceptions report flags the 13-hour day', r.status === 200 && r.json?.data?.some((x) => x.code === 'long_day'), JSON.stringify(r.json))
+
+  r = await call('POST', '/me/week/sign', { token: tech, body: {} })
+  check('a tech signs their week', r.status === 200 && r.json?.status === 'signed', JSON.stringify(r.json))
+  r = await call('POST', '/punches/in', { token: key, headers: as, body: { jobId } })
+  r = await call('GET', `/timesheets/${row?.personId}`, { token: admin })
+  check('a punch after signing sends the week back for signing', r.status === 200 && r.json?.status === 'open' && /after signing/.test(r.json?.note ?? ''), JSON.stringify({ status: r.json?.status, note: r.json?.note }))
+  r = await call('POST', '/me/week/sign', { token: tech, body: {} })
+  check('signing while on the clock is refused', r.status === 409 && r.json?.error?.code === 'open_segment')
+  await call('POST', '/punches/out', { token: key, headers: as })
+
+  r = await call('POST', '/timesheets/approve', { token: tech, body: { personIds: [crewId], week: lastWeek } })
+  check('a tech cannot approve', r.status === 403)
+  r = await call('GET', '/timesheets', { token: tech })
+  check('a tech cannot see everyone\'s week', r.status === 403)
+  r = await call('POST', '/timesheets/approve', { token: admin, body: { personIds: [row?.personId] } })
+  check('a week that is not over cannot be approved', r.status === 409 && r.json?.error?.code === 'week_not_over')
+  r = await call('POST', '/timesheets/approve', { token: admin, body: { personIds: [crewId], week: lastWeek } })
+  check('approve last week', r.status === 200 && r.json?.approved === 1, JSON.stringify(r.json))
+  r = await call('PATCH', `/punches/${oldId}`, { token: key, body: { notes: 'after approval', reason: 'smoke' } })
+  check('an approved week refuses corrections', r.status === 409 && r.json?.error?.code === 'week_approved', JSON.stringify(r.json))
+  r = await call('POST', '/punches/in', { token: key, headers: asB, body: { jobId, at: new Date(t0.getTime() + 13.5 * 3_600_000).toISOString() } })
+  check('an approved week refuses late punches', r.status === 409 && r.json?.error?.code === 'week_approved', JSON.stringify(r.json))
+  r = await call('POST', '/timesheets/reopen', { token: admin, body: { personId: crewId, week: lastWeek } })
+  check('reopening needs a reason', r.status === 400)
+  r = await call('POST', '/timesheets/reopen', { token: admin, body: { personId: crewId, week: lastWeek, reason: 'smoke reopen' } })
+  check('reopen the week', r.status === 200 && r.json?.status === 'open', JSON.stringify(r.json?.error ?? r.json?.status))
+  r = await call('PATCH', `/punches/${oldId}`, { token: key, body: { notes: 'after reopen', reason: 'smoke' } })
+  check('a reopened week takes corrections again', r.status === 200, JSON.stringify(r.json?.error ?? ''))
+
+  // Change requests: a person asks for their own time to be fixed, a supervisor decides.
+  const H = 3_600_000
+  r = await call('POST', '/me/requests', { token: key, headers: asB, body: { punchId: oldId, notes: 'forgot a note' } })
+  check('a change request needs a reason', r.status === 400)
+  r = await call('POST', '/me/requests', { token: key, headers: asB, body: { punchId: oldId, clockOut: new Date(t0.getTime() + 12 * H).toISOString(), reason: 'left at noon' } })
+  const reqId = r.json?.request?.id
+  check('ask for a change to your own time', r.status === 201 && r.json?.request?.status === 'pending', JSON.stringify(r.json))
+  r = await call('POST', '/me/requests', { token: key, headers: asB, body: { punchId: oldId, notes: 'x', reason: 'again' } })
+  check('one waiting request per segment', r.status === 409 && r.json?.error?.code === 'request_pending')
+  r = await call('POST', '/me/requests', { token: tech, body: { punchId: oldId, notes: 'x', reason: 'not mine' } })
+  check("nobody can ask to change someone else's time", r.status === 403)
+  r = await call('POST', '/timesheets/approve', { token: admin, body: { personIds: [crewId], week: lastWeek } })
+  check('a waiting request holds up approving the week', r.status === 200 && r.json?.results?.[0]?.code === 'pending_request', JSON.stringify(r.json))
+  r = await call('POST', `/requests/${reqId}/approve`, { token: tech, body: {} })
+  check('a tech cannot approve a change request', r.status === 403)
+  r = await call('GET', '/requests?status=pending', { token: admin })
+  check('supervisors see waiting requests', r.status === 200 && r.json?.data?.some((x) => x.id === reqId))
+  r = await call('POST', `/requests/${reqId}/approve`, { token: admin, body: {} })
+  check('approve the change', r.status === 200 && r.json?.request?.status === 'approved', JSON.stringify(r.json))
+  r = await call('GET', `/punches/${oldId}`, { token: key })
+  const lastEdit = r.json?.punch?.edits?.at(-1)
+  check(
+    'the approved change is applied and kept in the history',
+    Math.abs(new Date(r.json?.punch?.clockOut).getTime() - (t0.getTime() + 12 * H)) < 1000 && /asked by Smoke Crew, approved by/.test(lastEdit?.reason ?? ''),
+    JSON.stringify(lastEdit ?? r.json),
+  )
+  r = await call('POST', `/requests/${reqId}/reject`, { token: admin, body: { note: 'x' } })
+  check('a decided request cannot be decided again', r.status === 409)
+
+  const gap = { clockIn: new Date(t0.getTime() + 12.5 * H).toISOString(), clockOut: new Date(t0.getTime() + 13.5 * H).toISOString(), jobId }
+  r = await call('POST', '/me/requests', { token: key, headers: asB, body: { ...gap, reason: 'forgot to clock back in' } })
+  const addId = r.json?.request?.id
+  check('ask for missing time', r.status === 201 && r.json?.request?.kind === 'add', JSON.stringify(r.json))
+  r = await call('POST', `/requests/${addId}/reject`, { token: admin, body: {} })
+  check('turning a request down needs a note', r.status === 400)
+  r = await call('POST', `/requests/${addId}/reject`, { token: admin, body: { note: 'smoke: no' } })
+  check('turn a request down', r.status === 200 && r.json?.request?.status === 'rejected')
+  r = await call('POST', '/me/requests', { token: key, headers: asB, body: { ...gap, reason: 'forgot, again' } })
+  r = await call('POST', `/me/requests/${r.json?.request?.id}/withdraw`, { token: key, headers: asB })
+  check('withdraw a request', r.status === 200 && r.json?.request?.status === 'withdrawn', JSON.stringify(r.json))
+  r = await call('POST', '/me/requests', { token: key, headers: asB, body: { ...gap, reason: 'third time' } })
+  r = await call('POST', `/requests/${r.json?.request?.id}/approve`, { token: admin, body: { note: 'ok' } })
+  check('approve missing time', r.status === 200 && r.json?.request?.status === 'approved', JSON.stringify(r.json))
+  r = await call('GET', `/timesheets/${crewId}?week=${lastWeek}`, { token: admin })
+  check('the week adds up after the changes', Math.abs((r.json?.hours ?? 0) - 13) < 0.02 && r.json?.requests?.length === 4, `hours=${r.json?.hours} requests=${r.json?.requests?.length}`)
+
+  // Crew punch: a lead clocks several people at once; one bad id does not stop the rest.
+  r = await call('POST', '/crew/in', { token: admin, body: { personIds: [row?.personId, crewId, 'no-such-person'], jobId, phaseKey: phases[0].key, clientId: `crew-${stamp}` } })
+  check('crew clock-in', r.status === 200 && r.json?.punched === 2 && r.json?.results?.find((x) => x.personId === 'no-such-person')?.ok === false, JSON.stringify(r.json))
+  r = await call('POST', '/crew/in', { token: admin, body: { personIds: [row?.personId, crewId], jobId, phaseKey: phases[0].key, clientId: `crew-${stamp}` } })
+  const r2 = await call('GET', `/punches?open=true&personId=${crewId}`, { token: key })
+  check('re-sending a crew punch does nothing twice', r.status === 200 && r2.json?.data?.length === 1 && r2.json.data[0].punchedById === adminId, JSON.stringify(r2.json?.data?.[0] ?? null))
+  r = await call('POST', '/crew/next', { token: admin, body: { personIds: [row?.personId, crewId], phaseKey: phases[1].key } })
+  check('crew moves to the next phase together', r.status === 200 && r.json?.punched === 2, JSON.stringify(r.json))
+  r = await call('POST', '/crew/out', { token: admin, body: { personIds: [row?.personId, crewId] } })
+  check('crew clock-out', r.status === 200 && r.json?.punched === 2 && r.json.results.every((x) => x.onClock === false), JSON.stringify(r.json))
+  r = await call('POST', '/crew/out', { token: tech, body: { personIds: [crewId] } })
+  check('a tech cannot punch a crew', r.status === 403)
 
   // One-click sign-in from GED, when the shared secret is configured.
   const sso = process.env.ADDON_SSO_SECRET
@@ -199,15 +322,25 @@ try {
     console.log('SKIP  one-click sign-in (ADDON_SSO_SECRET is not set)')
   }
 
-  r = await call('GET', '/events?after=0&limit=500', { token: key })
-  const types = new Set((r.json?.data ?? []).map((e) => e.type))
+  // Read the whole feed (it grows with every run) and keep this run's events.
+  const feed = []
+  for (let after = 0, page = 0; page < 200; page++) {
+    r = await call('GET', `/events?after=${after}&limit=500`, { token: key })
+    feed.push(...(r.json?.data ?? []))
+    if (!r.json?.more) break
+    after = r.json.lastSeq
+  }
+  const types = new Set(feed.map((e) => e.type))
   check('change feed has the events', ['job.upserted', 'person.upserted', 'punch.started', 'punch.switched', 'punch.ended', 'punch.edited'].every((t) => types.has(t)), [...types].join(','))
+  const ourStarts = feed.filter((e) => e.type === 'punch.started' && e.payload?.punch?.jobId === jobId)
+  check('punch events carry the job code (GED reads P-numbers from it)', ourStarts.length > 0 && ourStarts.every((e) => e.payload.punch.jobCode === `SMK2-${stamp}`), JSON.stringify(ourStarts[0]?.payload ?? null))
 
   r = await call('GET', '/openapi.json')
   check('API describes itself', r.status === 200 && Boolean(r.json?.paths?.['/punches/in']?.post))
 
   // Clean up.
   await call('PUT', `/people/by-email/${encodeURIComponent(testEmail)}`, { token: key, body: { active: false } })
+  await call('PUT', `/people/by-email/${encodeURIComponent(crewEmail)}`, { token: key, body: { active: false } })
   await call('PUT', `/jobs/by-ref/smoke/${stamp}`, { token: key, body: { active: false } })
   r = await call('DELETE', `/api-keys/${keyId}`, { token: admin })
   check('revoke the key', r.status === 200 && Boolean(r.json?.apiKey?.revokedAt))

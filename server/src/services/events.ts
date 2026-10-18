@@ -11,6 +11,11 @@ export type EventType =
   | 'punch.edited'
   | 'job.upserted'
   | 'person.upserted'
+  | 'timesheet.signed'
+  | 'timesheet.approved'
+  | 'timesheet.reopened'
+  | 'request.created'
+  | 'request.decided'
 
 export async function emit(tx: Tx, companyId: string, type: EventType, payload: Record<string, unknown>): Promise<void> {
   await tx.event.create({

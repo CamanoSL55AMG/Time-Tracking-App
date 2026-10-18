@@ -30,6 +30,7 @@ function jobFields(body: Record<string, unknown> | undefined) {
     siteLat: num(body?.siteLat, 'siteLat'),
     siteLng: num(body?.siteLng, 'siteLng'),
     siteRadiusM: radius === null || radius === undefined ? radius : Math.round(radius),
+    siteAddress: body?.siteAddress === undefined ? undefined : str(body.siteAddress, 300),
   }
 }
 
@@ -94,7 +95,7 @@ route(
     summary: 'Add a job by hand.',
     access: ['jobs:write'],
     status: 201,
-    body: { name: 'Name', kind: 'project | service | shop | other', code: 'P-number or ticket', siteLat: 'Site latitude', siteLng: 'Site longitude', siteRadiusM: 'Site radius in metres' },
+    body: { name: 'Name', kind: 'project | service | shop | other', code: 'P-number or ticket', siteLat: 'Site latitude', siteLng: 'Site longitude', siteRadiusM: 'Site radius in metres', siteAddress: 'Street address, for directions' },
   },
   async (req) => {
     const auth = requireScope(req, 'jobs:write')
@@ -102,7 +103,7 @@ route(
     if (!f.name) throw badRequest('name is required.', { field: 'name' })
     const job = await prisma.$transaction(async (tx) => {
       const created = await tx.job.create({
-        data: { companyId: auth.companyId, name: f.name!, kind: f.kind ?? 'project', code: f.code ?? '', active: f.active ?? true, siteLat: f.siteLat, siteLng: f.siteLng, siteRadiusM: f.siteRadiusM },
+        data: { companyId: auth.companyId, name: f.name!, kind: f.kind ?? 'project', code: f.code ?? '', active: f.active ?? true, siteLat: f.siteLat, siteLng: f.siteLng, siteRadiusM: f.siteRadiusM, siteAddress: f.siteAddress ?? '' },
       })
       await announce(tx, created)
       return created
@@ -154,7 +155,7 @@ route(
       }
       if (!f.name) throw badRequest('name is required when the job does not exist yet.', { field: 'name' })
       const created = await tx.job.create({
-        data: { companyId: auth.companyId, name: f.name, kind: f.kind ?? 'project', code: f.code ?? '', active: f.active ?? true, siteLat: f.siteLat, siteLng: f.siteLng, siteRadiusM: f.siteRadiusM },
+        data: { companyId: auth.companyId, name: f.name, kind: f.kind ?? 'project', code: f.code ?? '', active: f.active ?? true, siteLat: f.siteLat, siteLng: f.siteLng, siteRadiusM: f.siteRadiusM, siteAddress: f.siteAddress ?? '' },
       })
       await tx.externalRef.create({ data: { companyId: auth.companyId, entity: 'job', entityId: created.id, system, externalId } })
       await announce(tx, created)
@@ -166,10 +167,77 @@ route(
 
 route(
   jobsRouter,
-  { method: 'get', path: '/phases', tag: 'Jobs', summary: 'The phases of the work day, in order.', access: ['jobs:read'] },
+  {
+    method: 'get',
+    path: '/phases',
+    tag: 'Jobs',
+    summary: 'The phases of the work day, in order.',
+    access: ['jobs:read'],
+    query: { all: 'true to include switched-off phases (needs jobs:write)' },
+  },
   async (req) => {
     const auth = requireScope(req, 'jobs:read')
-    return { data: await prisma.phase.findMany({ where: { companyId: auth.companyId, active: true }, orderBy: { sortOrder: 'asc' } }) }
+    const all = req.query.all === 'true' && auth.scopes.has('jobs:write')
+    return {
+      data: await prisma.phase.findMany({ where: { companyId: auth.companyId, ...(all ? {} : { active: true }) }, orderBy: { sortOrder: 'asc' } }),
+    }
+  },
+)
+
+const slug = (s: string) =>
+  s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40)
+
+route(
+  jobsRouter,
+  {
+    method: 'post',
+    path: '/phases',
+    tag: 'Jobs',
+    summary: 'Add a phase. It goes to the end of the list unless sortOrder is given.',
+    access: ['jobs:write'],
+    status: 201,
+    body: {
+      name: 'Name (required)',
+      short: 'Short label (defaults to the name)',
+      key: 'Stable id, e.g. "site-survey" (made from the name when left out)',
+      laborCategory: 'engineering | install | programming | management | other (default install)',
+      dayFlow: 'true if "Next" steps through it during the field day (default false)',
+      atShop: 'true if it happens at the shop',
+      sortOrder: 'Position in the list (lower first)',
+    },
+  },
+  async (req) => {
+    const auth = requireScope(req, 'jobs:write')
+    const b = req.body ?? {}
+    const name = requiredStr(b.name, 'name', 120)
+    const key = slug(str(b.key, 40) || name)
+    if (!key) throw badRequest('key must contain letters or numbers.', { field: 'key' })
+    const laborCategory = b.laborCategory === undefined ? 'install' : String(b.laborCategory)
+    if (!LABOR_CATEGORIES.includes(laborCategory)) {
+      throw badRequest(`laborCategory must be one of ${LABOR_CATEGORIES.join(', ')}.`, { field: 'laborCategory' })
+    }
+    if (await prisma.phase.findFirst({ where: { companyId: auth.companyId, key } })) {
+      throw badRequest(`A phase with the key "${key}" already exists.`, { field: 'key' })
+    }
+    const sortOrder = num(b.sortOrder, 'sortOrder')
+    const last = await prisma.phase.findFirst({ where: { companyId: auth.companyId }, orderBy: { sortOrder: 'desc' } })
+    const phase = await prisma.phase.create({
+      data: {
+        companyId: auth.companyId,
+        key,
+        name,
+        short: str(b.short, 40) || name.slice(0, 40),
+        laborCategory,
+        dayFlow: bool(b.dayFlow) ?? false,
+        atShop: bool(b.atShop) ?? false,
+        sortOrder: sortOrder == null ? (last?.sortOrder ?? 0) + 10 : Math.round(sortOrder),
+      },
+    })
+    return { phase }
   },
 )
 

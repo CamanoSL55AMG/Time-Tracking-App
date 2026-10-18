@@ -57,6 +57,11 @@ export interface Job {
   name: string
   code: string
   active: boolean
+  /** Job site, sent across from Jetbuilt by GED. Empty when unknown. */
+  siteAddress?: string
+  siteLat?: number | null
+  siteLng?: number | null
+  siteRadiusM?: number | null
   refs?: { system: string; externalId: string }[]
 }
 export interface Phase {
@@ -70,6 +75,8 @@ export interface Phase {
   laborCategory: string
   /** A step of the field day ("Next" walks through these); office phases are not. */
   dayFlow: boolean
+  /** Switched-off phases only come back from allPhases(). */
+  active?: boolean
 }
 export interface Punch {
   id: string
@@ -95,6 +102,8 @@ export interface DayState {
   assignments: Assignment[]
   /** The job this person last punched on (any day), if it is still open to time. */
   lastJob?: Job | null
+  /** Set while Timesheets.com still runs payroll: each punch is made there too. */
+  parallelRun?: { until: string; url: string } | null
   asOf: string
 }
 export interface Assignment {
@@ -115,6 +124,8 @@ export interface BoardRow {
   lastOut: string | null
   hoursToday: number
   atShop: boolean | null
+  /** Clocked in at the job's site; null when the job has no site position or the punch no GPS. */
+  atSite?: boolean | null
 }
 export interface Board {
   date: string
@@ -131,6 +142,104 @@ export interface ApiKey {
   lastUsedAt: string | null
   revokedAt: string | null
 }
+// ─── Weekly timesheets ──────────────────────────────────────────────────────
+
+export type SheetStatus = 'open' | 'signed' | 'approved'
+export interface TimeException {
+  code: 'missed_clock_out' | 'long_day' | 'away_from_site' | 'away_from_shop' | 'edited' | 'sent_late'
+  severity: 'problem' | 'note'
+  personId: string
+  personName: string
+  date: string
+  punchId?: string
+  message: string
+}
+export interface WeekSegment {
+  id: string
+  clockIn: string
+  clockOut: string | null
+  notes: string
+  source: string
+  job: { id: string; name: string; code: string; kind: string }
+  phase: { id: string; key: string; name: string; short: string; laborCategory: string } | null
+  edited: boolean
+}
+interface SheetState {
+  status: SheetStatus
+  signedAt: string | null
+  approvedAt: string | null
+  approvedBy: string | null
+  note: string
+}
+export type RequestStatus = 'pending' | 'approved' | 'rejected' | 'withdrawn'
+export interface ChangeRequest {
+  id: string
+  kind: 'edit' | 'add'
+  person: { id: string; name: string }
+  requestedBy: string
+  punchId: string | null
+  weekStart: string
+  before: { clockIn: string; clockOut: string | null; jobId: string; jobName: string; phaseId: string | null; phaseName: string | null; notes: string } | null
+  change: { clockIn: string | null; clockOut: string | null; jobId: string | null; jobName: string | null; phaseId: string | null; phaseName: string | null; notes: string | null }
+  reason: string
+  status: RequestStatus
+  decidedBy: string | null
+  decidedAt: string | null
+  decisionNote: string
+  createdAt: string
+}
+export interface RequestBody {
+  punchId?: string
+  clockIn?: string
+  clockOut?: string
+  jobId?: string
+  phaseId?: string
+  notes?: string
+  reason: string
+}
+
+export interface PersonWeek extends SheetState {
+  person: { id: string; name: string; email: string }
+  weekStart: string
+  weekEnd: string
+  timezone: string
+  days: { date: string; hours: number; segments: WeekSegment[] }[]
+  hours: number
+  openSegment: boolean
+  weekOver: boolean
+  hoursAtSignOff: number | null
+  exceptions: TimeException[]
+  requests: ChangeRequest[]
+}
+export interface WeekSheetRow extends SheetState {
+  person: { id: string; name: string; email: string; active: boolean; role: string }
+  daily: number[]
+  hours: number
+  openSegment: boolean
+  problems: number
+  pendingRequests: number
+}
+export interface WeekSheet {
+  weekStart: string
+  weekEnd: string
+  days: string[]
+  weekOver: boolean
+  rows: WeekSheetRow[]
+  quiet: { id: string; name: string }[]
+  exceptions: TimeException[]
+  counts: { approved: number; signed: number; open: number; pendingRequests: number }
+}
+export interface CrewResult {
+  personId: string
+  name: string
+  ok: boolean
+  code?: string
+  message?: string
+  onClock?: boolean
+  jobName?: string
+  phaseName?: string
+}
+
 export interface Geo {
   lat: number
   lng: number
@@ -170,7 +279,38 @@ export const api = {
   addJob: (job: { name: string; kind: string; code: string }) => http.post<{ job: Job }>('/jobs', job).then((r) => r.data.job),
   setJobActive: (id: string, active: boolean) => http.patch<{ job: Job }>(`/jobs/${id}`, { active }).then((r) => r.data.job),
 
+  phases: () => http.get<{ data: Phase[] }>('/phases').then((r) => r.data.data),
+  allPhases: () => http.get<{ data: Phase[] }>('/phases', { params: { all: 'true' } }).then((r) => r.data.data),
+  addPhase: (p: { name: string; short?: string; laborCategory: string; dayFlow: boolean; atShop?: boolean }) =>
+    http.post<{ phase: Phase }>('/phases', p).then((r) => r.data.phase),
+  updatePhase: (id: string, p: Partial<Pick<Phase, 'name' | 'short' | 'sortOrder' | 'laborCategory' | 'dayFlow' | 'active'>>) =>
+    http.patch<{ phase: Phase }>(`/phases/${id}`, p).then((r) => r.data.phase),
+
   board: () => http.get<Board>('/board').then((r) => r.data),
+
+  myWeek: (week?: string) => http.get<PersonWeek>('/me/week', { params: { week } }).then((r) => r.data),
+  signWeek: (week: string) => http.post<PersonWeek>('/me/week/sign', { week }).then((r) => r.data),
+  weekSheet: (week?: string) => http.get<WeekSheet>('/timesheets', { params: { week } }).then((r) => r.data),
+  personWeek: (personId: string, week: string) => http.get<PersonWeek>(`/timesheets/${personId}`, { params: { week } }).then((r) => r.data),
+  approve: (personIds: string[], week: string, note?: string) =>
+    http
+      .post<{ results: { personId: string; ok: boolean; code?: string; message?: string }[]; approved: number }>('/timesheets/approve', { personIds, week, note })
+      .then((r) => r.data),
+  editPunch: (id: string, body: { clockIn?: string; clockOut?: string | null; notes?: string; reason: string }) =>
+    http.patch<{ punch: Punch }>(`/punches/${id}`, body).then((r) => r.data.punch),
+  askChange: (body: RequestBody) => http.post<{ request: ChangeRequest }>('/me/requests', body).then((r) => r.data.request),
+  withdrawRequest: (id: string) => http.post<{ request: ChangeRequest }>(`/me/requests/${id}/withdraw`).then((r) => r.data.request),
+  pendingRequests: () => http.get<{ data: ChangeRequest[] }>('/requests', { params: { status: 'pending' } }).then((r) => r.data.data),
+  decideRequest: (id: string, decision: 'approve' | 'reject', note: string) =>
+    http.post<{ request: ChangeRequest }>(`/requests/${id}/${decision}`, { note }).then((r) => r.data.request),
+  reopen: (personId: string, week: string, reason: string) => http.post<PersonWeek>('/timesheets/reopen', { personId, week, reason }).then((r) => r.data),
+  crew: async (kind: PunchKind, body: { personIds: string[]; jobId?: string; phaseId?: string }) => {
+    const geo = await grabGeo()
+    const clientId = newId()
+    return http
+      .post<{ results: CrewResult[]; punched: number }>(`/crew/${kind}`, { ...body, geo: geo ?? undefined, clientId }, { headers: { 'Idempotency-Key': clientId } })
+      .then((r) => r.data)
+  },
 
   people: () => http.get<{ data: Person[] }>('/people').then((r) => r.data.data),
   savePerson: (email: string, body: { name?: string; initials?: string; role?: string; active?: boolean; password?: string }) =>
@@ -194,6 +334,25 @@ export const fmtElapsed = (fromIso: string | null | undefined, to: Date | string
 }
 
 export const fmtHours = (h: number) => `${h.toFixed(2)} h`
+
+/** "2026-10-12" -> "Mon Oct 12" (dates are calendar days, not instants). */
+export const fmtDay = (ymd: string, opts: Intl.DateTimeFormatOptions = { weekday: 'short', month: 'short', day: 'numeric' }) =>
+  new Date(`${ymd}T12:00:00Z`).toLocaleDateString('en-US', { ...opts, timeZone: 'UTC' })
+
+/** "2026-10-12T07:05" in this browser's time zone, for a datetime-local input. */
+export const toLocalInput = (iso: string | null | undefined) => {
+  if (!iso) return ''
+  const d = new Date(iso)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
+/** Seven days on from a YYYY-MM-DD date (negative to go back). */
+export const shiftWeek = (ymd: string, weeks: number) => {
+  const d = new Date(`${ymd}T12:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + weeks * 7)
+  return d.toISOString().slice(0, 10)
+}
 
 // ─── Punches that survive a dead signal ─────────────────────────────────────
 // A tap that cannot reach the server is kept on the phone with the time it

@@ -25,9 +25,19 @@ server/   Express + TypeScript + Prisma + PostgreSQL — the API at /api/v1     
 - Today's job calendar assignment offered first and pre-selected (pushed in by GED).
 - No signal? Punches are kept on the phone with the time they were tapped and sent, in
   order, when the signal returns.
+- **My week**: each person sees their week by day and signs it. Wrong time or a
+  forgotten punch? They ask for a change (or add missing time) right there; nothing
+  counts until a supervisor approves it, and the approved change is kept in the
+  segment's history with who asked, who approved and why.
+- **Review**: managers and payroll see everyone's week, the problems to look at (missed
+  clock-outs, days over 12 hours, punches away from the site, corrections, punches sent
+  late), the change requests waiting for a decision, correct segments, and approve. An
+  approved week is locked until reopened, and a week with a change still waiting
+  cannot be approved.
+- **Crew punch**: a lead's Clock In / Next / Clock Out can punch the whole crew too.
 
-Not built yet: crew punch, approvals, expenses, payroll export, leave. See the phases in
-the plan.
+Not built yet: expenses, pay periods and the payroll export, leave, kiosk mode,
+webhooks. See the phases in the plan.
 
 ## First-time setup (Windows)
 
@@ -73,7 +83,7 @@ app behind the Cloudflare tunnel the same way as the other apps.
 ```powershell
 cd server
 npm test        # unit tests: time zones, geofence, sign-in tokens, keys
-npm run smoke   # with the API running: 45 end-to-end checks against your database
+npm run smoke   # with the API running: end-to-end checks against your database
 ```
 
 `npm run smoke` creates a throwaway person and job, walks a whole day of punches through

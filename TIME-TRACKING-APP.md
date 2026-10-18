@@ -387,6 +387,13 @@ existing style ("TB OFF"), so the schedule and the leave record agree.
 | 5 — Leave | Leave ledger, WA sick leave preset, separate per-person vacation policies, requests and approval, monthly statements, family-leave periods, leave hours in the payroll export |
 | 6 — Later | More export formats, history import, kiosk photo |
 
+Status 2026-10-18: Phase 0 and 1 done. Phase 2 built: weekly sign and approve with the
+approved-week lock, exceptions report, crew punch, segment corrections on the Review
+screen, and change requests (a person asks for a fix or for missing time; a supervisor
+approves or turns it down; nobody approves their own). Kiosk mode, webhooks and the reconcile report inside this app are still to do
+(GED's Time page has a reconcile tab for the parallel run). Weeks run Monday to Sunday
+(`Company.weekStartDay`) until the pay period is settled (open decision 4).
+
 Rounding, overtime, break and leave rules are legal requirements, not design choices.
 They must be confirmed with whoever runs payroll, and the leave rules with L&I guidance or
 counsel, before Phases 4 and 5 are built.

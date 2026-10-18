@@ -25,6 +25,11 @@ export const config = {
   sessionDays: 30,
   ssoAudience: 'time_tracking',
   rateLimitPerMinute: num(process.env.RATE_LIMIT_PER_MINUTE) ?? 300,
+  // Parallel run with Timesheets.com: through this date (YYYY-MM-DD, company time)
+  // the app asks people to make each punch in Timesheets.com too, because payroll
+  // still runs from there. Empty = no reminder.
+  parallelRunUntil: (process.env.PARALLEL_RUN_UNTIL ?? '').trim(),
+  timesheetsUrl: (process.env.TIMESHEETS_MIRROR_URL ?? '').trim() || 'https://secure.timesheets.com/',
 }
 
 /** Refuse to start with a missing or weak signing secret. */

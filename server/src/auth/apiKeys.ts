@@ -31,19 +31,23 @@ export type Scope = (typeof SCOPES)[number]
 // Scopes that only a signed-in person can hold.
 export const SELF = 'punch:self'
 export const KEYS_MANAGE = 'keys:manage'
+/** Punch a crew in, to the next phase, or out together (crew leads). */
+export const CREW = 'punch:crew'
+/** Approve and reopen weekly timesheets. */
+export const APPROVE = 'timesheets:approve'
 
 export const ROLES = ['tech', 'lead', 'manager', 'payroll', 'admin'] as const
 export type Role = (typeof ROLES)[number]
 
 const TECH = [SELF, 'jobs:read']
-const LEAD = [...TECH, 'punch:read', 'people:read']
-const MANAGER = [...LEAD, 'punch:write:any', 'jobs:write', 'people:write', 'reports:read', 'events:read', 'assignments:write']
+const LEAD = [...TECH, 'punch:read', 'people:read', CREW]
+const MANAGER = [...LEAD, APPROVE, 'punch:write:any', 'jobs:write', 'people:write', 'reports:read', 'events:read', 'assignments:write']
 
 export const ROLE_SCOPES: Record<Role, string[]> = {
   tech: TECH,
   lead: LEAD,
   manager: MANAGER,
-  payroll: [SELF, 'jobs:read', 'punch:read', 'people:read', 'reports:read'],
+  payroll: [SELF, 'jobs:read', 'punch:read', 'people:read', 'reports:read', APPROVE],
   admin: [...MANAGER, KEYS_MANAGE],
 }
 

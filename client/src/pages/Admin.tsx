@@ -19,25 +19,28 @@ import {
   TextField,
   Typography,
 } from '@mui/material'
-import { api, errorText, fmtTime, type ApiKey, type Job, type Person } from '../api'
+import { api, errorText, fmtTime, type ApiKey, type Job, type Person, type Phase } from '../api'
 
-// People, jobs and integration keys. Most jobs arrive from GED through the API;
-// this page is for the ones added by hand and for seeing what is there.
+// People, jobs, phases and integration keys. Most jobs arrive from GED through the
+// API; this page is for the ones added by hand and for seeing what is there.
 
-type Section = 'people' | 'jobs' | 'keys'
+type Section = 'people' | 'jobs' | 'phases' | 'keys'
 
 export default function AdminPage({ me }: { me: Person }) {
   const isAdmin = me.scopes.includes('keys:manage')
+  const canEditJobs = me.scopes.includes('jobs:write')
   const [section, setSection] = useState<Section>('people')
   return (
     <Stack spacing={2}>
       <Tabs value={section} onChange={(_, v: Section) => setSection(v)}>
         <Tab value="people" label="People" />
         <Tab value="jobs" label="Jobs" />
+        {canEditJobs && <Tab value="phases" label="Phases" />}
         {isAdmin && <Tab value="keys" label="API keys" />}
       </Tabs>
       {section === 'people' && <People isAdmin={isAdmin} />}
       {section === 'jobs' && <Jobs />}
+      {section === 'phases' && canEditJobs && <Phases />}
       {section === 'keys' && isAdmin && <Keys />}
     </Stack>
   )
@@ -238,6 +241,162 @@ function Jobs() {
           <Button onClick={() => setAdding(false)}>Cancel</Button>
           <Button variant="contained" onClick={save} disabled={busy || !form.name.trim()}>
             Add
+          </Button>
+        </DialogActions>
+      </Dialog>
+    </Stack>
+  )
+}
+
+// ─── Phases ─────────────────────────────────────────────────────────────────
+// The phase list techs pick from. Field-day steps are walked with "Next" in this
+// order; office phases are picked directly. Each phase's labor category decides
+// which sold-labor line in Jetbuilt its hours count against.
+
+const CATEGORIES: { value: string; label: string }[] = [
+  { value: 'install', label: 'Install' },
+  { value: 'engineering', label: 'Engineering' },
+  { value: 'programming', label: 'Programming' },
+  { value: 'management', label: 'Project management' },
+  { value: 'other', label: 'Other' },
+]
+
+function Phases() {
+  const { data, error, setError, load } = useLoader(api.allPhases)
+  const [adding, setAdding] = useState(false)
+  const [editing, setEditing] = useState<Phase | null>(null)
+  const [form, setForm] = useState({ name: '', short: '', laborCategory: 'install', dayFlow: false })
+  const [busy, setBusy] = useState(false)
+  const phases = data ?? []
+
+  const update = async (p: Phase, patch: Parameters<typeof api.updatePhase>[1]) => {
+    try {
+      await api.updatePhase(p.id, patch)
+      await load()
+    } catch (err) {
+      setError(errorText(err))
+    }
+  }
+  // Swap places with the neighbour above or below.
+  const move = async (i: number, dir: -1 | 1) => {
+    const a = phases[i]
+    const b = phases[i + dir]
+    if (!a || !b) return
+    try {
+      await api.updatePhase(a.id, { sortOrder: b.sortOrder })
+      await api.updatePhase(b.id, { sortOrder: a.sortOrder })
+      await load()
+    } catch (err) {
+      setError(errorText(err))
+    }
+  }
+  const openAdd = () => {
+    setForm({ name: '', short: '', laborCategory: 'install', dayFlow: false })
+    setAdding(true)
+  }
+  const openEdit = (p: Phase) => {
+    setForm({ name: p.name, short: p.short, laborCategory: p.laborCategory, dayFlow: p.dayFlow })
+    setEditing(p)
+  }
+  const save = async () => {
+    setBusy(true)
+    try {
+      const body = { name: form.name.trim(), short: form.short.trim() || form.name.trim(), laborCategory: form.laborCategory, dayFlow: form.dayFlow }
+      if (editing) await api.updatePhase(editing.id, body)
+      else await api.addPhase(body)
+      setAdding(false)
+      setEditing(null)
+      await load()
+    } catch (err) {
+      setError(errorText(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  let step = 0
+  return (
+    <Stack spacing={1.5}>
+      {error && <Alert severity="error">{error}</Alert>}
+      <Typography variant="body2" color="text.secondary">
+        Field-day steps are walked in this order with "Next". Office phases are picked directly. The labor category decides which line of
+        the Jetbuilt labor budget the hours count against.
+      </Typography>
+      <Box>
+        <Button variant="contained" onClick={openAdd}>
+          Add phase
+        </Button>
+      </Box>
+      {phases.map((p, i) => {
+        const active = p.active !== false
+        const label = p.dayFlow && active ? `Step ${++step}` : 'Office'
+        return (
+          <Row key={p.id} dim={!active}>
+            <Stack>
+              <Button size="small" sx={{ minWidth: 0, p: 0, lineHeight: 1 }} disabled={i === 0} onClick={() => void move(i, -1)} aria-label={`Move ${p.name} up`}>
+                ▲
+              </Button>
+              <Button size="small" sx={{ minWidth: 0, p: 0, lineHeight: 1 }} disabled={i === phases.length - 1} onClick={() => void move(i, 1)} aria-label={`Move ${p.name} down`}>
+                ▼
+              </Button>
+            </Stack>
+            <Box sx={{ flex: 1, minWidth: 0 }}>
+              <Typography sx={{ fontWeight: 600 }} noWrap>
+                {p.name}
+              </Typography>
+              <Typography variant="body2" color="text.secondary" noWrap>
+                {label} · {p.short}
+              </Typography>
+            </Box>
+            <TextField
+              select
+              size="small"
+              label="Counts as"
+              value={p.laborCategory}
+              onChange={(e) => void update(p, { laborCategory: e.target.value })}
+              sx={{ width: 170 }}
+            >
+              {CATEGORIES.map((c) => (
+                <MenuItem key={c.value} value={c.value}>
+                  {c.label}
+                </MenuItem>
+              ))}
+            </TextField>
+            <FormControlLabel
+              control={<Switch size="small" checked={p.dayFlow} onChange={() => void update(p, { dayFlow: !p.dayFlow })} />}
+              label={<Typography variant="body2">Field-day step</Typography>}
+            />
+            <Button size="small" onClick={() => openEdit(p)}>
+              Rename
+            </Button>
+            <Switch checked={active} onChange={() => void update(p, { active: !active })} inputProps={{ 'aria-label': `${p.name} offered to techs` }} />
+          </Row>
+        )
+      })}
+
+      <Dialog open={adding || Boolean(editing)} onClose={() => (setAdding(false), setEditing(null))} fullWidth maxWidth="xs">
+        <DialogTitle>{editing ? 'Rename phase' : 'Add phase'}</DialogTitle>
+        <DialogContent>
+          <Stack spacing={2} sx={{ pt: 1 }}>
+            <TextField label="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} autoFocus />
+            <TextField label="Short label" value={form.short} onChange={(e) => setForm({ ...form, short: e.target.value })} helperText="Shown on the step track and the board" />
+            <TextField select label="Counts as" value={form.laborCategory} onChange={(e) => setForm({ ...form, laborCategory: e.target.value })}>
+              {CATEGORIES.map((c) => (
+                <MenuItem key={c.value} value={c.value}>
+                  {c.label}
+                </MenuItem>
+              ))}
+            </TextField>
+            <FormControlLabel
+              control={<Checkbox checked={form.dayFlow} onChange={(e) => setForm({ ...form, dayFlow: e.target.checked })} />}
+              label="Step of the field day (walked with Next)"
+            />
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => (setAdding(false), setEditing(null))}>Cancel</Button>
+          <Button variant="contained" onClick={save} disabled={busy || !form.name.trim()}>
+            {editing ? 'Save' : 'Add'}
           </Button>
         </DialogActions>
       </Dialog>

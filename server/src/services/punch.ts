@@ -4,6 +4,8 @@ import { ApiError, badRequest, conflict, notFound } from '../errors.js'
 import { dayBounds, hoursBetween } from '../lib/time.js'
 import { insideFence, type Fence, type GeoStamp } from '../lib/geo.js'
 import { emit } from './events.js'
+import { touchWeeks } from './timesheets.js'
+import { config } from '../config.js'
 
 // The punch engine. A person has at most one open segment. Clocking in while on the
 // clock is a switch: the open segment closes at the same instant the new one opens,
@@ -26,6 +28,8 @@ export interface Actor {
   companyId: string
   apiKeyId: string | null
   source: PunchSource
+  /** The crew lead, when a lead punched for this person. */
+  punchedById?: string | null
 }
 
 const include = { job: true, phase: true } satisfies Prisma.PunchInclude
@@ -90,6 +94,7 @@ const summary = (p: PunchRow) => ({
   personId: p.personId,
   jobId: p.jobId,
   jobName: p.job.name,
+  jobCode: p.job.code,
   phaseKey: p.phase?.key ?? null,
   clockIn: p.clockIn,
   clockOut: p.clockOut,
@@ -107,6 +112,8 @@ async function openSegment(
 ): Promise<{ punch: PunchRow; switchedFrom: PunchRow | null }> {
   const open = await tx.punch.findFirst({ where: { personId: person.id, clockOut: null }, include })
   let switchedFrom: PunchRow | null = null
+  // Approved weeks are locked; a signed week goes back for signing.
+  await touchWeeks(tx, actor.companyId, person.id, open ? [open.clockIn, at] : [at], 'new punch')
 
   if (open) {
     if (at.getTime() < open.clockIn.getTime()) {
@@ -132,6 +139,7 @@ async function openSegment(
       clockIn: at,
       source: actor.source,
       apiKeyId: actor.apiKeyId,
+      punchedById: actor.punchedById ?? null,
       clientId: input.clientId || null,
       notes: input.notes ?? '',
       ...geoIn(input.geo),
@@ -218,6 +226,7 @@ export async function punchOut(actor: Actor, person: Person, input: Pick<PunchIn
     if (at.getTime() < open.clockIn.getTime()) {
       throw conflict('punch_overlap', 'That time is before the current segment started.', { openSince: open.clockIn })
     }
+    await touchWeeks(tx, actor.companyId, person.id, [open.clockIn, at], 'clock-out')
     const punch = await tx.punch.update({ where: { id: open.id }, data: { clockOut: at, ...geoOut(input.geo) }, include })
     await emit(tx, actor.companyId, 'punch.ended', { punch: summary(punch) })
     return { punch }
@@ -242,21 +251,28 @@ const auditShape = (p: Punch) => ({
   notes: p.notes,
 })
 
+export interface EditActor {
+  companyId: string
+  personId: string | null
+  apiKeyId: string | null
+}
+
 /** Correct a segment. Every change is recorded with who made it and why. */
-export async function editPunch(
-  actor: { companyId: string; personId: string | null; apiKeyId: string | null },
-  punchId: string,
-  patch: PunchPatch,
-  reason: string,
-) {
+export async function editPunch(actor: EditActor, punchId: string, patch: PunchPatch, reason: string) {
   if (!reason.trim()) throw badRequest('A reason is required to change a punch.', { field: 'reason' })
-  return prisma.$transaction(async (tx) => {
+  return prisma.$transaction((tx) => editPunchTx(tx, actor, punchId, patch, reason))
+}
+
+/** editPunch inside the caller's transaction (an approved change request). */
+export async function editPunchTx(tx: Tx, actor: EditActor, punchId: string, patch: PunchPatch, reason: string) {
+  {
     const before = await tx.punch.findFirst({ where: { id: punchId, companyId: actor.companyId } })
     if (!before) throw notFound('Punch')
     await lockPerson(tx, before.personId)
 
     const clockIn = patch.clockIn ?? before.clockIn
     const clockOut = patch.clockOut === undefined ? before.clockOut : patch.clockOut
+    await touchWeeks(tx, actor.companyId, before.personId, [before.clockIn, clockIn], reason.trim())
     checkAt(clockIn)
     if (clockOut) checkAt(clockOut)
     if (clockOut && clockOut.getTime() <= clockIn.getTime()) {
@@ -309,13 +325,74 @@ export async function editPunch(
     })
     await emit(tx, actor.companyId, 'punch.edited', { punch: summary(after), reason: reason.trim() })
     return after
+  }
+}
+
+export interface NewSegment {
+  clockIn: Date
+  clockOut: Date
+  jobId: string
+  phaseId?: string | null
+  notes?: string
+}
+
+/** Add a closed segment that was never punched (a forgotten clock-in). Recorded as a correction. */
+export async function addSegmentTx(tx: Tx, actor: EditActor, personId: string, seg: NewSegment, reason: string) {
+  if (!reason.trim()) throw badRequest('A reason is required to add time.', { field: 'reason' })
+  await lockPerson(tx, personId)
+  checkAt(seg.clockIn)
+  checkAt(seg.clockOut)
+  if (seg.clockOut.getTime() <= seg.clockIn.getTime()) throw badRequest('Clock-out must be after clock-in.', { field: 'clockOut' })
+  if (seg.clockOut.getTime() - seg.clockIn.getTime() > 24 * 3_600_000) throw badRequest('One segment cannot be longer than 24 hours.', { field: 'clockOut' })
+  await touchWeeks(tx, actor.companyId, personId, [seg.clockIn], reason.trim())
+  const clash = await tx.punch.findFirst({
+    where: { personId, clockIn: { lt: seg.clockOut }, OR: [{ clockOut: null }, { clockOut: { gt: seg.clockIn } }] },
   })
+  if (clash) throw conflict('punch_overlap', 'That time overlaps another segment.', { overlaps: clash.id })
+  const job = await tx.job.findFirst({ where: { id: seg.jobId, companyId: actor.companyId } })
+  if (!job) throw notFound('Job')
+  if (seg.phaseId) {
+    const phase = await tx.phase.findFirst({ where: { id: seg.phaseId, companyId: actor.companyId } })
+    if (!phase) throw notFound('Phase')
+  }
+  const punch = await tx.punch.create({
+    data: {
+      companyId: actor.companyId,
+      personId,
+      jobId: seg.jobId,
+      phaseId: seg.phaseId ?? null,
+      clockIn: seg.clockIn,
+      clockOut: seg.clockOut,
+      source: 'edit',
+      notes: seg.notes ?? '',
+      apiKeyId: actor.apiKeyId,
+      punchedById: actor.personId,
+    },
+    include,
+  })
+  await tx.punchEdit.create({
+    data: {
+      punchId: punch.id,
+      editedById: actor.personId,
+      editedByKeyId: actor.apiKeyId,
+      reason: reason.trim(),
+      before: {},
+      after: JSON.parse(JSON.stringify(auditShape(punch))) as Prisma.InputJsonValue,
+    },
+  })
+  await emit(tx, actor.companyId, 'punch.edited', { punch: summary(punch), reason: reason.trim(), added: true })
+  return punch
 }
 
 // ─── Views ──────────────────────────────────────────────────────────────────
 
 const shopFence = (c: Company): Fence | null =>
   c.shopLat !== null && c.shopLng !== null ? { lat: c.shopLat, lng: c.shopLng, radiusM: c.shopRadiusM } : null
+
+// A job's site, when its position is known. Without a radius set, 200 m covers a
+// typical campus and its parking.
+const siteFence = (j: Job): Fence | null =>
+  j.siteLat !== null && j.siteLng !== null ? { lat: j.siteLat, lng: j.siteLng, radiusM: j.siteRadiusM ?? 200 } : null
 
 const stampIn = (p: Punch): GeoStamp | null =>
   p.inLat !== null && p.inLng !== null ? { lat: p.inLat, lng: p.inLng, accuracyM: p.inAccuracyM ?? undefined } : null
@@ -365,9 +442,14 @@ export async function personState(person: Person) {
       : flow.find((ph) => ph.sortOrder > (open.phase?.sortOrder ?? -1)) ?? null
     : phases.find((ph) => ph.id === lastToday?.phaseId) ?? flow[0] ?? phases[0] ?? null
 
+  // During the parallel run every punch is also made in Timesheets.com.
+  const until = config.parallelRunUntil
+  const parallelRun = /^\d{4}-\d{2}-\d{2}$/.test(until) && date <= until ? { until, url: config.timesheetsUrl } : null
+
   return {
     date,
     timezone: company.timezone,
+    parallelRun,
     onClock: Boolean(open),
     open,
     today,
@@ -402,6 +484,8 @@ export interface BoardRow {
   lastOut: Date | null
   hoursToday: number
   atShop: boolean | null
+  /** Clocked in within the job's site fence; null when the job has no site position or the punch no GPS. */
+  atSite: boolean | null
 }
 
 /** Tower board: everyone who has punched today, who is on the clock first. */
@@ -440,6 +524,7 @@ export async function board(companyId: string) {
         lastOut: null,
         hoursToday: 0,
         atShop: null,
+        atSite: null,
       }
       rows.set(p.personId, r)
     }
@@ -455,6 +540,7 @@ export async function board(companyId: string) {
       r.onClock = true
       r.since = p.clockIn
       r.atShop = insideFence(stampIn(p), fence)
+      r.atSite = insideFence(stampIn(p), siteFence(p.job))
     } else if (!r.onClock) {
       r.lastOut = p.clockOut
     }
