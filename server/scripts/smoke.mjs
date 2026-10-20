@@ -338,6 +338,20 @@ try {
   r = await call('GET', '/openapi.json')
   check('API describes itself', r.status === 200 && Boolean(r.json?.paths?.['/punches/in']?.post))
 
+  // Sign in with the Dashboard (GED's sign-in service), when it is set up here.
+  r = await call('GET', '/auth/config')
+  check('sign-in page knows whether "Sign in with Dashboard" is offered', r.status === 200 && typeof r.json?.dashboard === 'boolean', JSON.stringify(r.json))
+  if (r.json?.dashboard) {
+    const s = await fetch(`${api}/auth/dashboard/start`, { redirect: 'manual' })
+    const to = s.headers.get('location') ?? ''
+    if (to.includes('signin_error')) console.log('SKIP  Dashboard sign-in start (the Dashboard is not answering: is GED running?)')
+    else check('"Sign in with Dashboard" sends the browser to the Dashboard', s.status === 302 && to.startsWith(`${(process.env.DASHBOARD_ISSUER ?? '').replace(/\/+$/, '')}/auth?`) && (s.headers.get('set-cookie') ?? '').includes('tt_dashboard_signin='), `${s.status} ${to.slice(0, 80)}`)
+    const cb = await fetch(`${api}/auth/dashboard/callback?code=forged&state=forged`, { redirect: 'manual' })
+    check('a Dashboard return without the started sign-in is refused', cb.status === 302 && (cb.headers.get('location') ?? '').includes('signin_error='))
+  } else {
+    console.log('SKIP  Sign in with Dashboard (DASHBOARD_ISSUER / DASHBOARD_CLIENT_SECRET not set)')
+  }
+
   // Clean up.
   await call('PUT', `/people/by-email/${encodeURIComponent(testEmail)}`, { token: key, body: { active: false } })
   await call('PUT', `/people/by-email/${encodeURIComponent(crewEmail)}`, { token: key, body: { active: false } })

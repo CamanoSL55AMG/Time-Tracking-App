@@ -264,7 +264,7 @@ type PunchResult = { punch: Punch; state: DayState }
 export const api = {
   login: (email: string, password: string) => http.post<{ token: string; person: Person }>('/auth/login', { email, password }).then((r) => r.data),
   sso: (token: string) => http.post<{ token: string; person: Person }>('/auth/sso', { token }).then((r) => r.data),
-  authConfig: () => http.get<{ googleClientId: string | null }>('/auth/config').then((r) => r.data),
+  authConfig: () => http.get<{ googleClientId: string | null; dashboard?: boolean }>('/auth/config').then((r) => r.data),
   google: (credential: string) => http.post<{ token: string; person: Person }>('/auth/google', { credential }).then((r) => r.data),
   me: () => http.get<{ person: Person | null; scopes: string[] }>('/auth/me').then((r) => r.data),
   changePassword: (current: string, next: string) => http.post('/auth/password', { current, next }).then((r) => r.data),

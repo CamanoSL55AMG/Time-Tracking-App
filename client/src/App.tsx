@@ -76,9 +76,15 @@ export default function App() {
     setSignedOutHandler(() => setPerson(null))
     const boot = async () => {
       // Arriving from GED with a one-click sign-in link: /sso?token=…
+      // Back from "Sign in with Dashboard": /sso#session=… (the session itself),
+      // or /?signin_error=… when the Dashboard said no.
       const url = new URL(window.location.href)
       const sso = url.pathname === '/sso' ? url.searchParams.get('token') : null
-      if (url.pathname === '/sso') window.history.replaceState(null, '', '/')
+      const dashSession = url.pathname === '/sso' ? new URLSearchParams(url.hash.slice(1)).get('session') : null
+      const signinError = url.searchParams.get('signin_error')
+      if (url.pathname === '/sso' || signinError) window.history.replaceState(null, '', '/')
+      if (dashSession) setToken(dashSession)
+      if (signinError) setBootError(signinError)
       try {
         if (sso) {
           const s = await api.sso(sso)

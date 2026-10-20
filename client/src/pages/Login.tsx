@@ -26,6 +26,7 @@ export default function Login({ notice, onSignedIn }: { notice?: string; onSigne
   const [error, setError] = useState(notice ?? '')
   const [busy, setBusy] = useState(false)
   const [googleClientId, setGoogleClientId] = useState<string | null>(null)
+  const [dashboard, setDashboard] = useState(false)
   const googleBox = useRef<HTMLDivElement>(null)
   // The parent passes a new function each render; keep the latest without re-drawing Google's button.
   const signedIn = useRef(onSignedIn)
@@ -36,10 +37,12 @@ export default function Login({ notice, onSignedIn }: { notice?: string; onSigne
   const googleUsable = window.isSecureContext
 
   useEffect(() => {
-    if (!googleUsable) return
     api
       .authConfig()
-      .then((c) => setGoogleClientId(c.googleClientId))
+      .then((c) => {
+        setGoogleClientId(googleUsable ? c.googleClientId : null)
+        setDashboard(Boolean(c.dashboard))
+      })
       .catch(() => setGoogleClientId(null))
   }, [googleUsable])
 
@@ -102,6 +105,19 @@ export default function Login({ notice, onSignedIn }: { notice?: string; onSigne
                 Sign in to clock in.
               </Typography>
             </Box>
+            {dashboard && (
+              <>
+                {/* One sign-in for the Dashboard and every add-on (GED's DASHBOARD-SIGN-IN.md) */}
+                <Button variant="contained" size="large" href="/api/v1/auth/dashboard/start" sx={{ py: 1.25 }}>
+                  Sign in with Dashboard
+                </Button>
+                <Divider>
+                  <Typography variant="caption" color="text.secondary">
+                    {googleClientId ? 'or' : 'or with a password'}
+                  </Typography>
+                </Divider>
+              </>
+            )}
             {googleClientId && (
               <>
                 <Box ref={googleBox} sx={{ display: 'flex', justifyContent: 'center', minHeight: 44 }} />
@@ -115,7 +131,7 @@ export default function Login({ notice, onSignedIn }: { notice?: string; onSigne
             <TextField label="Email" type="email" autoComplete="username" inputMode="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoFocus={!googleClientId} />
             <TextField label="Password" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
             {error && <Alert severity="error">{error}</Alert>}
-            <Button type="submit" variant="contained" size="large" disabled={busy || !email || !password}>
+            <Button type="submit" variant={dashboard ? 'outlined' : 'contained'} size="large" disabled={busy || !email || !password}>
               {busy ? 'Signing in…' : 'Sign in'}
             </Button>
           </Stack>

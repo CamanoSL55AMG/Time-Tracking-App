@@ -9,6 +9,7 @@ import { requireAuth, requirePerson } from '../auth/middleware.js'
 import { signSession } from '../auth/session.js'
 import { verifySsoToken } from '../auth/ssoToken.js'
 import { verifyGoogleIdToken } from '../auth/googleIdToken.js'
+import { dashboardConfigured, finishSignIn, startUrl } from '../auth/dashboard.js'
 import { isRole, ROLE_SCOPES } from '../auth/apiKeys.js'
 
 export const authRouter = Router()
@@ -79,7 +80,66 @@ route(
     summary: 'Which sign-in methods this server offers. The sign-in page reads this.',
     access: 'public',
   },
-  async () => ({ googleClientId: config.googleClientId || null }),
+  async () => ({ googleClientId: config.googleClientId || null, dashboard: dashboardConfigured() }),
+)
+
+// ─── Sign in with the Dashboard ─────────────────────────────────────────────
+// Browser navigations, not JSON calls: start sends the browser to the Dashboard,
+// the Dashboard sends it back to callback, and callback hands the app a session.
+
+// GED roles that map onto ours for someone signing in here for the first time.
+const ROLE_FROM_DASHBOARD: Record<string, Person['role']> = { lead: 'lead', technician: 'tech' }
+
+route(
+  authRouter,
+  {
+    method: 'get',
+    path: '/auth/dashboard/start',
+    tag: 'Sign-in',
+    summary: 'Start "Sign in with Dashboard": redirects the browser to the Dashboard sign-in service.',
+    access: 'public',
+  },
+  async (_req, res) => {
+    if (!dashboardConfigured()) throw new ApiError(503, 'dashboard_not_configured', 'Signing in with the Dashboard is not set up on this server.')
+    try {
+      res.redirect(302, await startUrl(res))
+    } catch {
+      res.redirect(302, `${config.appUrl}/?signin_error=${encodeURIComponent('The Dashboard is not answering. Try again in a minute, or sign in with your password.')}`)
+    }
+  },
+)
+
+route(
+  authRouter,
+  {
+    method: 'get',
+    path: '/auth/dashboard/callback',
+    tag: 'Sign-in',
+    summary: 'Where the Dashboard returns after signing in. Redirects to the app, signed in.',
+    access: 'public',
+  },
+  async (req, res) => {
+    const fail = (message: string) => res.redirect(302, `${config.appUrl}/?signin_error=${encodeURIComponent(message)}`)
+    let who
+    try {
+      who = await finishSignIn(req, res)
+    } catch (err) {
+      return fail(err instanceof Error ? err.message : 'The Dashboard sign-in failed.')
+    }
+    if (!who.apps.includes(config.ssoAudience)) return fail('Your Dashboard account does not include Time Tracking. Ask your administrator to add it.')
+
+    let person = await prisma.person.findUnique({ where: { email: who.email } })
+    if (!person) {
+      const companies = await prisma.company.findMany({ take: 2 })
+      if (!config.ssoAutoProvision || companies.length !== 1) return fail(`No Time Tracking account exists for ${who.email}. Ask an admin to add you.`)
+      person = await prisma.person.create({
+        data: { companyId: companies[0].id, email: who.email, name: str(who.name, 200) || who.email, role: ROLE_FROM_DASHBOARD[who.role] ?? 'tech' },
+      })
+    }
+    if (!person.active) return fail('This Time Tracking account is switched off. Ask an admin.')
+    // The session token travels in the address fragment, which never reaches a server.
+    res.redirect(302, `${config.appUrl}/sso#session=${encodeURIComponent(session(person).token)}`)
+  },
 )
 
 route(

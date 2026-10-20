@@ -13,6 +13,8 @@ server/   Express + TypeScript + Prisma + PostgreSQL — the API at /api/v1     
 ## What works today
 
 - Sign-in by email and password, and one-click sign-in from GED (`/sso?token=…`).
+- **Sign in with Dashboard**: GED is the sign-in service for every add-on
+  (`DASHBOARD-SIGN-IN.md` in the GED repo). Set up with GED's `npm run oidc:client`.
 - Clock in, Next phase, Switch job, Clock out. Each punch is stamped with the phone's
   location at that moment.
 - The seven phases of the day, from "Shop — load vans" to "Shop — unload / put away".

@@ -30,6 +30,14 @@ export const config = {
   // still runs from there. Empty = no reminder.
   parallelRunUntil: (process.env.PARALLEL_RUN_UNTIL ?? '').trim(),
   timesheetsUrl: (process.env.TIMESHEETS_MIRROR_URL ?? '').trim() || 'https://secure.timesheets.com/',
+  // Where people open this app (the page, not the API). The Dashboard sign-in
+  // returns here: <APP_URL>/api/v1/auth/dashboard/callback.
+  appUrl: ((process.env.APP_URL ?? '').trim() || 'http://localhost:5195').replace(/\/+$/, ''),
+  // "Sign in with Dashboard" (GED's sign-in service). Written by GED's
+  // `npm run oidc:client`. Empty = the button is not shown.
+  dashboardIssuer: (process.env.DASHBOARD_ISSUER ?? '').trim(),
+  dashboardClientId: (process.env.DASHBOARD_CLIENT_ID ?? '').trim() || 'time_tracking',
+  dashboardClientSecret: (process.env.DASHBOARD_CLIENT_SECRET ?? '').trim(),
 }
 
 /** Refuse to start with a missing or weak signing secret. */
