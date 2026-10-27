@@ -288,6 +288,47 @@ try {
   r = await call('GET', `/timesheets/${crewId}?week=${lastWeek}`, { token: admin })
   check('the week adds up after the changes', Math.abs((r.json?.hours ?? 0) - 13) < 0.02 && r.json?.requests?.length === 4, `hours=${r.json?.hours} requests=${r.json?.requests?.length}`)
 
+  // Open items: Service / Shop / Office / CAD work stays open across switches until closed.
+  check('the CAD team has its own tasks', allPhases.filter((p) => p.mode === 'cad').length >= 5, JSON.stringify(allPhases.filter((p) => p.mode === 'cad').map((p) => p.key)))
+  const officeTask = allPhases.find((p) => p.mode === 'office' && p.key !== 'admin-overhead')
+  r = await call('PUT', `/jobs/by-ref/smoke/${stamp}-2`, { token: key, body: { name: `Smoke second job ${stamp}`, kind: 'project', code: `SMK3-${stamp}` } })
+  const job2 = r.json?.job?.id
+  r = await call('POST', '/punches/in', { token: key, headers: as, body: { jobId, phaseId: officeTask?.id, notes: 'smoke: checking the amp rack' } })
+  r = await call('GET', '/me/items', { token: key, headers: as })
+  const item1 = r.json?.data?.find((i) => i.jobId === jobId)
+  check('office work opens an item with its note', r.status === 200 && item1?.status === 'open' && item1?.mode === 'office' && item1?.notes.includes('amp rack') && item1?.current === true, JSON.stringify(r.json?.data ?? r.json))
+  await call('POST', '/punches/in', { token: key, headers: as, body: { jobId: job2, phaseId: officeTask?.id } })
+  await call('POST', '/punches/in', { token: key, headers: as, body: { jobId, phaseId: officeTask?.id } })
+  r = await call('GET', '/me/items', { token: key, headers: as })
+  const again = r.json?.data?.filter((i) => i.jobId === jobId) ?? []
+  check('switching away and back picks the same item up again', again.length === 1 && again[0].id === item1?.id && (r.json?.data?.length ?? 0) >= 2, JSON.stringify(r.json?.data?.map((i) => [i.jobId === jobId ? 'job1' : 'job2', i.id])))
+  const item2 = r.json?.data?.find((i) => i.jobId === job2)
+  r = await call('POST', `/me/items/${item1?.id}/close`, { token: key, headers: as, body: {} })
+  check('closing an item needs a resolution', r.status === 400)
+  r = await call('POST', `/me/items/${item1?.id}/close`, { token: key, headers: as, body: { resolution: 'smoke: rack checked' } })
+  check('close an item', r.status === 200 && r.json?.item?.status === 'closed')
+  r = await call('POST', `/me/items/${item2?.id}/keep`, { token: key, headers: as, body: { reason: 'Waiting on parts' } })
+  check('leave an item open with a reason', r.status === 200 && r.json?.item?.waitingReason === 'Waiting on parts')
+  r = await call('GET', '/items', { token: admin })
+  check("the office sees everyone's open items", r.status === 200 && r.json?.data?.some((i) => i.id === item2?.id && i.person?.email === testEmail) && !r.json.data.some((i) => i.id === item1?.id))
+  r = await call('GET', '/items', { token: tech })
+  check("a tech cannot see everyone's items", r.status === 403)
+  // Going back to an item clears why it was left open; a task change on it keeps the
+  // reason (Call complete, leave open, then Drive home is not asked about again).
+  const officeTask2 = allPhases.find((p) => p.mode === 'office' && p.key !== 'admin-overhead' && p.id !== officeTask?.id)
+  await call('POST', '/punches/in', { token: key, headers: as, body: { jobId: job2, phaseId: officeTask?.id } })
+  r = await call('GET', '/me/items', { token: key, headers: as })
+  check('going back to an item clears why it was left open', r.json?.data?.find((i) => i.id === item2?.id)?.waitingReason === '', JSON.stringify(r.json?.data?.find((i) => i.id === item2?.id) ?? null))
+  await call('POST', `/me/items/${item2?.id}/keep`, { token: key, headers: as, body: { reason: 'Return visit scheduled' } })
+  if (officeTask2) {
+    await call('POST', '/punches/next', { token: key, headers: as, body: { phaseId: officeTask2.id } })
+    r = await call('GET', '/me/items', { token: key, headers: as })
+    const kept = r.json?.data?.find((i) => i.id === item2?.id)
+    check('a task change on the same item keeps the reason', kept?.waitingReason === 'Return visit scheduled' && kept?.current === true, JSON.stringify(kept ?? null))
+  }
+  await call('POST', `/me/items/${item2?.id}/close`, { token: key, headers: as, body: { resolution: 'smoke: done' } })
+  await call('POST', '/punches/out', { token: key, headers: as })
+
   // Crew punch: a lead clocks several people at once; one bad id does not stop the rest.
   r = await call('POST', '/crew/in', { token: admin, body: { personIds: [row?.personId, crewId, 'no-such-person'], jobId, phaseKey: phases[0].key, clientId: `crew-${stamp}` } })
   check('crew clock-in', r.status === 200 && r.json?.punched === 2 && r.json?.results?.find((x) => x.personId === 'no-such-person')?.ok === false, JSON.stringify(r.json))
@@ -352,10 +393,125 @@ try {
     console.log('SKIP  Sign in with Dashboard (DASHBOARD_ISSUER / DASHBOARD_CLIENT_SECRET not set)')
   }
 
+  // Work modes: every phase belongs to Install, Service, Office or Shop, and "Next"
+  // stays inside the mode. A service call: Drive → On site, billed by the rule.
+  check(
+    'every phase names its work mode',
+    allPhases.every((p) => ['install', 'service', 'office', 'shop'].includes(p.mode)),
+    JSON.stringify(allPhases.map((p) => [p.key, p.mode])),
+  )
+  const svcEmail = `smoke-svc-${stamp}@example.invalid`
+  const svcAs = { 'X-Act-As': svcEmail }
+  await call('PUT', `/people/by-email/${encodeURIComponent(svcEmail)}`, { token: key, body: { name: 'Smoke Service Tech' } })
+  r = await call('PUT', `/jobs/by-ref/smoke/svc-${stamp}`, { token: key, body: { name: `Smoke service call ${stamp}`, kind: 'service', code: `S-${stamp}` } })
+  const svcJobId = r.json?.job?.id
+  if (allPhases.some((p) => p.key === 'svc-travel') && allPhases.some((p) => p.key === 'svc-onsite')) {
+    r = await call('POST', '/punches/in', { token: key, headers: svcAs, body: { jobId: svcJobId, phaseKey: 'svc-travel', at: minutesAgo(100) } })
+    check('service: start the drive to a call', r.status === 200 && r.json?.punch?.phase?.key === 'svc-travel' && r.json?.state?.nextPhase?.key === 'svc-onsite', JSON.stringify(r.json?.error ?? r.json?.state?.nextPhase ?? ''))
+    r = await call('POST', '/punches/next', { token: key, headers: svcAs, body: { at: minutesAgo(80) } })
+    check('service: Arrived moves to on site', r.status === 200 && r.json?.punch?.phase?.key === 'svc-onsite', JSON.stringify(r.json?.error ?? ''))
+    r = await call('POST', '/punches/next', { token: key, headers: svcAs, body: {} })
+    check('"Next" never leaves the work mode (no install step after a service call)', r.status === 409 && r.json?.error?.code === 'last_phase', JSON.stringify(r.json))
+    r = await call('GET', '/me/state', { token: key, headers: svcAs })
+    check('state offers the overhead job and recent jobs', r.status === 200 && Array.isArray(r.json?.recentJobs) && r.json.recentJobs.some((j) => j.id === svcJobId) && 'overhead' in r.json, JSON.stringify({ overhead: r.json?.overhead?.job?.code, recent: r.json?.recentJobs?.length }))
+    r = await call('POST', '/punches/next', { token: key, headers: svcAs, body: { phaseKey: 'svc-home', at: minutesAgo(10) } })
+    check('service: drive home from the last call', r.status === 200 && r.json?.punch?.phase?.key === 'svc-home', JSON.stringify(r.json?.error ?? ''))
+    r = await call('POST', '/punches/out', { token: key, headers: svcAs, body: {} })
+    check('service: clock out after the call', r.status === 200 && r.json?.state?.onClock === false && r.json?.state?.lastSegment?.jobId === svcJobId)
+
+    r = await call('GET', `/reports/service-billing?jobId=${svcJobId}`, { token: key })
+    const call0 = r.json?.rows?.[0]
+    const rules = r.json?.rules
+    const step = (rules?.incrementMinutes ?? 15) / 60
+    const extra = (call0?.actualOnSiteHours ?? 0) - (rules?.includedHours ?? 1) - 30 / 3600
+    const expectBillable = extra > 0 ? Math.round(Math.ceil(extra / step) * step * 100) / 100 : 0
+    check(
+      'service billing: flat travel, one trip charge, on-site time past the included hour in steps, drive home not billed',
+      r.status === 200 && r.json.rows.length === 1 && call0.tripCharges === 1 && call0.billedTravelHours === rules.travelHours && Math.abs(call0.actualOnSiteHours - 70 / 60) < 0.02 && call0.billableHours === expectBillable,
+      JSON.stringify(r.json),
+    )
+  } else {
+    console.log('SKIP  service call flow (run `npm run seed` to add the service phases)')
+  }
+  r = await call('PATCH', '/company/service-billing', { token: admin, body: { incrementMinutes: 0 } })
+  check('a nonsense billing step is refused', r.status === 400)
+  r = await call('GET', '/company/service-billing', { token: admin })
+  check('billing rules can be read', r.status === 200 && typeof r.json?.rules?.travelHours === 'number')
+  r = await call('POST', '/phases', { token: admin, body: { name: 'Smoke never created', mode: 'nonsense' } })
+  check('a phase with an unknown mode is refused', r.status === 400)
+  await call('PUT', `/people/by-email/${encodeURIComponent(svcEmail)}`, { token: key, body: { active: false } })
+  await call('PUT', `/jobs/by-ref/smoke/svc-${stamp}`, { token: key, body: { active: false } })
+
+  // Expenses: one added to the current flight, one on its own, a receipt, and the
+  // approval rules (nobody approves their own; a rejection needs a reason; an
+  // approved line is locked).
+  r = await call('GET', '/expense-categories', { token: admin })
+  const cats = r.json?.data ?? []
+  const amountCat = cats.find((c) => c.kind === 'expense')
+  const mileCat = cats.find((c) => c.kind === 'mileage')
+  check('expense categories and mileage rate', r.status === 200 && Boolean(amountCat) && Boolean(mileCat) && r.json?.mileageRate > 0, JSON.stringify(r.json))
+  const expEmail = `smoke-exp-${stamp}@example.invalid`
+  const expAs = { 'X-Act-As': expEmail }
+  await call('PUT', `/people/by-email/${encodeURIComponent(expEmail)}`, { token: key, body: { name: 'Smoke Expense Tech' } })
+  r = await call('POST', '/me/expenses', { token: key, headers: expAs, body: { currentFlight: true, categoryId: amountCat?.id, amount: 12.5 } })
+  check('an expense on the current flight needs you to be on one', r.status === 409 && r.json?.error?.code === 'not_clocked_in', JSON.stringify(r.json))
+  r = await call('POST', '/punches/in', { token: key, headers: expAs, body: { jobId, at: minutesAgo(30) } })
+  const flightPunch = r.json?.punch?.id
+  r = await call('POST', '/me/expenses', { token: key, headers: expAs, body: { currentFlight: true, categoryId: amountCat?.id, amount: 42.17, vendor: 'Platt', clientId: `exp1-${stamp}` } })
+  const exp1 = r.json?.expense
+  check('add an expense to the current flight', r.status === 201 && exp1?.jobId === jobId && exp1?.punchId === flightPunch && exp1?.amount === 42.17 && exp1?.status === 'submitted', JSON.stringify(r.json))
+  r = await call('POST', '/me/expenses', { token: key, headers: expAs, body: { currentFlight: true, categoryId: amountCat?.id, amount: 42.17, clientId: `exp1-${stamp}` } })
+  check('re-sending the same expense adds nothing', r.json?.expense?.id === exp1?.id)
+  r = await call('POST', '/me/expenses', { token: key, headers: expAs, body: { jobId: null, categoryId: mileCat?.id, miles: 10, notes: 'Shop to supply house' } })
+  const exp2 = r.json?.expense
+  const reimbCode = (await call('GET', '/expense-categories', { token: admin })).json?.reimbursementAccountCode ?? ''
+  check('an own-money line posts to the reimbursement account (or its category when none is set)', exp1?.postingAccount === (reimbCode || amountCat?.accountCode), JSON.stringify({ posting: exp1?.postingAccount, reimbCode }))
+  {
+    const card = await call('POST', '/me/expenses', { token: key, headers: expAs, body: { categoryId: amountCat?.id, amount: 9.99, paidBy: 'company_card' } })
+    check('a company-card line posts to its category account', card.json?.expense?.postingAccount === amountCat?.accountCode, JSON.stringify(card.json?.expense?.postingAccount))
+    await call('DELETE', `/me/expenses/${card.json?.expense?.id}`, { token: key, headers: expAs })
+  }
+  check('mileage posts to its own category account', exp2?.postingAccount === mileCat?.accountCode, JSON.stringify({ posting: exp2?.postingAccount, cat: mileCat?.accountCode }))
+  check('add mileage on its own, priced at the mileage rate', r.status === 201 && exp2?.jobId === null && exp2?.ratePerMile > 0 && Math.abs(exp2.amount - Math.round(10 * exp2.ratePerMile * 100) / 100) < 0.001, JSON.stringify(r.json))
+  r = await call('POST', '/me/expenses', { token: key, headers: expAs, body: { categoryId: amountCat?.id, amount: -3 } })
+  check('a negative amount is refused', r.status === 400)
+  r = await call('POST', `/me/expenses/${exp1?.id}/receipt`, { token: key, headers: expAs, body: { contentType: 'text/plain', data: 'aGk=' } })
+  check('a receipt that is not a photo or PDF is refused', r.status === 400)
+  // A 1×1 PNG.
+  const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
+  r = await call('POST', `/me/expenses/${exp1?.id}/receipt`, { token: key, headers: expAs, body: { contentType: 'image/png', data: png } })
+  check('attach a receipt', r.status === 200 && r.json?.expense?.hasReceipt === true && !('receiptPath' in (r.json?.expense ?? {})), JSON.stringify(r.json))
+  const rec = await fetch(`${api}/expenses/${exp1?.id}/receipt`, { headers: { Authorization: `Bearer ${admin}` } })
+  check('the office can open the receipt', rec.status === 200 && (rec.headers.get('content-type') ?? '').startsWith('image/png'))
+  r = await call('GET', '/me/expenses', { token: key, headers: expAs })
+  check('my expenses lists both with totals', r.status === 200 && r.json?.data?.length === 2 && Math.abs(r.json?.totals?.amount - (42.17 + exp2?.amount)) < 0.001, JSON.stringify(r.json?.totals))
+  r = await call('GET', '/expenses?status=submitted', { token: admin })
+  check('waiting expenses show for the office', r.status === 200 && r.json?.data?.some((e) => e.id === exp1?.id))
+  r = await call('POST', `/expenses/${exp2?.id}/reject`, { token: admin, body: {} })
+  check('a rejection needs a reason', r.status === 400)
+  r = await call('POST', `/expenses/${exp2?.id}/reject`, { token: admin, body: { note: 'Add the job' } })
+  check('reject an expense', r.status === 200 && r.json?.expense?.status === 'rejected')
+  r = await call('PATCH', `/me/expenses/${exp2?.id}`, { token: key, headers: expAs, body: { jobId } })
+  check('fixing a rejected expense sends it back', r.status === 200 && r.json?.expense?.status === 'submitted' && r.json?.expense?.jobId === jobId, JSON.stringify(r.json))
+  r = await call('POST', `/expenses/${exp1?.id}/approve`, { token: admin, body: {} })
+  check('approve an expense', r.status === 200 && r.json?.expense?.status === 'approved')
+  r = await call('PATCH', `/me/expenses/${exp1?.id}`, { token: key, headers: expAs, body: { amount: 1 } })
+  check('an approved expense is locked', r.status === 409 && r.json?.error?.code === 'expense_approved')
+  r = await call('POST', '/me/expenses', { token: admin, body: { categoryId: amountCat?.id, amount: 5 } })
+  const own = r.json?.expense
+  r = await call('POST', `/expenses/${own?.id}/approve`, { token: admin, body: {} })
+  check('nobody approves their own expense', r.status === 403, JSON.stringify(r.json))
+  await call('DELETE', `/me/expenses/${own?.id}`, { token: admin })
+  r = await call('DELETE', `/me/expenses/${exp2?.id}`, { token: key, headers: expAs })
+  check('remove an expense that is not approved', r.status === 200)
+  await call('POST', '/punches/out', { token: key, headers: expAs, body: {} })
+  await call('PUT', `/people/by-email/${encodeURIComponent(expEmail)}`, { token: key, body: { active: false } })
+
   // Clean up.
   await call('PUT', `/people/by-email/${encodeURIComponent(testEmail)}`, { token: key, body: { active: false } })
   await call('PUT', `/people/by-email/${encodeURIComponent(crewEmail)}`, { token: key, body: { active: false } })
   await call('PUT', `/jobs/by-ref/smoke/${stamp}`, { token: key, body: { active: false } })
+  await call('PUT', `/jobs/by-ref/smoke/${stamp}-2`, { token: key, body: { active: false } })
   r = await call('DELETE', `/api-keys/${keyId}`, { token: admin })
   check('revoke the key', r.status === 200 && Boolean(r.json?.apiKey?.revokedAt))
   r = await call('GET', '/board', { token: key })

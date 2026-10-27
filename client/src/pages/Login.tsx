@@ -99,10 +99,10 @@ export default function Login({ notice, onSignedIn }: { notice?: string; onSigne
           <Stack spacing={2}>
             <Box>
               <Typography variant="h5" sx={{ fontWeight: 700 }}>
-                Time Tracking
+                Logbook
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                Sign in to clock in.
+                AIC Terminal time tracking. Sign in to clock in.
               </Typography>
             </Box>
             {dashboard && (

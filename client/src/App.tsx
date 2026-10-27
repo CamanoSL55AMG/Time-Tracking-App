@@ -28,8 +28,10 @@ import BoardPage from './pages/Board'
 import AdminPage from './pages/Admin'
 import WeekPage from './pages/Week'
 import ReviewPage from './pages/Review'
+import ExpensesPage from './pages/Expenses'
+import { writeMode } from './pages/modes'
 
-type Tab = 'clock' | 'week' | 'board' | 'review' | 'admin'
+type Tab = 'clock' | 'week' | 'expenses' | 'board' | 'review' | 'admin'
 
 const ClockIcon = () => (
   <SvgIcon>
@@ -44,6 +46,11 @@ const BoardIcon = () => (
 const WeekIcon = () => (
   <SvgIcon>
     <path d="M7 2v2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-2V2h-2v2H9V2H7Zm12 8v10H5V10h14ZM7 12v2h2v-2H7Zm4 0v2h2v-2h-2Zm4 0v2h2v-2h-2Z" />
+  </SvgIcon>
+)
+const ExpenseIcon = () => (
+  <SvgIcon>
+    <path d="M6 2h12v20l-2-1.5-2 1.5-2-1.5-2 1.5-2-1.5L6 22V2Zm2 4v2h8V6H8Zm0 4v2h8v-2H8Zm0 4v2h5v-2H8Z" />
   </SvgIcon>
 )
 const ReviewIcon = () => (
@@ -112,7 +119,17 @@ export default function App() {
       </Box>
     )
   }
-  if (!person) return <Login notice={bootError} onSignedIn={setPerson} />
+  // Every fresh sign-in starts at the Install / Service / Office / Shop screen.
+  if (!person)
+    return (
+      <Login
+        notice={bootError}
+        onSignedIn={(p) => {
+          writeMode(null)
+          setPerson(p)
+        }}
+      />
+    )
 
   const can = (scope: string) => person.scopes.includes(scope)
   const showBoard = can('punch:read')
@@ -120,7 +137,8 @@ export default function App() {
   const showWeek = can('punch:self')
   // Leads look at the week; managers and payroll approve it.
   const showReview = can('punch:read')
-  const hidden = (tab === 'board' && !showBoard) || (tab === 'admin' && !showAdmin) || (tab === 'week' && !showWeek) || (tab === 'review' && !showReview)
+  const hidden =
+    (tab === 'board' && !showBoard) || (tab === 'admin' && !showAdmin) || ((tab === 'week' || tab === 'expenses') && !showWeek) || (tab === 'review' && !showReview)
   const current: Tab = hidden ? 'clock' : tab
 
   return (
@@ -128,7 +146,7 @@ export default function App() {
       <AppBar position="sticky" color="primary" elevation={0}>
         <Toolbar sx={{ gap: 1 }}>
           <Typography variant="h6" sx={{ fontWeight: 700, flex: 1 }}>
-            Time Tracking
+            Logbook
           </Typography>
           <Button color="inherit" onClick={(e) => setMenuAt(e.currentTarget)} sx={{ fontWeight: 600 }}>
             {person.name}
@@ -152,10 +170,11 @@ export default function App() {
         </Toolbar>
       </AppBar>
 
-      <Container maxWidth={current === 'clock' || current === 'week' ? 'sm' : 'md'} sx={{ py: 2 }}>
-        {current === 'clock' && <PunchPage canCrew={can('punch:crew')} meId={person.id} />}
+      <Container maxWidth={current === 'clock' || current === 'week' || current === 'expenses' ? 'sm' : 'md'} sx={{ py: 2 }}>
+        {current === 'clock' && <PunchPage canCrew={can('punch:crew')} meId={person.id} meName={person.name} />}
         {current === 'week' && <WeekPage />}
-        {current === 'review' && <ReviewPage canApprove={can('timesheets:approve')} canEdit={can('punch:write:any')} />}
+        {current === 'expenses' && <ExpensesPage />}
+        {current === 'review' && <ReviewPage canApprove={can('timesheets:approve')} canEdit={can('punch:write:any')} canApproveExpenses={can('expenses:approve')} meId={person.id} />}
         {current === 'board' && <BoardPage />}
         {current === 'admin' && <AdminPage me={person} />}
       </Container>
@@ -165,6 +184,7 @@ export default function App() {
           <BottomNavigation showLabels value={current} onChange={(_, v: Tab) => setTab(v)} sx={{ '& .MuiBottomNavigationAction-root': { minWidth: 0, px: 0.5 } }}>
             <BottomNavigationAction value="clock" label="Clock" icon={<ClockIcon />} />
             {showWeek && <BottomNavigationAction value="week" label="My week" icon={<WeekIcon />} />}
+            {showWeek && <BottomNavigationAction value="expenses" label="Expenses" icon={<ExpenseIcon />} />}
             {showBoard && <BottomNavigationAction value="board" label="Board" icon={<BoardIcon />} />}
             {showReview && <BottomNavigationAction value="review" label="Review" icon={<ReviewIcon />} />}
             {showAdmin && <BottomNavigationAction value="admin" label="Manage" icon={<AdminIcon />} />}

@@ -1,6 +1,6 @@
 {
-  "name": "Time Tracking",
-  "short_name": "Time",
+  "name": "Logbook — AIC Terminal time tracking",
+  "short_name": "Logbook",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#f4f5f7",

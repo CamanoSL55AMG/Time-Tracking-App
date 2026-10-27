@@ -13,6 +13,18 @@ import { config } from '../config.js'
 
 export type PunchSource = 'app' | 'api' | 'lead'
 
+// Work modes on the start screen. Each phase belongs to one; "Next" walks the
+// field-day steps of the mode the person is in and never crosses into another.
+export const MODES = ['install', 'service', 'office', 'shop', 'cad'] as const
+export type Mode = (typeof MODES)[number]
+
+/** Modes whose work is tracked as open items (service tickets, shop / office / CAD tasks). */
+export const ITEM_MODES = new Set<string>(['service', 'shop', 'office', 'cad'])
+
+/** The job that holds time on the clock that is not charged to a project. */
+export const OVERHEAD_CODE = 'OVERHEAD'
+const OVERHEAD_PHASE = 'admin-overhead'
+
 export interface PunchInput {
   jobId?: string
   jobRef?: { system: string; externalId: string }
@@ -130,12 +142,36 @@ async function openSegment(
     }
   }
 
+  // Service, Shop, Office and CAD work is an open item: the first punch on a job in
+  // that mode opens it, later ones join it. Switching away pauses it; it stays open
+  // until the person closes it. The overhead job and the drive back to the shop are
+  // not items.
+  let workItemId: string | null = null
+  if (phase && ITEM_MODES.has(phase.mode) && job.code !== OVERHEAD_CODE && !(phase.mode === 'service' && job.kind === 'shop')) {
+    const note = (input.notes ?? '').trim()
+    const item = await tx.workItem.findFirst({ where: { personId: person.id, jobId: job.id, mode: phase.mode, status: 'open' } })
+    if (item) {
+      const notes = note && !item.notes.split('\n').includes(note) ? (item.notes ? `${item.notes}\n${note}` : note) : item.notes
+      // A reason it was left open stands until the person goes back to it: a phase
+      // change on the same item (Call complete, then Drive home) keeps it.
+      const continuing = open?.workItemId === item.id
+      await tx.workItem.update({ where: { id: item.id }, data: { lastWorkedAt: at, notes, ...(continuing ? {} : { waitingReason: '' }) } })
+      workItemId = item.id
+    } else {
+      const created = await tx.workItem.create({
+        data: { companyId: actor.companyId, personId: person.id, jobId: job.id, mode: phase.mode, notes: note, openedAt: at, lastWorkedAt: at },
+      })
+      workItemId = created.id
+    }
+  }
+
   const punch = await tx.punch.create({
     data: {
       companyId: actor.companyId,
       personId: person.id,
       jobId: job.id,
       phaseId: phase?.id ?? null,
+      workItemId,
       clockIn: at,
       source: actor.source,
       apiKeyId: actor.apiKeyId,
@@ -205,7 +241,13 @@ export async function punchNext(actor: Actor, person: Person, input: Pick<PunchI
         throw conflict('not_in_day_flow', `"${open.phase.name}" is not a step of the field day. Pick the phase to switch to, or clock out.`)
       }
       phase = await tx.phase.findFirst({
-        where: { companyId: actor.companyId, active: true, dayFlow: true, sortOrder: { gt: open.phase?.sortOrder ?? -1 } },
+        where: {
+          companyId: actor.companyId,
+          active: true,
+          dayFlow: true,
+          mode: open.phase?.mode ?? 'install',
+          sortOrder: { gt: open.phase?.sortOrder ?? -1 },
+        },
         orderBy: { sortOrder: 'asc' },
       })
       if (!phase) throw conflict('last_phase', 'That was the last phase of the day. Clock out instead.')
@@ -402,7 +444,7 @@ export async function personState(person: Person) {
   const company = await prisma.company.findUniqueOrThrow({ where: { id: person.companyId } })
   const now = new Date()
   const { start, end, date } = dayBounds(now, company.timezone)
-  const [open, today, phases, assignments, lastPunch] = await Promise.all([
+  const [open, today, phases, assignments, lastPunch, recent, overheadJob] = await Promise.all([
     prisma.punch.findFirst({ where: { personId: person.id, clockOut: null }, include }),
     prisma.punch.findMany({
       where: { personId: person.id, clockIn: { gte: start, lt: end } },
@@ -421,6 +463,14 @@ export async function personState(person: Person) {
       orderBy: { clockIn: 'desc' },
       include: { job: true },
     }),
+    // The last two weeks' jobs, newest first, for one-tap switching.
+    prisma.punch.findMany({
+      where: { personId: person.id, clockIn: { gte: new Date(now.getTime() - 14 * 86_400_000) }, job: { active: true } },
+      orderBy: { clockIn: 'desc' },
+      take: 200,
+      include: { job: true },
+    }),
+    prisma.job.findFirst({ where: { companyId: person.companyId, code: OVERHEAD_CODE, active: true } }),
   ])
 
   const byJob = new Map<string, { jobId: string; jobName: string; hours: number }>()
@@ -434,13 +484,23 @@ export async function personState(person: Person) {
   // Off the clock: the phase to suggest. Back from a break, that is the phase the
   // person was in; at the start of the day, the first one.
   // Office phases are not steps of the field day, so "Next" offers nothing from them.
+  // "Next" stays inside the mode of the phase the person is in.
   const lastToday = today.length ? today[today.length - 1] : null
   const flow = phases.filter((ph) => ph.dayFlow)
+  const openMode = open?.phase?.mode ?? 'install'
   const nextPhase = open
     ? open.phase && !open.phase.dayFlow
       ? null
-      : flow.find((ph) => ph.sortOrder > (open.phase?.sortOrder ?? -1)) ?? null
+      : flow.find((ph) => ph.mode === openMode && ph.sortOrder > (open.phase?.sortOrder ?? -1)) ?? null
     : phases.find((ph) => ph.id === lastToday?.phaseId) ?? flow[0] ?? phases[0] ?? null
+
+  const recentJobs: Job[] = []
+  for (const p of recent) {
+    if (p.job.code === OVERHEAD_CODE || recentJobs.some((j) => j.id === p.jobId)) continue
+    recentJobs.push(p.job)
+    if (recentJobs.length >= 8) break
+  }
+  const overheadPhase = phases.find((ph) => ph.key === OVERHEAD_PHASE) ?? null
 
   // During the parallel run every punch is also made in Timesheets.com.
   const until = config.parallelRunUntil
@@ -466,8 +526,31 @@ export async function personState(person: Person) {
     })),
     // Pre-fills the job picker when nothing from today points elsewhere.
     lastJob: lastPunch?.job ?? null,
+    // Jobs worked in the last two weeks, newest first: the quick-switch list.
+    recentJobs,
+    // Service tickets and shop / office / CAD tasks still open, newest first.
+    openItems: await openItemsFor(person.id, open?.workItemId ?? null, now),
+    // "Stop project" without clocking out charges the time here.
+    overhead: overheadJob ? { job: overheadJob, phase: overheadPhase } : null,
+    // The last segment today, for "Back to …" after a break.
+    lastSegment: open ? null : lastToday,
     asOf: now,
   }
+}
+
+/** A person's open items with the hours on each and the task to resume with. */
+export async function openItemsFor(personId: string, currentItemId: string | null, now = new Date()) {
+  const items = await prisma.workItem.findMany({
+    where: { personId, status: 'open' },
+    orderBy: { lastWorkedAt: 'desc' },
+    include: { job: true, punches: { select: { clockIn: true, clockOut: true, phaseId: true }, orderBy: { clockIn: 'asc' } } },
+  })
+  return items.map(({ punches, ...item }) => ({
+    ...item,
+    hours: punches.reduce((s, p) => s + hoursBetween(p.clockIn, p.clockOut, now), 0),
+    lastPhaseId: punches.length ? punches[punches.length - 1].phaseId : null,
+    current: item.id === currentItemId,
+  }))
 }
 
 export interface BoardRow {
@@ -480,6 +563,9 @@ export interface BoardRow {
   phaseKey: string | null
   phaseName: string
   phaseIndex: number | null
+  /** Steps in the field day of this phase's mode, for "2/7". */
+  phaseSteps: number | null
+  mode: string | null
   since: Date | null
   lastOut: Date | null
   hoursToday: number
@@ -502,8 +588,14 @@ export async function board(companyId: string) {
     }),
     prisma.phase.findMany({ where: { companyId, active: true }, orderBy: { sortOrder: 'asc' } }),
   ])
-  // Step number within the field day; office phases have none.
-  const index = new Map(phases.filter((ph) => ph.dayFlow).map((ph, i) => [ph.id, i]))
+  // Step number within the field day of the phase's own mode; picked phases have none.
+  const index = new Map<string, number>()
+  const steps = new Map<string, number>()
+  for (const ph of phases.filter((x) => x.dayFlow)) {
+    const n = steps.get(ph.mode) ?? 0
+    index.set(ph.id, n)
+    steps.set(ph.mode, n + 1)
+  }
   const fence = shopFence(company)
   const rows = new Map<string, BoardRow>()
 
@@ -520,6 +612,8 @@ export async function board(companyId: string) {
         phaseKey: null,
         phaseName: '',
         phaseIndex: null,
+        phaseSteps: null,
+        mode: null,
         since: null,
         lastOut: null,
         hoursToday: 0,
@@ -535,6 +629,8 @@ export async function board(companyId: string) {
       r.phaseKey = p.phase?.key ?? null
       r.phaseName = p.phase?.name ?? ''
       r.phaseIndex = p.phaseId ? index.get(p.phaseId) ?? null : null
+      r.phaseSteps = r.phaseIndex !== null && p.phase ? steps.get(p.phase.mode) ?? null : null
+      r.mode = p.phase?.mode ?? null
     }
     if (!p.clockOut) {
       r.onClock = true

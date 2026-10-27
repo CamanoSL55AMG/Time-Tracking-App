@@ -1,6 +1,6 @@
-# Time Tracking
+# Logbook (Time Tracking)
 
-Standalone time tracking: a phone-first punch clock that records the job and the phase
+Logbook, the AIC Terminal time tracking module. Standalone time tracking: a phone-first punch clock that records the job and the phase
 of the day, a live Tower board, and a versioned API that other apps (GED, Project Report,
 Accounting) link to. Built to replace Timesheets.com at Morgan Sound and to be sold on
 its own. The full plan is in [TIME-TRACKING-APP.md](TIME-TRACKING-APP.md).
@@ -38,7 +38,27 @@ server/   Express + TypeScript + Prisma + PostgreSQL — the API at /api/v1     
   cannot be approved.
 - **Crew punch**: a lead's Clock In / Next / Clock Out can punch the whole crew too.
 
-Not built yet: expenses, pay periods and the payroll export, leave, kiosk mode,
+- **Start screen: Install, Service, Office, Shop.** Each mode offers its own phases and
+  jobs first. Office and Shop are a master clock: one clock-in, one-tap project and task
+  switching, **Stop project** onto unallocated / overhead time, **Back to …** after a break,
+  and a colour bar of the day. Service is Start drive → Arrived → Call complete → next call.
+- **Service billing** (Review screen and `/reports/service-billing`): 0.5 h travel per call,
+  first hour on site in the trip charge, then 15-minute steps. Settings under Manage.
+
+- **CAD mode**: a project plus a CAD task (Design, Signal flow / line diagrams, Floor
+  plans, Rack elevations, Submittals, Cable schedules, Revisions, As-builts, Plotting).
+- **Open items**: a Service ticket, or a Shop / Office / CAD task, stays open when the
+  person switches to other work; "Your open items" on the clock screen has **Resume**.
+  **Notes** at the top of the picker go on the item. Clocking out asks "Taking a break"
+  (items stay open) or "Done for the day" (close each with what was done, or leave it
+  open with a reason). Call complete asks the same for the service ticket. The office
+  sees everyone's open items on Review (`GET /items`).
+
+- **Expenses**: "+ Expense on this flight" charges a line to the job you are clocked
+  into; the Expenses tab adds lines on their own (any job or none), with receipt photos,
+  mileage at the company rate, and approval on the Review screen.
+
+Not built yet: expense export, pay periods and the payroll export, leave, kiosk mode,
 webhooks. See the phases in the plan.
 
 ## First-time setup (Windows)
@@ -51,7 +71,7 @@ cd server
 copy .env.example .env      # then fill in DATABASE_URL, JWT_SECRET, ADMIN_EMAIL, ADMIN_NAME, ADMIN_PASSWORD
 npm install
 npx prisma db push          # creates the database and tables
-npm run seed                # company, first admin, the phases, Shop and Service call jobs
+npm run seed                # company, first admin, the phases of every mode, Shop, Service call and overhead jobs
 
 cd ..\client
 npm install

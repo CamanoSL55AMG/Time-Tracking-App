@@ -28,6 +28,7 @@ import {
   flushPunches,
   fmtElapsed,
   fmtHours,
+  fmtMoney,
   fmtTime,
   onQueueChange,
   queuedPunches,
@@ -38,22 +39,50 @@ import {
   type Phase,
   type PunchKind,
   type PunchOutcome,
+  type OpenItem,
   type Punch as Segment,
+  type WorkMode,
 } from '../api'
+import { DayTimeline, jobColor, MODE_INFO, ModePicker, readMode, writeMode } from './modes'
+import { ExpenseDialog } from './Expenses'
+import { applyDecision, CloseOutDialog, DecisionBox, OpenItemsCard, type Decision } from './items'
 
-// The tech's screen. Off the clock: pick the job (today's schedule is offered
-// first), tap Clock In. On the clock: one big button moves to the next phase of the
-// day; Switch job and Clock Out sit under it. With no signal, taps are kept on the
-// phone and the screen carries on as if they had gone through.
+// The clock screen. After sign-in the person picks what the day is: Install,
+// Service, Office or Shop (kept on this phone for the day). Each mode offers its own
+// phases and puts its own jobs first:
+//   Install — the field day, one big "Next" button through the steps.
+//   Service — Start drive (from home or the shop) → Arrived → Call complete →
+//             drive to the next call, to the shop, or home.
+//   Office  — one clock-in; switch projects and tasks with one tap; "Stop project"
+//             keeps the clock running on unallocated time.
+//   Shop    — a project plus a shop task (UCI, racks, prep, receiving), switched
+//             through the day.
+//   CAD     — a project plus a CAD task (design, line diagrams, racks, submittals).
+// Service tickets and Shop / Office / CAD tasks stay open when the person switches
+// away; Resume picks one back up, and clocking out for the day asks to close each.
+// With no signal, taps are kept on the phone and the screen carries on as if they
+// had gone through.
 
 type Group = 'Today' | 'Projects' | 'Service' | 'Shop' | 'Office'
 const KIND_GROUP: Record<Job['kind'], Group> = { project: 'Projects', service: 'Service', shop: 'Shop', other: 'Office' }
-const GROUP_ORDER: Group[] = ['Today', 'Projects', 'Service', 'Shop', 'Office']
+const MODE_GROUPS: Record<WorkMode, Group[]> = {
+  install: ['Today', 'Projects', 'Shop', 'Service', 'Office'],
+  service: ['Today', 'Service', 'Shop', 'Projects', 'Office'],
+  office: ['Today', 'Projects', 'Office', 'Service', 'Shop'],
+  shop: ['Today', 'Projects', 'Shop', 'Service', 'Office'],
+  cad: ['Today', 'Projects', 'Office', 'Service', 'Shop'],
+}
 interface Choice {
   job: Job
   group: Group
   hint?: string
 }
+
+const OVERHEAD_CODE = 'OVERHEAD'
+/** After this long on unallocated time, remind the person to pick a project. */
+const UNALLOCATED_NUDGE_MIN = 30
+
+const modeOfPhase = (p: Phase | null | undefined): WorkMode => (p?.mode && p.mode in MODE_INFO ? p.mode : 'install')
 
 const useNow = (everyMs: number) => {
   const [now, setNow] = useState(() => new Date())
@@ -90,14 +119,27 @@ const writeCrew = (ids: string[]) => {
   }
 }
 
-export default function PunchPage({ canCrew = false, meId = '' }: { canCrew?: boolean; meId?: string }) {
+export default function PunchPage({ canCrew = false, meId = '', meName = '' }: { canCrew?: boolean; meId?: string; meName?: string }) {
   const [state, setState] = useState<DayState | null>(null)
   const [jobs, setJobs] = useState<Job[]>([])
   const [choice, setChoice] = useState<Choice | null>(null)
   const [phaseId, setPhaseId] = useState('')
+  const [note, setNote] = useState('')
   const [switching, setSwitching] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  // The work mode picked on the start screen today (null = show the start screen).
+  const [picked, setPicked] = useState<WorkMode | null>(() => readMode())
+  const [choosingMode, setChoosingMode] = useState(false)
+  // Service: what to do when a call is done.
+  const [completing, setCompleting] = useState(false)
+  // Close or leave open the service ticket when a call is complete.
+  const [ticket, setTicket] = useState<Decision>({ choice: null, text: '' })
+  // Clocking out with open items: break, or close them out for the day.
+  const [closingOut, setClosingOut] = useState<OpenItem[] | null>(null)
+  // Expense onto the current flight.
+  const [expensing, setExpensing] = useState(false)
+  const [expenseMsg, setExpenseMsg] = useState('')
   // Which punch to repeat in Timesheets.com, shown after each punch during the parallel run.
   const [mirror, setMirror] = useState<PunchKind | null>(null)
   const now = useNow(15_000)
@@ -113,6 +155,14 @@ export default function PunchPage({ canCrew = false, meId = '' }: { canCrew?: bo
     if (canCrew) api.people().then((p) => setPeople(p.filter((x) => x.active && x.id !== meId)), () => undefined)
   }, [canCrew, meId])
   const crewNames = crewIds.map((id) => people.find((p) => p.id === id)?.name).filter(Boolean) as string[]
+
+  const pickMode = (m: WorkMode) => {
+    writeMode(m)
+    setPicked(m)
+    setChoosingMode(false)
+    setPhaseId('')
+    setChoice(null)
+  }
 
   const punchCrew = async (kind: PunchKind, sent: boolean, next: DayState, job?: Job) => {
     if (!crewOn || !crewIds.length) return
@@ -161,7 +211,13 @@ export default function PunchPage({ canCrew = false, meId = '' }: { canCrew?: bo
     if (queue.waiting === 0) void load()
   }, [queue.waiting, load])
 
+  // On the clock, the open segment's phase says which mode the person is in.
+  const mode: WorkMode = state?.open?.phase ? modeOfPhase(state.open.phase) : picked ?? 'install'
+  const modePhases = useMemo(() => (state?.phases ?? []).filter((p) => modeOfPhase(p) === mode), [state?.phases, mode])
+  const phaseByKey = (key: string) => state?.phases.find((p) => p.key === key)
+
   const choices = useMemo<Choice[]>(() => {
+    const order = MODE_GROUPS[mode]
     const scheduled = (state?.assignments ?? []).filter((a) => a.job)
     const seen = new Set<string>()
     const out: Choice[] = []
@@ -170,20 +226,28 @@ export default function PunchPage({ canCrew = false, meId = '' }: { canCrew?: bo
       seen.add(a.job!.id)
       out.push({ job: a.job!, group: 'Today', hint: [a.shopTime && `${a.shopTime} shop`, a.title].filter(Boolean).join(' · ') })
     }
-    for (const j of jobs) if (!seen.has(j.id)) out.push({ job: j, group: KIND_GROUP[j.kind] })
-    return out.sort((a, b) => GROUP_ORDER.indexOf(a.group) - GROUP_ORDER.indexOf(b.group) || labelOf(a.job).localeCompare(labelOf(b.job)))
-  }, [state?.assignments, jobs])
+    for (const j of jobs) if (!seen.has(j.id) && j.code !== OVERHEAD_CODE) out.push({ job: j, group: KIND_GROUP[j.kind] })
+    return out.sort((a, b) => order.indexOf(a.group) - order.indexOf(b.group) || labelOf(a.job).localeCompare(labelOf(b.job)))
+  }, [state?.assignments, jobs, mode])
 
-  // Suggest the phase the day is up to; the tech can change it.
+  // Suggest a phase that belongs to the mode: where the day is up to, else the
+  // phase last used in this mode today, else the mode's first.
   useEffect(() => {
-    if (state && !phaseId) setPhaseId(state.nextPhase?.id ?? state.phases[0]?.id ?? '')
-  }, [state, phaseId])
+    if (!state || !modePhases.length) return
+    if (modePhases.some((p) => p.id === phaseId)) return
+    const lastInMode = [...state.today].reverse().find((p) => p.phase && modeOfPhase(p.phase) === mode)?.phase
+    const pick =
+      (state.nextPhase && modeOfPhase(state.nextPhase) === mode ? state.nextPhase : null) ??
+      (lastInMode && modePhases.find((p) => p.id === lastInMode.id)) ??
+      modePhases[0]
+    setPhaseId(pick.id)
+  }, [state, modePhases, mode, phaseId])
 
   // Suggest a job: the one last worked today, else today's scheduled job, else the
   // job last punched on any earlier day. The tech can always change it.
   useEffect(() => {
     if (choice || !state || !choices.length) return
-    const last = state.today.length ? state.today[state.today.length - 1] : null
+    const last = [...state.today].reverse().find((p) => p.job.code !== OVERHEAD_CODE) ?? null
     const pick =
       (last && choices.find((c) => c.job.id === last.jobId)) ||
       choices.find((c) => c.group === 'Today') ||
@@ -200,7 +264,11 @@ export default function PunchPage({ canCrew = false, meId = '' }: { canCrew?: bo
       const next = r.sent ? r.state : simulate(state, kind, { ...local, at: r.at })
       setState(next)
       setSwitching(false)
-      setPhaseId(next.nextPhase?.id ?? '')
+      setCompleting(false)
+      setClosingOut(null)
+      setTicket({ choice: null, text: '' })
+      setNote('')
+      if (next.open?.phase) setPhaseId(next.open.phase.id)
       if (next.parallelRun ?? state.parallelRun) setMirror(kind)
       setCrewMsg(null)
       await punchCrew(kind, r.sent, next, local.job)
@@ -209,6 +277,49 @@ export default function PunchPage({ canCrew = false, meId = '' }: { canCrew?: bo
     } finally {
       setBusy(false)
     }
+  }
+  const clockIn = (job: Job, phase: string | undefined, notes?: string) => act('in', () => api.punchIn(job.id, phase, notes), { job, phaseId: phase })
+  const toPhase = (phase: Phase) => act('next', () => api.punchNext(phase.id), { phaseId: phase.id })
+  const punchOut = () => act('out', () => api.punchOut(), {})
+  const openItems = state?.openItems ?? []
+  // Clocking out with open tickets or tasks asks first: a break, or done for the day.
+  // Items already left open with a reason (at Call complete, or earlier) are not asked again.
+  const requestOut = (items: OpenItem[] = openItems) => {
+    const pending = items.filter((i) => !i.waitingReason)
+    if (pending.length) setClosingOut(pending)
+    else void punchOut()
+  }
+  // Service, call complete: apply the ticket decision, then the next move.
+  const withTicket = (next: (left: OpenItem[]) => unknown) => async () => {
+    const current = openItems.find((i) => i.current)
+    setBusy(true)
+    try {
+      if (current && (await applyDecision(current, ticket))) {
+        const reason = ticket.text.trim()
+        const left =
+          ticket.choice === 'close'
+            ? openItems.filter((i) => i.id !== current.id)
+            : openItems.map((i) => (i.id === current.id ? { ...i, waitingReason: reason } : i))
+        setState((s) => (s ? { ...s, openItems: left } : s))
+        setBusy(false)
+        return next(left)
+      }
+    } catch (err) {
+      setError(errorText(err))
+      setBusy(false)
+      return
+    }
+    setBusy(false)
+    return next(openItems)
+  }
+  const resume = (item: OpenItem) => {
+    const m = item.mode as WorkMode
+    writeMode(m)
+    setPicked(m)
+    setSwitching(false)
+    const first = (state?.phases ?? []).find((p) => modeOfPhase(p) === m && p.key !== 'admin-overhead')
+    const phase = m === 'service' ? phaseByKey('svc-travel')?.id : item.lastPhaseId ?? first?.id
+    void clockIn(item.job as Job, phase)
   }
 
   if (!state) {
@@ -220,12 +331,43 @@ export default function PunchPage({ canCrew = false, meId = '' }: { canCrew?: bo
     )
   }
 
+  // A new day (or "Change"): the start screen.
+  if ((!state.onClock && !picked) || choosingMode) {
+    return (
+      <Stack spacing={2}>
+        <ModePicker name={meName} current={choosingMode ? mode : null} onPick={pickMode} />
+        {choosingMode && (
+          <Button onClick={() => setChoosingMode(false)} sx={{ alignSelf: 'center' }}>
+            Cancel
+          </Button>
+        )}
+        {state.onClock && choosingMode && (
+          <Typography variant="body2" color="text.secondary" textAlign="center">
+            You stay on the clock. The new mode starts with your next switch.
+          </Typography>
+        )}
+      </Stack>
+    )
+  }
+
   const open = state.open
   const picking = !state.onClock || switching
-  // The step track shows the field day only; office phases are not steps in it.
-  const flowPhases = state.phases.filter((p) => p.dayFlow !== false)
+  const onOverhead = open?.job.code === OVERHEAD_CODE
+  // The step track shows the field day of this mode only.
+  const flowPhases = modePhases.filter((p) => p.dayFlow !== false)
   const phaseIndex = open?.phase ? flowPhases.findIndex((p) => p.id === open.phase!.id) : -1
   const scheduledToday = (state.assignments ?? []).filter((a) => a.title)
+  const recent = (state.recentJobs ?? []).filter((j) => j.id !== open?.jobId).slice(0, 6)
+  const shopJob = jobs.find((j) => j.kind === 'shop' && j.code === 'SHOP') ?? jobs.find((j) => j.kind === 'shop')
+  const svcTravel = phaseByKey('svc-travel')
+  const svcOnsite = phaseByKey('svc-onsite')
+  const svcParts = phaseByKey('svc-parts')
+  const svcHome = phaseByKey('svc-home')
+  const drivingHome = open?.phase?.key === 'svc-home'
+  const back = !state.onClock ? state.lastSegment : null
+  const pickedPhase = state.phases.find((p) => p.id === phaseId)
+  const phaseLabel = mode === 'install' ? 'Phase' : 'Task'
+  const taskMode = mode === 'office' || mode === 'shop' || mode === 'cad'
 
   return (
     <Stack spacing={2}>
@@ -247,6 +389,13 @@ export default function PunchPage({ canCrew = false, meId = '' }: { canCrew?: bo
         </Alert>
       )}
 
+      <Stack direction="row" alignItems="center" spacing={1}>
+        <Chip label={`${MODE_INFO[mode].label} mode`} sx={{ fontWeight: 700, color: '#fff', bgcolor: MODE_INFO[mode].color }} />
+        <Button size="small" onClick={() => setChoosingMode(true)}>
+          Change
+        </Button>
+      </Stack>
+
       <Paper sx={{ p: 2.5, borderColor: state.onClock ? 'success.main' : undefined, borderWidth: state.onClock ? 2 : 1 }}>
         <Stack spacing={1.5}>
           <Stack direction="row" alignItems="center" spacing={1}>
@@ -259,12 +408,23 @@ export default function PunchPage({ canCrew = false, meId = '' }: { canCrew?: bo
 
           {open ? (
             <Box>
-              <Typography variant="h5" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
-                {open.job.name}
+              <Typography variant="overline" color="text.secondary" sx={{ lineHeight: 1.6 }}>
+                {onOverhead ? 'Unallocated time' : drivingHome ? 'Driving home' : 'Current flight'}
               </Typography>
+              <Stack direction="row" spacing={1} alignItems="center">
+                <Box sx={{ width: 12, height: 12, borderRadius: '3px', flex: 'none', bgcolor: jobColor(open.jobId, open.job.code) }} />
+                <Typography variant="h5" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
+                  {open.job.name}
+                </Typography>
+              </Stack>
               <Typography color="text.secondary">
                 {open.phase?.name ?? 'No phase'} · since {fmtTime(open.clockIn)} · {fmtElapsed(open.clockIn, now)}
               </Typography>
+              {open.notes && (
+                <Typography variant="body2" color="text.secondary">
+                  {open.notes}
+                </Typography>
+              )}
               <SiteLine job={open.job} />
             </Box>
           ) : (
@@ -273,7 +433,13 @@ export default function PunchPage({ canCrew = false, meId = '' }: { canCrew?: bo
             </Typography>
           )}
 
-          {open && phaseIndex >= 0 && <PhaseTrack phases={flowPhases} current={phaseIndex} />}
+          {open && phaseIndex >= 0 && flowPhases.length > 1 && <PhaseTrack phases={flowPhases} current={phaseIndex} />}
+
+          {open && !onOverhead && (
+            <Button variant="outlined" size="small" onClick={() => setExpensing(true)} sx={{ alignSelf: 'flex-start' }}>
+              + Expense on this flight
+            </Button>
+          )}
 
           {!state.onClock && scheduledToday.length > 0 && (
             <Box>
@@ -291,6 +457,24 @@ export default function PunchPage({ canCrew = false, meId = '' }: { canCrew?: bo
       </Paper>
 
       {error && <Alert severity="error">{error}</Alert>}
+      {expenseMsg && (
+        <Alert severity="success" onClose={() => setExpenseMsg('')}>
+          {expenseMsg}
+        </Alert>
+      )}
+      <ExpenseDialog
+        open={expensing}
+        flight={open ? { jobId: open.jobId, jobName: open.job.name } : null}
+        onClose={() => setExpensing(false)}
+        onSaved={(e) => setExpenseMsg(`${e.category.name} ${fmtMoney(e.amount)} added to ${e.job?.name ?? 'your expenses'} and sent for approval.`)}
+      />
+
+      {onOverhead && open && (now.getTime() - new Date(open.clockIn).getTime()) / 60_000 >= UNALLOCATED_NUDGE_MIN && (
+        <Alert severity="info">
+          You have been on unallocated time for {fmtElapsed(open.clockIn, now)}. Pick a project when you start on one, so the hours land on the right
+          job.
+        </Alert>
+      )}
 
       {mirror && state.parallelRun && (
         <Alert
@@ -307,9 +491,35 @@ export default function PunchPage({ canCrew = false, meId = '' }: { canCrew?: bo
         </Alert>
       )}
 
+      {/* Back from a break: one tap returns to what you were on. */}
+      {back && back.job.active !== false && back.job.code !== OVERHEAD_CODE && (
+        <Button
+          size="large"
+          variant="contained"
+          color="success"
+          disabled={busy}
+          onClick={() => void clockIn(back.job, back.phaseId ?? undefined)}
+          sx={{ py: 1.75, fontSize: 17 }}
+        >
+          Back to {back.job.name}
+          {back.phase ? ` · ${back.phase.short}` : ''}
+        </Button>
+      )}
+
+      <OpenItemsCard items={openItems} busy={busy} onResume={resume} />
+
       {picking && (
         <Paper sx={{ p: 2 }}>
           <Stack spacing={2}>
+            <TextField
+              label="Notes"
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder={mode === 'service' ? 'Ticket #, problem, what the customer said' : 'What you are working on'}
+              multiline
+              maxRows={4}
+              inputProps={{ maxLength: 500 }}
+            />
             <Autocomplete
               options={choices}
               value={choice}
@@ -332,63 +542,259 @@ export default function PunchPage({ canCrew = false, meId = '' }: { canCrew?: bo
                   </li>
                 )
               }}
-              renderInput={(params) => <TextField {...params} label={switching ? 'Switch to job' : 'Job'} placeholder="Search by name or number" />}
+              renderInput={(params) => (
+                <TextField
+                  {...params}
+                  label={mode === 'service' ? (switching ? 'Switch to call' : 'Service call') : switching ? 'Switch to job' : 'Job'}
+                  placeholder="Search by name or number"
+                />
+              )}
               noOptionsText="No matching job"
             />
             <SiteLine job={choice?.job} />
-            <TextField select label="Phase" value={phaseId} onChange={(e) => setPhaseId(e.target.value)}>
-              {state.phases.map((p) => (
-                <MenuItem key={p.id} value={p.id}>
-                  {p.name}
-                </MenuItem>
-              ))}
-            </TextField>
-            <Stack direction="row" spacing={1}>
+            {mode !== 'service' && (
+              <TextField select label={phaseLabel} value={modePhases.some((p) => p.id === phaseId) ? phaseId : ''} onChange={(e) => setPhaseId(e.target.value)}>
+                {modePhases.map((p) => (
+                  <MenuItem key={p.id} value={p.id}>
+                    {p.name}
+                  </MenuItem>
+                ))}
+              </TextField>
+            )}
+            {mode === 'service' && svcTravel && svcOnsite ? (
+              <Stack spacing={0.75}>
+              <Stack direction="row" spacing={1}>
+                <Button fullWidth size="large" variant="contained" color="primary" disabled={busy || !choice} onClick={() => choice && void clockIn(choice.job, svcTravel.id, note)} sx={{ py: 1.75, fontSize: 17 }}>
+                  {busy ? 'Recording…' : 'Start drive'}
+                </Button>
+                <Button fullWidth size="large" variant="outlined" disabled={busy || !choice} onClick={() => choice && void clockIn(choice.job, svcOnsite.id, note)} sx={{ py: 1.75 }}>
+                  Already on site
+                </Button>
+              </Stack>
+              {!switching && (
+                <Typography variant="caption" color="text.secondary">
+                  Start the drive when you leave, from home or the shop. Drive time is paid.
+                </Typography>
+              )}
+              </Stack>
+            ) : (
               <Button
                 fullWidth
                 size="large"
                 variant="contained"
                 color={switching ? 'primary' : 'success'}
                 disabled={busy || !choice}
-                onClick={() => choice && act('in', () => api.punchIn(choice.job.id, phaseId || undefined), { job: choice.job, phaseId })}
+                onClick={() => choice && void clockIn(choice.job, pickedPhase?.id, note)}
                 sx={{ py: 1.75, fontSize: 18 }}
               >
                 {busy ? 'Recording…' : switching ? 'Switch' : 'Clock In'}
               </Button>
-              {switching && (
-                <Button onClick={() => setSwitching(false)} disabled={busy}>
-                  Cancel
-                </Button>
-              )}
-            </Stack>
+            )}
+            {switching && (
+              <Button onClick={() => setSwitching(false)} disabled={busy}>
+                Cancel
+              </Button>
+            )}
           </Stack>
         </Paper>
       )}
 
-      {state.onClock && !switching && (
+      {state.onClock && !switching && open && (
         <Stack spacing={1}>
-          {state.nextPhase && (
+          {/* Install: one big button through the field day. */}
+          {mode === 'install' && state.nextPhase && (
             <Button size="large" variant="contained" color="secondary" disabled={busy} onClick={() => act('next', () => api.punchNext(), {})} sx={{ py: 2.25, fontSize: 20 }}>
               {busy ? 'Recording…' : `Next: ${state.nextPhase.name}`}
             </Button>
           )}
-          <Stack direction="row" spacing={1}>
-            <Button fullWidth size="large" variant="outlined" disabled={busy} onClick={() => setSwitching(true)}>
-              Switch job
+
+          {/* Service: drive, arrive, complete. */}
+          {mode === 'service' && open.phase?.key === 'svc-travel' && svcOnsite && (
+            <>
+              <Button size="large" variant="contained" color="secondary" disabled={busy} onClick={() => void toPhase(svcOnsite)} sx={{ py: 2.25, fontSize: 20 }}>
+                {busy ? 'Recording…' : 'Arrived'}
+              </Button>
+              {svcParts && (
+                <Button variant="outlined" disabled={busy} onClick={() => void toPhase(svcParts)}>
+                  Parts / supply stop
+                </Button>
+              )}
+            </>
+          )}
+          {mode === 'service' && open.phase?.key === 'svc-parts' && svcTravel && (
+            <Button size="large" variant="contained" color="secondary" disabled={busy} onClick={() => void toPhase(svcTravel)} sx={{ py: 2.25, fontSize: 20 }}>
+              {busy ? 'Recording…' : 'Back on the road'}
             </Button>
+          )}
+          {mode === 'service' && drivingHome && (
+            <Button size="large" variant="contained" color="warning" disabled={busy} onClick={() => requestOut()} sx={{ py: 2.25, fontSize: 20 }}>
+              {busy ? 'Recording…' : 'Home · Clock out'}
+            </Button>
+          )}
+          {mode === 'service' && !drivingHome && open.phase?.key !== 'svc-travel' && open.phase?.key !== 'svc-parts' && (
+            <Button
+              size="large"
+              variant="contained"
+              color="secondary"
+              disabled={busy}
+              onClick={() => {
+                // Offer the next call on today's schedule.
+                setChoice(choices.find((c) => c.group === 'Today' && c.job.kind === 'service' && c.job.id !== open.jobId) ?? null)
+                setTicket({ choice: null, text: '' })
+                setCompleting(true)
+              }}
+              sx={{ py: 2.25, fontSize: 20 }}
+            >
+              Call complete
+            </Button>
+          )}
+
+          {/* Office, Shop and CAD: tasks and jobs one tap away. */}
+          {taskMode && (!onOverhead || recent.length > 0) && (
+            <Paper sx={{ p: 1.5 }}>
+              {!onOverhead && (
+                <>
+                  <Typography variant="caption" color="text.secondary">
+                    Switch task on {open.job.name}
+                  </Typography>
+                  <Stack direction="row" flexWrap="wrap" useFlexGap spacing={1} sx={{ mt: 0.5, mb: 1.5 }}>
+                    {modePhases
+                      .filter((p) => p.key !== 'admin-overhead')
+                      .map((p) => (
+                        <Chip
+                          key={p.id}
+                          label={p.short}
+                          color={p.id === open.phaseId ? 'primary' : 'default'}
+                          variant={p.id === open.phaseId ? 'filled' : 'outlined'}
+                          disabled={busy}
+                          onClick={() => p.id !== open.phaseId && void toPhase(p)}
+                        />
+                      ))}
+                  </Stack>
+                </>
+              )}
+              {recent.length > 0 && (
+                <>
+                  <Typography variant="caption" color="text.secondary" component="div">
+                    {onOverhead ? 'Back to a project' : 'Switch job (keeps the task)'}
+                  </Typography>
+                  <Stack direction="row" flexWrap="wrap" useFlexGap spacing={1} sx={{ mt: 0.5 }}>
+                    {recent.map((j) => (
+                      <Chip
+                        key={j.id}
+                        label={labelOf(j)}
+                        variant="outlined"
+                        disabled={busy}
+                        icon={<Box component="span" sx={{ width: 10, height: 10, borderRadius: '2px', bgcolor: jobColor(j.id, j.code), ml: '10px !important', flex: 'none' }} />}
+                        onClick={() => {
+                          const work = modePhases.filter((p) => p.key !== 'admin-overhead')
+                          const keep = open.phase && work.some((p) => p.id === open.phase!.id) ? open.phase.id : work[0]?.id
+                          void clockIn(j, keep)
+                        }}
+                      />
+                    ))}
+                  </Stack>
+                </>
+              )}
+            </Paper>
+          )}
+
+          <Stack direction="row" spacing={1} sx={{ '& .MuiButton-root': { whiteSpace: 'nowrap', px: 1 } }}>
+            <Button fullWidth size="large" variant="outlined" disabled={busy} onClick={() => setSwitching(true)}>
+              {mode === 'service' ? 'Switch call' : 'Switch job'}
+            </Button>
+            {(mode === 'office' || mode === 'shop') && state.overhead && !onOverhead && (
+              <Button
+                fullWidth
+                size="large"
+                variant="outlined"
+                disabled={busy}
+                onClick={() => void clockIn(state.overhead!.job, state.overhead!.phase?.id ?? undefined)}
+                title="Stay on the clock; the time goes to unallocated / overhead"
+              >
+                Stop project
+              </Button>
+            )}
             <Button
               fullWidth
               size="large"
-              variant={state.nextPhase ? 'outlined' : 'contained'}
+              variant={mode === 'install' && state.nextPhase ? 'outlined' : 'contained'}
               color="warning"
               disabled={busy}
-              onClick={() => act('out', () => api.punchOut(), {})}
+              onClick={() => requestOut()}
             >
-              Clock Out
+              {mode === 'install' ? 'Clock Out' : 'Break / Out'}
             </Button>
           </Stack>
         </Stack>
       )}
+
+      <Dialog open={completing} onClose={() => setCompleting(false)} fullWidth maxWidth="xs">
+        <DialogTitle>Call complete. Where to next?</DialogTitle>
+        <DialogContent dividers>
+          <Stack spacing={1.5}>
+            {openItems.some((i) => i.current) && (
+              <>
+                <Typography variant="subtitle2">The ticket for {open?.job.name}</Typography>
+                <DecisionBox item={{ mode: 'service' }} value={ticket} onChange={setTicket} />
+                <Typography variant="caption" color="text.secondary">
+                  Leave it open and it stays on your list to pick back up.
+                </Typography>
+                <Divider />
+              </>
+            )}
+            <Autocomplete
+              options={choices.filter((c) => c.job.id !== open?.jobId)}
+              value={choice && choice.job.id !== open?.jobId ? choice : null}
+              onChange={(_, v) => setChoice(v)}
+              groupBy={(c) => (c.group === 'Today' ? "Today's schedule" : c.group)}
+              getOptionLabel={(c) => labelOf(c.job)}
+              isOptionEqualToValue={(a, b) => a.job.id === b.job.id}
+              renderInput={(params) => <TextField {...params} label="Next service call" placeholder="Search by name or ticket" />}
+            />
+            <Button
+              size="large"
+              variant="contained"
+              disabled={busy || !choice || choice.job.id === open?.jobId || !svcTravel}
+              onClick={withTicket(() => choice && svcTravel && clockIn(choice.job, svcTravel.id))}
+            >
+              Drive to next call
+            </Button>
+            <Typography variant="caption" color="text.secondary">
+              The drive is charged to the call you are heading to.
+            </Typography>
+            <Divider />
+            {shopJob && svcTravel && (
+              <Button variant="outlined" disabled={busy} onClick={withTicket(() => clockIn(shopJob, svcTravel.id))}>
+                Drive to shop
+              </Button>
+            )}
+            {svcHome && (
+              <Button variant="outlined" disabled={busy} onClick={withTicket(() => toPhase(svcHome))}>
+                Drive home
+              </Button>
+            )}
+            <Typography variant="caption" color="text.secondary">
+              Drives to the shop or home are paid and never billed to the customer.
+            </Typography>
+            <Button variant="outlined" color="warning" disabled={busy} onClick={withTicket((left) => (setCompleting(false), requestOut(left)))}>
+              Clock out
+            </Button>
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setCompleting(false)}>Not yet</Button>
+        </DialogActions>
+      </Dialog>
+
+      <CloseOutDialog
+        open={closingOut !== null}
+        items={closingOut ?? []}
+        alreadyLeft={openItems.filter((i) => i.waitingReason)}
+        onCancel={() => setClosingOut(null)}
+        onBreak={() => void punchOut()}
+        onDone={() => void punchOut()}
+      />
 
       {crewMsg && (
         <Alert severity={crewMsg.severity} onClose={() => setCrewMsg(null)}>
@@ -471,15 +877,20 @@ export default function PunchPage({ canCrew = false, meId = '' }: { canCrew?: bo
           <Typography variant="subtitle2" color="text.secondary" gutterBottom>
             Today
           </Typography>
+          <Box sx={{ mb: 1.5 }}>
+            <DayTimeline segments={state.today} now={now} />
+          </Box>
           <Stack divider={<Divider flexItem />} spacing={1}>
             {state.today.map((p) => (
               <Stack key={p.id} direction="row" alignItems="baseline" spacing={1}>
+                <Box sx={{ width: 8, height: 8, borderRadius: '2px', flex: 'none', alignSelf: 'center', bgcolor: jobColor(p.jobId, p.job.code) }} />
                 <Box sx={{ flex: 1, minWidth: 0 }}>
                   <Typography variant="body2" sx={{ fontWeight: 600 }} noWrap>
                     {p.phase?.short ?? '—'} · {p.job.name}
                   </Typography>
                   <Typography variant="caption" color="text.secondary">
                     {fmtTime(p.clockIn)} – {p.clockOut ? fmtTime(p.clockOut) : 'now'}
+                    {p.notes && ` · ${p.notes}`}
                     {p.id.startsWith('local-') && ' · not sent yet'}
                   </Typography>
                 </Box>
@@ -524,24 +935,25 @@ function simulate(s: DayState, kind: PunchKind, o: { job?: Job; phaseId?: string
     const job = kind === 'next' ? s.open?.job : o.job
     const phase =
       kind === 'next'
-        ? s.nextPhase
+        ? s.phases.find((p) => p.id === o.phaseId) ?? s.nextPhase
         : s.phases.find((p) => p.id === o.phaseId) ?? s.phases[0] ?? null
     if (job) {
       open = { id: `local-${o.at}`, personId: '', jobId: job.id, phaseId: phase?.id ?? null, clockIn: o.at, clockOut: null, notes: '', job, phase }
       today.push(open)
     }
   }
-  // Same rule as the server: "Next" steps through the field day only.
+  // Same rule as the server: "Next" steps through the field day of one mode only.
   const after = open?.phase?.sortOrder ?? -1
+  const openMode = modeOfPhase(open?.phase)
   const last = today.length ? today[today.length - 1] : null
   const flow = s.phases.filter((p) => p.dayFlow !== false)
   const nextPhase = open
     ? open.phase && open.phase.dayFlow === false
       ? null
-      : flow.find((p) => p.sortOrder > after) ?? null
+      : flow.find((p) => modeOfPhase(p) === openMode && p.sortOrder > after) ?? null
     : s.phases.find((p) => p.id === last?.phaseId) ?? flow[0] ?? s.phases[0] ?? null
   const hoursToday = today.reduce((sum, p) => sum + Math.max(0, (new Date(p.clockOut ?? o.at).getTime() - new Date(p.clockIn).getTime()) / 3_600_000), 0)
-  return { ...s, onClock: Boolean(open), open, today, nextPhase, hoursToday }
+  return { ...s, onClock: Boolean(open), open, today, nextPhase, hoursToday, lastSegment: open ? null : last }
 }
 
 function PhaseTrack({ phases, current }: { phases: Phase[]; current: number }) {

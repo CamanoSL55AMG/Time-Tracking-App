@@ -75,9 +75,44 @@ export interface Phase {
   laborCategory: string
   /** A step of the field day ("Next" walks through these); office phases are not. */
   dayFlow: boolean
+  /** Work mode it is offered in. "Next" never leaves the mode. */
+  mode: WorkMode
   /** Switched-off phases only come back from allPhases(). */
   active?: boolean
 }
+export type WorkMode = 'install' | 'service' | 'office' | 'shop' | 'cad'
+export const WORK_MODES: WorkMode[] = ['install', 'service', 'office', 'shop', 'cad']
+
+/** A service ticket (Service) or task (Shop, Office, CAD) still open: paused when switched away from, closed by the person. */
+export interface OpenItem {
+  id: string
+  personId: string
+  jobId: string
+  mode: WorkMode
+  notes: string
+  status: 'open' | 'closed'
+  waitingReason: string
+  resolution: string
+  openedAt: string
+  lastWorkedAt: string
+  closedAt: string | null
+  job: Job
+  /** Hours on it so far, all days. */
+  hours: number
+  /** The task last used on it, to resume with. */
+  lastPhaseId: string | null
+  /** The open segment is on it right now. */
+  current: boolean
+}
+/** Everyone's open items, for the office. */
+export interface TeamItem extends Omit<OpenItem, 'job' | 'lastPhaseId' | 'current'> {
+  job: { id: string; name: string; code: string; kind: string }
+  person: { id: string; name: string; email: string }
+  onNow: boolean
+}
+/** Offered when leaving an item open at the end of the day (any text works too). */
+export const KEEP_REASONS = ['Waiting on parts', 'Return visit scheduled', 'Needs the office', 'Continue tomorrow']
+
 export interface Punch {
   id: string
   personId: string
@@ -102,6 +137,14 @@ export interface DayState {
   assignments: Assignment[]
   /** The job this person last punched on (any day), if it is still open to time. */
   lastJob?: Job | null
+  /** Jobs worked in the last two weeks, newest first: the quick-switch list. */
+  recentJobs?: Job[]
+  /** "Stop project" while staying on the clock charges time here. */
+  overhead?: { job: Job; phase: Phase | null } | null
+  /** Off the clock: the last segment today, for "Back to …" after a break. */
+  lastSegment?: Punch | null
+  /** Service tickets and Shop / Office / CAD tasks still open, newest first. */
+  openItems?: OpenItem[]
   /** Set while Timesheets.com still runs payroll: each punch is made there too. */
   parallelRun?: { until: string; url: string } | null
   asOf: string
@@ -120,6 +163,9 @@ export interface BoardRow {
   jobName: string
   phaseName: string
   phaseIndex: number | null
+  /** Steps in the field day of this phase's mode. */
+  phaseSteps?: number | null
+  mode?: WorkMode | null
   since: string | null
   lastOut: string | null
   hoursToday: number
@@ -133,6 +179,86 @@ export interface Board {
   phaseCount: number
   rows: BoardRow[]
 }
+export interface BillingRules {
+  travelHours: number
+  includedHours: number
+  incrementMinutes: number
+}
+export interface ServiceCall {
+  jobId: string
+  jobName: string
+  jobCode: string
+  day: string
+  techs: string[]
+  actualTravelHours: number
+  actualOnSiteHours: number
+  billedTravelHours: number
+  tripCharges: number
+  includedHours: number
+  billableHours: number
+  open: boolean
+}
+export interface ServiceBilling {
+  rules: BillingRules
+  rows: ServiceCall[]
+  totals: { calls: number; tripCharges: number; billedTravelHours: number; billableHours: number; actualTravelHours: number; actualOnSiteHours: number }
+}
+// ─── Expenses ───────────────────────────────────────────────────────────────
+
+export interface ExpenseCategory {
+  id: string
+  name: string
+  kind: 'expense' | 'mileage'
+  accountCode: string
+  sortOrder: number
+  active: boolean
+}
+export type ExpenseStatus = 'draft' | 'submitted' | 'approved' | 'rejected'
+export interface Expense {
+  id: string
+  personId: string
+  person: { id: string; name: string; email: string }
+  jobId: string | null
+  job: { id: string; name: string; code: string; kind: string } | null
+  punchId: string | null
+  date: string
+  categoryId: string
+  category: { id: string; name: string; kind: 'expense' | 'mileage'; accountCode: string }
+  amount: number
+  miles: number | null
+  ratePerMile: number | null
+  paidBy: 'employee' | 'company_card'
+  vendor: string
+  notes: string
+  hasReceipt: boolean
+  /** The account this line posts to in accounting. */
+  postingAccount: string
+  status: ExpenseStatus
+  decisionNote: string
+  decidedAt: string | null
+  createdAt: string
+}
+export interface ExpenseTotals {
+  count: number
+  amount: number
+  reimbursable: number
+  waiting: number
+  approved: number
+}
+export interface ExpenseBody {
+  currentFlight?: boolean
+  jobId?: string | null
+  date?: string
+  categoryId?: string
+  amount?: number
+  miles?: number
+  paidBy?: 'employee' | 'company_card'
+  vendor?: string
+  notes?: string
+  draft?: boolean
+}
+export const fmtMoney = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD' })
+
 export interface ApiKey {
   id: string
   name: string
@@ -270,7 +396,7 @@ export const api = {
   changePassword: (current: string, next: string) => http.post('/auth/password', { current, next }).then((r) => r.data),
 
   state: () => http.get<DayState>('/me/state').then((r) => r.data),
-  punchIn: (jobId: string, phaseId: string | undefined) => punch('in', { jobId, phaseId }),
+  punchIn: (jobId: string, phaseId: string | undefined, notes?: string) => punch('in', { jobId, phaseId, notes: notes?.trim() || undefined }),
   punchNext: (phaseId?: string) => punch('next', { phaseId }),
   punchOut: () => punch('out', {}),
 
@@ -281,12 +407,19 @@ export const api = {
 
   phases: () => http.get<{ data: Phase[] }>('/phases').then((r) => r.data.data),
   allPhases: () => http.get<{ data: Phase[] }>('/phases', { params: { all: 'true' } }).then((r) => r.data.data),
-  addPhase: (p: { name: string; short?: string; laborCategory: string; dayFlow: boolean; atShop?: boolean }) =>
+  addPhase: (p: { name: string; short?: string; laborCategory: string; dayFlow: boolean; mode: WorkMode; atShop?: boolean }) =>
     http.post<{ phase: Phase }>('/phases', p).then((r) => r.data.phase),
-  updatePhase: (id: string, p: Partial<Pick<Phase, 'name' | 'short' | 'sortOrder' | 'laborCategory' | 'dayFlow' | 'active'>>) =>
+  updatePhase: (id: string, p: Partial<Pick<Phase, 'name' | 'short' | 'sortOrder' | 'laborCategory' | 'dayFlow' | 'mode' | 'active'>>) =>
     http.patch<{ phase: Phase }>(`/phases/${id}`, p).then((r) => r.data.phase),
 
   board: () => http.get<Board>('/board').then((r) => r.data),
+
+  closeItem: (id: string, resolution: string) => http.post<{ item: OpenItem }>(`/me/items/${id}/close`, { resolution }).then((r) => r.data.item),
+  keepItem: (id: string, reason: string) => http.post<{ item: OpenItem }>(`/me/items/${id}/keep`, { reason }).then((r) => r.data.item),
+  teamItems: () => http.get<{ data: TeamItem[] }>('/items').then((r) => r.data.data),
+  serviceBilling: (from: string, to: string) => http.get<ServiceBilling>('/reports/service-billing', { params: { from, to } }).then((r) => r.data),
+  billingRules: () => http.get<{ rules: BillingRules }>('/company/service-billing').then((r) => r.data.rules),
+  saveBillingRules: (rules: Partial<BillingRules>) => http.patch<{ rules: BillingRules }>('/company/service-billing', rules).then((r) => r.data.rules),
 
   myWeek: (week?: string) => http.get<PersonWeek>('/me/week', { params: { week } }).then((r) => r.data),
   signWeek: (week: string) => http.post<PersonWeek>('/me/week/sign', { week }).then((r) => r.data),
@@ -311,6 +444,30 @@ export const api = {
       .post<{ results: CrewResult[]; punched: number }>(`/crew/${kind}`, { ...body, geo: geo ?? undefined, clientId }, { headers: { 'Idempotency-Key': clientId } })
       .then((r) => r.data)
   },
+
+  expenseCategories: (all = false) =>
+    http.get<{ data: ExpenseCategory[]; mileageRate: number; reimbursementAccountCode: string }>('/expense-categories', { params: { all: all ? 'true' : undefined } }).then((r) => r.data),
+  addExpenseCategory: (c: { name: string; kind: 'expense' | 'mileage'; accountCode?: string }) => http.post<{ category: ExpenseCategory }>('/expense-categories', c).then((r) => r.data.category),
+  updateExpenseCategory: (id: string, c: Partial<Pick<ExpenseCategory, 'name' | 'accountCode' | 'active'>>) =>
+    http.patch<{ category: ExpenseCategory }>(`/expense-categories/${id}`, c).then((r) => r.data.category),
+  setMileageRate: (mileageRate: number) => http.patch<{ mileageRate: number }>('/company/mileage-rate', { mileageRate }).then((r) => r.data.mileageRate),
+  saveExpenseSettings: (s: { mileageRate?: number; reimbursementAccountCode?: string }) =>
+    http.patch<{ mileageRate: number; reimbursementAccountCode: string }>('/company/expense-settings', s).then((r) => r.data),
+  myExpenses: (from?: string, to?: string) => http.get<{ data: Expense[]; totals: ExpenseTotals }>('/me/expenses', { params: { from, to } }).then((r) => r.data),
+  addExpense: (body: ExpenseBody) => {
+    const clientId = newId()
+    return http.post<{ expense: Expense }>('/me/expenses', { ...body, clientId }, { headers: { 'Idempotency-Key': clientId } }).then((r) => r.data.expense)
+  },
+  changeExpense: (id: string, body: ExpenseBody) => http.patch<{ expense: Expense }>(`/me/expenses/${id}`, body).then((r) => r.data.expense),
+  deleteExpense: (id: string) => http.delete(`/me/expenses/${id}`).then((r) => r.data),
+  attachReceipt: (id: string, contentType: string, data: string) =>
+    http.post<{ expense: Expense }>(`/me/expenses/${id}/receipt`, { contentType, data }, { timeout: 90_000 }).then((r) => r.data.expense),
+  /** The receipt as a blob URL (the file needs the sign-in header, so a plain link will not do). */
+  receiptUrl: (id: string) => http.get<Blob>(`/expenses/${id}/receipt`, { responseType: 'blob' }).then((r) => URL.createObjectURL(r.data)),
+  expenses: (params: { status?: ExpenseStatus; from?: string; to?: string; personId?: string }) =>
+    http.get<{ data: Expense[]; totals: ExpenseTotals }>('/expenses', { params }).then((r) => r.data),
+  decideExpense: (id: string, decision: 'approve' | 'reject', note: string) =>
+    http.post<{ expense: Expense }>(`/expenses/${id}/${decision}`, { note }).then((r) => r.data.expense),
 
   people: () => http.get<{ data: Person[] }>('/people').then((r) => r.data.data),
   savePerson: (email: string, body: { name?: string; initials?: string; role?: string; active?: boolean; password?: string }) =>

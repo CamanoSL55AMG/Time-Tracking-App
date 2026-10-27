@@ -20,6 +20,18 @@ model Company {
   // First day of the timesheet week, 0 = Sunday … 6 = Saturday. Monday until the
   // pay period is settled with payroll.
   weekStartDay Int     @default(1)
+  // Service call billing (Morgan Sound default). Payroll always uses the real
+  // punched time; these only shape what the customer is invoiced.
+  serviceTravelHours       Float @default(0.5) // travel billed to each call, whatever the real drive
+  serviceIncludedHours     Float @default(1) // on-site time covered by the trip charge
+  serviceIncrementMinutes  Int   @default(15) // on-site time past that is billed in these steps
+  // Mileage reimbursement per mile. IRS business rate for 2026 is $0.725. The rate in
+  // force is copied onto each mileage line, so a later change leaves old lines alone.
+  mileageRate              Float @default(0.725)
+  // Expense lines paid with the employee's own money post here instead of their
+  // category's account (Morgan Sound: 6-1140 Employee Business Expense). Mileage keeps
+  // its category's account. Null = not set yet (the seed fills it); "" = off.
+  reimbursementAccountCode String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -29,6 +41,8 @@ model Company {
   punches Punch[]
   apiKeys ApiKey[]
   timesheets Timesheet[]
+  expenses   Expense[]
+  expenseCategories ExpenseCategory[]
 }
 
 model Person {
@@ -47,6 +61,8 @@ model Person {
   punches     Punch[]
   assignments Assignment[]
   timesheets  Timesheet[]
+  expenses    Expense[]
+  workItems   WorkItem[]
 
   @@index([companyId, active])
 }
@@ -54,7 +70,7 @@ model Person {
 model Job {
   id          String   @id @default(uuid())
   companyId   String
-  kind        String   @default("project") // project | service | shop | other
+  kind        String   @default("project") // project | service | shop | other (other = office, incl. the OVERHEAD job)
   name        String
   code        String   @default("") // P-number, service ticket, etc.
   active      Boolean  @default(true)
@@ -68,6 +84,8 @@ model Job {
   company     Company      @relation(fields: [companyId], references: [id])
   punches     Punch[]
   assignments Assignment[]
+  expenses    Expense[]
+  workItems   WorkItem[]
 
   @@index([companyId, active])
 }
@@ -88,6 +106,9 @@ model Phase {
   // Part of the field day's step-by-step sequence ("Next" and the step track).
   // Office phases (engineering, programming, PM) are picked directly instead.
   dayFlow       Boolean @default(true)
+  // The work mode the phase is offered in: install | service | office | shop.
+  // "Next" walks the field-day steps of one mode only.
+  mode          String  @default("install")
 
   company Company @relation(fields: [companyId], references: [id])
   punches Punch[]
@@ -117,6 +138,7 @@ model Punch {
   clientId     String? // generated on the phone; makes offline re-sends harmless
   apiKeyId     String? // set when an integration punched on the person's behalf
   punchedById  String? // the crew lead, when a lead punched for this person
+  workItemId   String? // the open item (service ticket, shop / office / CAD task) this time belongs to
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
@@ -124,6 +146,7 @@ model Punch {
   person  Person      @relation(fields: [personId], references: [id])
   job     Job         @relation(fields: [jobId], references: [id])
   phase   Phase?      @relation(fields: [phaseId], references: [id])
+  workItem WorkItem?  @relation(fields: [workItemId], references: [id])
   edits   PunchEdit[]
 
   @@unique([companyId, clientId])
@@ -288,4 +311,95 @@ model IdempotencyKey {
 model SsoNonce {
   jti    String   @id
   usedAt DateTime @default(now())
+}
+
+// ─── Open items ──────────────────────────────────────────────────────────────
+
+// A service ticket (Service mode) or a task (Shop, Office, CAD) a person has open on
+// one job. Opened by the first punch on that job in that mode; every later segment on
+// the same job and mode joins it, so switching away pauses it rather than closing
+// it. Closed by the person with a resolution note, usually at the end of the day; an
+// item left open carries a reason and shows up again the next day.
+model WorkItem {
+  id            String    @id @default(uuid())
+  companyId     String
+  personId      String
+  jobId         String
+  mode          String // service | shop | office | cad
+  notes         String    @default("") // what it is about: the notes given when punching on it
+  status        String    @default("open") // open | closed
+  waitingReason String    @default("") // why it was left open at the end of a day
+  resolution    String    @default("") // what was done, given when closing it
+  openedAt      DateTime
+  lastWorkedAt  DateTime
+  closedAt      DateTime?
+  closedById    String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  person  Person  @relation(fields: [personId], references: [id])
+  job     Job     @relation(fields: [jobId], references: [id])
+  punches Punch[]
+
+  @@index([personId, status])
+  @@index([companyId, status])
+  @@index([jobId])
+}
+
+// ─── Expenses ────────────────────────────────────────────────────────────────
+
+// What an expense is for: Materials, Fuel, Meals, Parking, Mileage… kind "mileage"
+// lines are entered as miles and priced at the company's mileage rate.
+model ExpenseCategory {
+  id          String  @id @default(uuid())
+  companyId   String
+  name        String
+  kind        String  @default("expense") // expense | mileage
+  accountCode String  @default("") // the accounting account it posts to
+  sortOrder   Int     @default(0)
+  active      Boolean @default(true)
+
+  company  Company   @relation(fields: [companyId], references: [id])
+  expenses Expense[]
+
+  @@unique([companyId, name])
+}
+
+// One expense or mileage line. Charged to a job (the person's current flight, or
+// one they pick) or to nothing (general overhead). Submitted when added; a manager
+// or payroll approves or rejects it. Rejected lines can be fixed and go back in.
+model Expense {
+  id           String    @id @default(uuid())
+  companyId    String
+  personId     String
+  jobId        String?
+  punchId      String? // the segment that was the current flight when it was added
+  date         String // YYYY-MM-DD, company time
+  categoryId   String
+  amountCents  Int // what is claimed; for mileage, miles × rate
+  miles        Float?
+  ratePerMile  Float?
+  paidBy       String    @default("employee") // employee (reimburse) | company_card
+  vendor       String    @default("")
+  notes        String    @default("")
+  receiptPath  String? // file under server/uploads/receipts
+  receiptType  String?
+  status       String    @default("submitted") // draft | submitted | approved | rejected
+  submittedAt  DateTime?
+  decidedById  String?
+  decidedAt    DateTime?
+  decisionNote String    @default("")
+  clientId     String? // generated on the phone; a re-send does not add it twice
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  company  Company         @relation(fields: [companyId], references: [id])
+  person   Person          @relation(fields: [personId], references: [id])
+  job      Job?            @relation(fields: [jobId], references: [id])
+  category ExpenseCategory @relation(fields: [categoryId], references: [id])
+
+  @@unique([companyId, clientId])
+  @@index([companyId, status])
+  @@index([personId, date])
+  @@index([jobId])
 }

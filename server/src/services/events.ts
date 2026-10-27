@@ -16,6 +16,12 @@ export type EventType =
   | 'timesheet.reopened'
   | 'request.created'
   | 'request.decided'
+  | 'expense.submitted'
+  | 'expense.approved'
+  | 'expense.rejected'
+  | 'expense.deleted'
+  | 'item.closed'
+  | 'item.kept'
 
 export async function emit(tx: Tx, companyId: string, type: EventType, payload: Record<string, unknown>): Promise<void> {
   await tx.event.create({

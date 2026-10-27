@@ -79,6 +79,119 @@ sold commercially, have counsel look at the name and marketing before launch.
   Jetbuilt, through GED.
 - **Lead punches the crew.** One action clocks several people onto the same job.
 
+## 4a. Work modes, master clock and service billing (added 2026-10-21)
+
+The app is branded **Logbook**, the time tracking module of AIC Terminal.
+
+After sign-in the person picks what the day is: **Install, Service, Office or Shop**. The
+choice is kept on the phone for the day (every fresh sign-in shows the screen again). Each
+phase belongs to one mode (`Phase.mode`), and "Next" walks the field-day steps of that mode
+only, so a service call never steps into the install day.
+
+| Mode | Who | Screen |
+| --- | --- | --- |
+| Install | Install crews | The field day as before: Load → Drive → Unload → Work → Clean up → Drive back → Put away, one big "Next" button |
+| Service | Service techs | Pick the call, **Start drive** → **Arrived** → **Call complete** → Drive to next call / Drive to shop / Clock out. **Parts / supply stop** during a drive |
+| Office | Art, the CAD team, PMs | **Master clock**: one clock-in, then switch project or task with one tap. **Stop project** keeps the clock running on *Unallocated / overhead*. Optional note on each switch |
+| Shop | Shop staff | A project plus a shop task: UCI building, Rack building, Prepping parts, Receiving (unload boxes, populate racks), Shop general. Switch task or project through the day |
+
+Master clock rules (Office and Shop, and they hold for every mode):
+
+1. The person's day is one chain of segments; at most one is open.
+2. Switching job or task closes the open segment and opens the next at the same instant, so
+   project time always adds up to time on the clock.
+3. **Stop project** charges the time to the `OVERHEAD` job (*Unallocated / overhead*, phase
+   *Admin / overhead*). After 30 minutes there the screen asks the person to pick a project.
+4. **Break / Out** clocks out. Coming back, **Back to [job · task]** resumes in one tap.
+5. Quick switch offers the jobs the person worked in the last two weeks.
+6. A colour bar shows the day by job, with breaks as gaps.
+
+Service drive time and billing. Drive time is its own segment (`svc-travel`), punched on the
+call being driven *to*, so travel to the next location lands on the next call. A drive back to
+the shop is punched on the Shop job and is never billed. Payroll always pays the real drive
+and site time. What the customer is invoiced follows Morgan Sound's rule, kept as company
+settings (Manage → Service billing) so other companies can change it:
+
+| Setting | Morgan Sound |
+| --- | --- |
+| Travel billed per call, per tech who drove there | 0.5 h, whatever the real drive |
+| On-site time covered by the trip charge | First 1 h |
+| Billing step for on-site time past that | 15 min |
+
+`GET /api/v1/reports/service-billing?from=&to=` gives each call per day: techs, billed travel,
+trip charges, billable hours past the included hour, and the real drive and site hours. The
+Review screen shows it under the week.
+
+Decided 2026-10-21:
+
+- **Trip charge:** one per service call (ticket). A different issue is its own ticket and
+  gets its own trip charge, even at the same site on the same trip. A return visit on the same
+  ticket gets none, and its on-site time is billed from the first minute.
+- **Home:** a tech can start the drive from home to the first call and take **Drive home**
+  (`svc-home`) from the last call. **Commute is paid time**: the clock runs from leaving home.
+  Drives to the shop or home are never billed to the customer.
+- **Expense approvals:** managers and payroll.
+- **Account codes:** from the AccountEdge account list (finance, 2026-10-05), confirmed by Art
+  2026-10-21 and set by the seed. Materials / parts 6-1220 Install Expense (taxable purchases)
+  · Tools 6-1290 Shop Expense · Fuel 6-1150 · Mileage 6-1100 Truck and Auto · Parking / tolls
+  6-1190 Travel · Meals 6-1160 Food · Per diem 6-1180 · Lodging 6-1170 · Equipment rental
+  6-1210 · Permits / licenses 6-1090 · Shipping 6-1120 · Office supplies 6-1300 · Other 6-1250
+  Misc Expense. All field purchases are taxable; there is no tax-exempt resale category.
+- **Reimbursements:** lines paid with the employee's own money post to **6-1140 Employee
+  Business Expense** (`Company.reimbursementAccountCode`), except mileage, which keeps 6-1100.
+  Company-card lines post to their category's account. Each line carries `postingAccount`.
+- **Rollout:** everyone is invited. Timesheets.com runs alongside until at least the week
+  before Thanksgiving (Nov 16–20, 2026); `PARALLEL_RUN_UNTIL` stays at 2026-12-31 until the
+  hours reconcile and cutover is set.
+
+## 4c. Open items, Notes and CAD (built 2026-10-26)
+
+- **WorkItem**: one per person, job and mode (service, shop, office, cad), opened by
+  the first punch on it and reused until closed. Not for the overhead job, or service
+  time on the shop job. Each punch carries `workItemId`; hours are summed from them.
+- **Notes** at the top of the job picker (every mode) are added to the item's notes.
+- **Resume**: the clock screen lists the person's open items. Resume sets the mode and
+  clocks in on the item's job: Service starts with the drive, the others with the task
+  last used.
+- **Close-out**: clocking out with open items asks *Taking a break* (they stay open) or
+  *Done for the day*: each is closed with a resolution (required) or left open with a
+  reason (Waiting on parts, Return visit scheduled, Needs the office, Continue
+  tomorrow, or typed). Service *Call complete* asks the same for the current ticket.
+- **CAD mode**: tasks CAD — Design, Signal flow, Floor plans, Rack elevations,
+  Submittals, Cable schedules, Revisions, As-builts, Plotting (labor category
+  engineering). Edit them under Manage like any phase.
+- API: `GET /me/items`, `POST /me/items/:id/close {resolution}`,
+  `POST /me/items/:id/keep {reason}`, `GET /items?status=&mode=` (punch:read).
+  Events `item.closed`, `item.kept`.
+
+## 4b. Expenses on the current flight (built 2026-10-21)
+
+The job a person is clocked into is their **current flight**. The clock screen has
+**+ Expense on this flight**: the line is charged to that job and remembers the segment it was
+added from. The **Expenses** tab lets anyone add a line on their own, against any job or no job,
+and see their month with totals ("Pay me back" is what they paid themselves).
+
+- A line has a category, amount (or miles for a mileage category, priced at the company
+  mileage rate, $0.725 for 2026, copied onto the line), date, who paid (my money / company
+  card), vendor, a note and a receipt photo or PDF. Phone photos are shrunk to 1600 px before
+  upload. Receipts are stored in `server/uploads/receipts` (not in git; include it in the
+  NAS backup).
+- Lines are submitted when added. Managers and payroll approve or reject them on the Review
+  screen (a rejection needs a reason; nobody approves their own). The person can change or
+  remove a line until it is approved; fixing a rejected one sends it back. Approved lines are
+  locked.
+- Categories, account codes and the mileage rate are under Manage → Expenses. The seed adds
+  Materials / parts, Tools, Fuel, Mileage (own vehicle), Parking / tolls, Meals, Lodging,
+  Equipment rental, Other.
+- API: `GET/POST /me/expenses`, `PATCH/DELETE /me/expenses/{id}`, `POST /me/expenses/{id}/receipt`,
+  `GET /expenses/{id}/receipt`, `GET /expenses` (scope `expenses:read`, for accounting),
+  `POST /expenses/{id}/approve|reject` (scope `expenses:approve`), `GET/POST/PATCH
+  /expense-categories`, `PATCH /company/mileage-rate`. Events: `expense.submitted`,
+  `expense.approved`, `expense.rejected`, `expense.deleted`.
+
+Still to do from §8: expense reports as batches, export to payroll / accounts payable, and the
+expenses-per-job view in GED.
+
 ## 5. Architecture
 
 Same stack as Project Report so there is nothing new to learn or deploy.

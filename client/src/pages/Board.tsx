@@ -64,7 +64,7 @@ export default function BoardPage() {
                     size="small"
                     color={r.onClock ? 'secondary' : 'default'}
                     variant={r.onClock ? 'filled' : 'outlined'}
-                    label={r.phaseIndex !== null ? `${r.phaseIndex + 1}/${board.phaseCount} ${r.phaseName}` : r.phaseName}
+                    label={r.phaseIndex !== null ? `${r.phaseIndex + 1}/${r.phaseSteps ?? board.phaseCount} ${r.phaseName}` : r.phaseName}
                     sx={{ maxWidth: '60%', flexShrink: 0 }}
                   />
                 )}

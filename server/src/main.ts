@@ -17,6 +17,8 @@ import { punchesRouter } from './routes/punches.js'
 import { systemRouter } from './routes/system.js'
 import { timesheetsRouter } from './routes/timesheets.js'
 import { assignmentsRouter } from './routes/assignments.js'
+import { expensesRouter } from './routes/expenses.js'
+import { itemsRouter } from './routes/items.js'
 
 assertConfig()
 
@@ -41,6 +43,8 @@ app.use(morgan(config.isProduction ? 'combined' : 'dev'))
 if (config.corsOrigins.length) {
   app.use(cors({ origin: config.corsOrigins, allowedHeaders: ['Authorization', 'Content-Type', 'Idempotency-Key', 'X-Act-As'] }))
 }
+// Receipt photos come up as base64 JSON; everything else stays small.
+app.use(/^\/api\/v1\/me\/expenses\/[^/]+\/receipt$/, express.json({ limit: '9mb' }))
 app.use(express.json({ limit: '1mb' }))
 
 // ─── API v1 ─────────────────────────────────────────────────────────────────
@@ -54,6 +58,8 @@ v1.use(jobsRouter)
 v1.use(punchesRouter)
 v1.use(assignmentsRouter)
 v1.use(timesheetsRouter)
+v1.use(expensesRouter)
+v1.use(itemsRouter)
 v1.use((req, _res, next) => next(new ApiError(404, 'not_found', `No such endpoint: ${req.method} ${req.originalUrl}`)))
 app.use('/api/v1', v1)
 app.use('/api', (req, _res, next) => next(new ApiError(404, 'not_found', `No such endpoint: ${req.method} ${req.originalUrl}. The API lives under /api/v1.`)))

@@ -25,13 +25,15 @@ import {
 import { api, errorText, fmtDay, fmtTime, type PersonWeek, type WeekSegment, type WeekSheet, type WeekSheetRow } from '../api'
 import { ExceptionList, StatusChip, WeekDetail, WeekNav, signOffLine } from './Week'
 import { DecideButtons, RequestCard } from './Requests'
-import type { ChangeRequest } from '../api'
+import { ExpenseApprovals } from './Expenses'
+import { TeamOpenItems } from './items'
+import type { ChangeRequest, ServiceBilling } from '../api'
 
 // The approver's week: everyone's hours by day, who has signed, what needs a look.
 // Approve the rows that are right; an approved week is locked until reopened.
 // Leads can look; only managers and payroll approve.
 
-export default function ReviewPage({ canApprove, canEdit }: { canApprove: boolean; canEdit: boolean }) {
+export default function ReviewPage({ canApprove, canEdit, canApproveExpenses = false, meId }: { canApprove: boolean; canEdit: boolean; canApproveExpenses?: boolean; meId?: string }) {
   const [sheet, setSheet] = useState<WeekSheet | null>(null)
   const [at, setAt] = useState<string | undefined>(undefined)
   const [picked, setPicked] = useState<Set<string>>(new Set())
@@ -125,6 +127,8 @@ export default function ReviewPage({ canApprove, canEdit }: { canApprove: boolea
           ))}
         </Stack>
       )}
+
+      <TeamOpenItems />
 
       {notice && (
         <Alert severity="success" onClose={() => setNotice('')}>
@@ -244,6 +248,10 @@ export default function ReviewPage({ canApprove, canEdit }: { canApprove: boolea
           {showNotes && <ExceptionList items={notes} showName />}
         </Box>
       )}
+
+      <ExpenseApprovals canApprove={canApproveExpenses} meId={meId} />
+
+      <ServiceBillingPanel from={sheet.weekStart} to={sheet.weekEnd} />
 
       {open && <PersonDialog row={open} weekStart={sheet.weekStart} canApprove={canApprove} canEdit={canEdit} approvable={approvable(open)} busy={busy} onApprove={() => approve([open.person.id])} onClose={() => setOpen(null)} onChanged={() => void load(sheet.weekStart)} />}
     </Stack>
@@ -462,5 +470,68 @@ function EditSegment({ segment, onClose, onSaved }: { segment: WeekSegment; onCl
         </Button>
       </DialogActions>
     </Dialog>
+  )
+}
+
+/** What this week's service calls bill: flat travel, trip charge, time past the included hour. */
+function ServiceBillingPanel({ from, to }: { from: string; to: string }) {
+  const [data, setData] = useState<ServiceBilling | null>(null)
+  const [show, setShow] = useState(false)
+  useEffect(() => {
+    setData(null)
+    // Hidden for people without reports access, and for weeks with no service calls.
+    api.serviceBilling(from, to).then(setData, () => setData(null))
+  }, [from, to])
+  if (!data || !data.rows.length) return null
+  const h = (n: number) => n.toFixed(2)
+  return (
+    <Box>
+      <Button size="small" onClick={() => setShow(!show)}>
+        {show ? 'Hide' : 'Show'} service billing ({data.totals.calls} call{data.totals.calls === 1 ? '' : 's'}, {h(data.totals.billedTravelHours)} h travel,{' '}
+        {data.totals.tripCharges} trip charge{data.totals.tripCharges === 1 ? '' : 's'}, {h(data.totals.billableHours)} h extra)
+      </Button>
+      {show && (
+        <Paper sx={{ mt: 1 }}>
+          <TableContainer>
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell>Day</TableCell>
+                  <TableCell>Call</TableCell>
+                  <TableCell>Techs</TableCell>
+                  <TableCell align="right">Travel billed</TableCell>
+                  <TableCell align="right">Trip charge</TableCell>
+                  <TableCell align="right">Extra hours</TableCell>
+                  <TableCell align="right">Real drive / site</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {data.rows.map((r) => (
+                  <TableRow key={`${r.jobId}-${r.day}`}>
+                    <TableCell>{fmtDay(r.day)}</TableCell>
+                    <TableCell>
+                      {r.jobCode && r.jobCode !== r.jobName ? `${r.jobCode} ` : ''}
+                      {r.jobName}
+                      {r.open && ' (still on the clock)'}
+                    </TableCell>
+                    <TableCell>{r.techs.join(', ')}</TableCell>
+                    <TableCell align="right">{h(r.billedTravelHours)}</TableCell>
+                    <TableCell align="right">{r.tripCharges}</TableCell>
+                    <TableCell align="right">{h(r.billableHours)}</TableCell>
+                    <TableCell align="right">
+                      {h(r.actualTravelHours)} / {h(r.actualOnSiteHours)}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </TableContainer>
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', p: 1 }}>
+            Travel {h(data.rules.travelHours)} h per tech who drove to the call; the trip charge covers the first {h(data.rules.includedHours)} h on site;
+            time past that in {data.rules.incrementMinutes}-minute steps. Payroll pays the real times.
+          </Typography>
+        </Paper>
+      )}
+    </Box>
   )
 }

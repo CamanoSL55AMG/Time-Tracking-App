@@ -19,12 +19,13 @@ import {
   TextField,
   Typography,
 } from '@mui/material'
-import { api, errorText, fmtTime, type ApiKey, type Job, type Person, type Phase } from '../api'
+import { api, errorText, fmtTime, WORK_MODES, type ApiKey, type BillingRules, type Job, type Person, type Phase, type WorkMode } from '../api'
+import { MODE_INFO } from './modes'
 
 // People, jobs, phases and integration keys. Most jobs arrive from GED through the
 // API; this page is for the ones added by hand and for seeing what is there.
 
-type Section = 'people' | 'jobs' | 'phases' | 'keys'
+type Section = 'people' | 'jobs' | 'phases' | 'expenses' | 'billing' | 'keys'
 
 export default function AdminPage({ me }: { me: Person }) {
   const isAdmin = me.scopes.includes('keys:manage')
@@ -32,15 +33,19 @@ export default function AdminPage({ me }: { me: Person }) {
   const [section, setSection] = useState<Section>('people')
   return (
     <Stack spacing={2}>
-      <Tabs value={section} onChange={(_, v: Section) => setSection(v)}>
+      <Tabs value={section} onChange={(_, v: Section) => setSection(v)} variant="scrollable" allowScrollButtonsMobile>
         <Tab value="people" label="People" />
         <Tab value="jobs" label="Jobs" />
         {canEditJobs && <Tab value="phases" label="Phases" />}
+        {canEditJobs && <Tab value="expenses" label="Expenses" />}
+        {canEditJobs && <Tab value="billing" label="Service billing" />}
         {isAdmin && <Tab value="keys" label="API keys" />}
       </Tabs>
       {section === 'people' && <People isAdmin={isAdmin} />}
       {section === 'jobs' && <Jobs />}
       {section === 'phases' && canEditJobs && <Phases />}
+      {section === 'expenses' && canEditJobs && <ExpenseSetup />}
+      {section === 'billing' && canEditJobs && <Billing />}
       {section === 'keys' && isAdmin && <Keys />}
     </Stack>
   )
@@ -258,6 +263,7 @@ const CATEGORIES: { value: string; label: string }[] = [
   { value: 'engineering', label: 'Engineering' },
   { value: 'programming', label: 'Programming' },
   { value: 'management', label: 'Project management' },
+  { value: 'service', label: 'Service' },
   { value: 'other', label: 'Other' },
 ]
 
@@ -265,7 +271,13 @@ function Phases() {
   const { data, error, setError, load } = useLoader(api.allPhases)
   const [adding, setAdding] = useState(false)
   const [editing, setEditing] = useState<Phase | null>(null)
-  const [form, setForm] = useState({ name: '', short: '', laborCategory: 'install', dayFlow: false })
+  const [form, setForm] = useState<{ name: string; short: string; laborCategory: string; dayFlow: boolean; mode: WorkMode }>({
+    name: '',
+    short: '',
+    laborCategory: 'install',
+    dayFlow: false,
+    mode: 'office',
+  })
   const [busy, setBusy] = useState(false)
   const phases = data ?? []
 
@@ -291,17 +303,17 @@ function Phases() {
     }
   }
   const openAdd = () => {
-    setForm({ name: '', short: '', laborCategory: 'install', dayFlow: false })
+    setForm({ name: '', short: '', laborCategory: 'install', dayFlow: false, mode: 'office' })
     setAdding(true)
   }
   const openEdit = (p: Phase) => {
-    setForm({ name: p.name, short: p.short, laborCategory: p.laborCategory, dayFlow: p.dayFlow })
+    setForm({ name: p.name, short: p.short, laborCategory: p.laborCategory, dayFlow: p.dayFlow, mode: p.mode ?? 'install' })
     setEditing(p)
   }
   const save = async () => {
     setBusy(true)
     try {
-      const body = { name: form.name.trim(), short: form.short.trim() || form.name.trim(), laborCategory: form.laborCategory, dayFlow: form.dayFlow }
+      const body = { name: form.name.trim(), short: form.short.trim() || form.name.trim(), laborCategory: form.laborCategory, dayFlow: form.dayFlow, mode: form.mode }
       if (editing) await api.updatePhase(editing.id, body)
       else await api.addPhase(body)
       setAdding(false)
@@ -314,13 +326,15 @@ function Phases() {
     }
   }
 
-  let step = 0
+  // Steps are numbered within each mode's field day.
+  const steps: Partial<Record<WorkMode, number>> = {}
   return (
     <Stack spacing={1.5}>
       {error && <Alert severity="error">{error}</Alert>}
       <Typography variant="body2" color="text.secondary">
-        Field-day steps are walked in this order with "Next". Office phases are picked directly. The labor category decides which line of
-        the Jetbuilt labor budget the hours count against.
+        Each phase belongs to a work mode on the start screen (Install, Service, Office, Shop). Field-day steps are walked in this order with
+        "Next", inside their own mode. Other phases are picked directly. The labor category decides which line of the Jetbuilt labor budget the
+        hours count against.
       </Typography>
       <Box>
         <Button variant="contained" onClick={openAdd}>
@@ -329,7 +343,8 @@ function Phases() {
       </Box>
       {phases.map((p, i) => {
         const active = p.active !== false
-        const label = p.dayFlow && active ? `Step ${++step}` : 'Office'
+        const m: WorkMode = p.mode ?? 'install'
+        const label = p.dayFlow && active ? `${MODE_INFO[m].label} step ${(steps[m] = (steps[m] ?? 0) + 1)}` : `${MODE_INFO[m].label} · picked`
         return (
           <Row key={p.id} dim={!active}>
             <Stack>
@@ -348,6 +363,13 @@ function Phases() {
                 {label} · {p.short}
               </Typography>
             </Box>
+            <TextField select size="small" label="Mode" value={p.mode ?? 'install'} onChange={(e) => void update(p, { mode: e.target.value as WorkMode })} sx={{ width: 110 }}>
+              {WORK_MODES.map((wm) => (
+                <MenuItem key={wm} value={wm}>
+                  {MODE_INFO[wm].label}
+                </MenuItem>
+              ))}
+            </TextField>
             <TextField
               select
               size="small"
@@ -380,6 +402,13 @@ function Phases() {
           <Stack spacing={2} sx={{ pt: 1 }}>
             <TextField label="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} autoFocus />
             <TextField label="Short label" value={form.short} onChange={(e) => setForm({ ...form, short: e.target.value })} helperText="Shown on the step track and the board" />
+            <TextField select label="Mode" value={form.mode} onChange={(e) => setForm({ ...form, mode: e.target.value as WorkMode })} helperText="Which start-screen choice offers it">
+              {WORK_MODES.map((wm) => (
+                <MenuItem key={wm} value={wm}>
+                  {MODE_INFO[wm].label}
+                </MenuItem>
+              ))}
+            </TextField>
             <TextField select label="Counts as" value={form.laborCategory} onChange={(e) => setForm({ ...form, laborCategory: e.target.value })}>
               {CATEGORIES.map((c) => (
                 <MenuItem key={c.value} value={c.value}>
@@ -401,6 +430,149 @@ function Phases() {
         </DialogActions>
       </Dialog>
     </Stack>
+  )
+}
+
+// ─── Expense categories and mileage rate ───────────────────────────────────
+
+function ExpenseSetup() {
+  const { data, error, setError, load } = useLoader(() => api.expenseCategories(true))
+  const [name, setName] = useState('')
+  const [kind, setKind] = useState<'expense' | 'mileage'>('expense')
+  const [rate, setRate] = useState('')
+  const [reimb, setReimb] = useState<string | null>(null)
+  const [notice, setNotice] = useState('')
+  useEffect(() => {
+    if (data && rate === '') setRate(String(data.mileageRate))
+    if (data && reimb === null) setReimb(data.reimbursementAccountCode)
+  }, [data, rate, reimb])
+  const run = async (fn: () => Promise<unknown>, done = '') => {
+    setNotice('')
+    try {
+      await fn()
+      await load()
+      if (done) setNotice(done)
+    } catch (err) {
+      setError(errorText(err))
+    }
+  }
+  return (
+    <Stack spacing={1.5}>
+      <Typography variant="body2" color="text.secondary">
+        What people can claim. Mileage categories are entered as miles and priced at the mileage rate. The account code is where accounting posts
+        the line.
+      </Typography>
+      {error && <Alert severity="error">{error}</Alert>}
+      {notice && <Alert severity="success">{notice}</Alert>}
+      <Paper sx={{ p: 2 }}>
+        <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: 'wrap', rowGap: 1 }}>
+          <TextField size="small" label="Mileage rate ($ a mile)" type="number" inputProps={{ step: 0.005, min: 0 }} value={rate} onChange={(e) => setRate(e.target.value)} sx={{ width: 190 }} />
+          <Button variant="outlined" onClick={() => void run(() => api.setMileageRate(Number(rate)), 'Mileage rate saved. It applies to new mileage lines.')}>
+            Save rate
+          </Button>
+          <Typography variant="caption" color="text.secondary">
+            IRS business rate for 2026: $0.725
+          </Typography>
+        </Stack>
+        <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: 'wrap', rowGap: 1, mt: 2 }}>
+          <TextField size="small" label="Own-money lines post to" value={reimb ?? ''} onChange={(e) => setReimb(e.target.value)} placeholder="e.g. 6-1140" sx={{ width: 190 }} />
+          <Button variant="outlined" onClick={() => void run(() => api.saveExpenseSettings({ reimbursementAccountCode: (reimb ?? '').trim() }), 'Saved. It applies to every line paid with the employee\u2019s own money.')}>
+            Save
+          </Button>
+          <Typography variant="caption" color="text.secondary" sx={{ flex: '1 1 220px' }}>
+            Lines paid with the employee&apos;s own money (mileage excepted) post here. Company-card lines and mileage use the category&apos;s account. Leave
+            empty to use the category for everything.
+          </Typography>
+        </Stack>
+      </Paper>
+      <Stack direction="row" spacing={1} alignItems="center">
+        <TextField size="small" label="New category" value={name} onChange={(e) => setName(e.target.value)} sx={{ flex: 1 }} />
+        <TextField select size="small" value={kind} onChange={(e) => setKind(e.target.value as 'expense' | 'mileage')} sx={{ width: 130 }}>
+          <MenuItem value="expense">Amount</MenuItem>
+          <MenuItem value="mileage">Mileage</MenuItem>
+        </TextField>
+        <Button
+          variant="contained"
+          disabled={!name.trim()}
+          onClick={() =>
+            void run(async () => {
+              await api.addExpenseCategory({ name: name.trim(), kind })
+              setName('')
+            })
+          }
+        >
+          Add
+        </Button>
+      </Stack>
+      {(data?.data ?? []).map((c) => (
+        <Row key={c.id} dim={!c.active}>
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Typography sx={{ fontWeight: 600 }} noWrap>
+              {c.name}
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              {c.kind === 'mileage' ? 'Miles × rate' : 'Amount'}
+            </Typography>
+          </Box>
+          <TextField
+            size="small"
+            label="Account code"
+            defaultValue={c.accountCode}
+            onBlur={(e) => e.target.value.trim() !== c.accountCode && void run(() => api.updateExpenseCategory(c.id, { accountCode: e.target.value.trim() }))}
+            sx={{ width: 140 }}
+          />
+          <Switch checked={c.active} onChange={() => void run(() => api.updateExpenseCategory(c.id, { active: !c.active }))} inputProps={{ 'aria-label': `${c.name} offered` }} />
+        </Row>
+      ))}
+    </Stack>
+  )
+}
+
+// ─── Service billing ────────────────────────────────────────────────────────
+// How a service call is invoiced. Payroll always pays the real punched time.
+
+function Billing() {
+  const { data, error, setError, load } = useLoader(api.billingRules)
+  const [form, setForm] = useState<{ travelHours: string; includedHours: string; incrementMinutes: string } | null>(null)
+  const [saved, setSaved] = useState(false)
+  const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    if (data && !form) setForm({ travelHours: String(data.travelHours), includedHours: String(data.includedHours), incrementMinutes: String(data.incrementMinutes) })
+  }, [data, form])
+  if (!form) return error ? <Alert severity="error">{error}</Alert> : null
+  const save = async () => {
+    setBusy(true)
+    setSaved(false)
+    try {
+      const rules: Partial<BillingRules> = { travelHours: Number(form.travelHours), includedHours: Number(form.includedHours), incrementMinutes: Number(form.incrementMinutes) }
+      await api.saveBillingRules(rules)
+      await load()
+      setSaved(true)
+    } catch (err) {
+      setError(errorText(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <Paper sx={{ p: 2 }}>
+      <Stack spacing={2} sx={{ maxWidth: 420 }}>
+        <Typography variant="body2" color="text.secondary">
+          Travel to a call is billed as a flat amount, the trip charge covers the first part of the visit, and time on site past that is billed in
+          steps. The drive to the next call belongs to the next call. Techs are still paid their real drive and site time.
+        </Typography>
+        {error && <Alert severity="error">{error}</Alert>}
+        {saved && <Alert severity="success">Saved.</Alert>}
+        <TextField label="Travel billed per call (hours)" type="number" inputProps={{ step: 0.25, min: 0 }} value={form.travelHours} onChange={(e) => setForm({ ...form, travelHours: e.target.value })} />
+        <TextField label="Hours on site covered by the trip charge" type="number" inputProps={{ step: 0.25, min: 0 }} value={form.includedHours} onChange={(e) => setForm({ ...form, includedHours: e.target.value })} />
+        <TextField label="Billing step after that (minutes)" type="number" inputProps={{ step: 5, min: 1 }} value={form.incrementMinutes} onChange={(e) => setForm({ ...form, incrementMinutes: e.target.value })} />
+        <Box>
+          <Button variant="contained" onClick={save} disabled={busy}>
+            Save
+          </Button>
+        </Box>
+      </Stack>
+    </Paper>
   )
 }
 

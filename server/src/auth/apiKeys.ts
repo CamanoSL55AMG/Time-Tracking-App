@@ -25,6 +25,8 @@ export const SCOPES = [
   'reports:read',
   'events:read',
   'assignments:write',
+  'expenses:read',
+  'expenses:approve',
 ] as const
 export type Scope = (typeof SCOPES)[number]
 
@@ -41,13 +43,13 @@ export type Role = (typeof ROLES)[number]
 
 const TECH = [SELF, 'jobs:read']
 const LEAD = [...TECH, 'punch:read', 'people:read', CREW]
-const MANAGER = [...LEAD, APPROVE, 'punch:write:any', 'jobs:write', 'people:write', 'reports:read', 'events:read', 'assignments:write']
+const MANAGER = [...LEAD, APPROVE, 'punch:write:any', 'jobs:write', 'people:write', 'reports:read', 'events:read', 'assignments:write', 'expenses:read', 'expenses:approve']
 
 export const ROLE_SCOPES: Record<Role, string[]> = {
   tech: TECH,
   lead: LEAD,
   manager: MANAGER,
-  payroll: [SELF, 'jobs:read', 'punch:read', 'people:read', 'reports:read', APPROVE],
+  payroll: [SELF, 'jobs:read', 'punch:read', 'people:read', 'reports:read', APPROVE, 'expenses:read', 'expenses:approve'],
   admin: [...MANAGER, KEYS_MANAGE],
 }
 

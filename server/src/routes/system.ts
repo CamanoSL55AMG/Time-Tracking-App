@@ -5,6 +5,7 @@ import { badRequest, notFound } from '../errors.js'
 import { requireScope } from '../auth/middleware.js'
 import { generateKey, isScope, KEYS_MANAGE, SCOPES } from '../auth/apiKeys.js'
 import { GROUPS, hoursReport, type Group } from '../services/reports.js'
+import { serviceBilling } from '../services/serviceBilling.js'
 import { addDays, dayBounds, isYmd, startOfLocalDay } from '../lib/time.js'
 
 export const systemRouter = Router()
@@ -59,6 +60,96 @@ route(
       personId: str(req.query.personId, 80) || undefined,
       jobId: str(req.query.jobId, 80) || undefined,
     })
+  },
+)
+
+/** from / to query values: YYYY-MM-DD in the company timezone (to inclusive), or ISO date-times (to exclusive). */
+async function rangeOf(companyId: string, fromRaw: string, toRaw: string) {
+  const company = await prisma.company.findUniqueOrThrow({ where: { id: companyId } })
+  const tz = company.timezone
+  const today = dayBounds(new Date(), tz)
+  const from = !fromRaw ? today.start : isYmd(fromRaw) ? startOfLocalDay(fromRaw, tz) : optionalDate(fromRaw, 'from')!
+  let to: Date
+  if (!toRaw) to = !fromRaw ? today.end : isYmd(fromRaw) ? startOfLocalDay(addDays(fromRaw, 1), tz) : new Date(from.getTime() + 86_400_000)
+  else to = isYmd(toRaw) ? startOfLocalDay(addDays(toRaw, 1), tz) : optionalDate(toRaw, 'to')!
+  return { from, to }
+}
+
+route(
+  systemRouter,
+  {
+    method: 'get',
+    path: '/reports/service-billing',
+    tag: 'Views',
+    summary:
+      'What each service call is invoiced: flat travel per tech who drove there, one trip charge covering the first on-site hour, and on-site time past it in billing steps. Payroll keeps the real hours.',
+    access: ['reports:read'],
+    query: {
+      from: 'YYYY-MM-DD (company timezone) or ISO date-time. Defaults to today',
+      to: 'YYYY-MM-DD, inclusive, or ISO date-time, exclusive. Defaults to from',
+      jobId: 'Only this service call',
+    },
+  },
+  async (req) => {
+    const auth = requireScope(req, 'reports:read')
+    const { from, to } = await rangeOf(auth.companyId, str(req.query.from, 40), str(req.query.to, 40))
+    return serviceBilling(auth.companyId, { from, to, jobId: str(req.query.jobId, 80) || undefined })
+  },
+)
+
+const billingRules = (c: { serviceTravelHours: number; serviceIncludedHours: number; serviceIncrementMinutes: number }) => ({
+  travelHours: c.serviceTravelHours,
+  includedHours: c.serviceIncludedHours,
+  incrementMinutes: c.serviceIncrementMinutes,
+})
+
+route(
+  systemRouter,
+  { method: 'get', path: '/company/service-billing', tag: 'Views', summary: 'The service call billing rules.', access: ['reports:read', 'jobs:write'] },
+  async (req) => {
+    const auth = requireScope(req, 'reports:read', 'jobs:write')
+    return { rules: billingRules(await prisma.company.findUniqueOrThrow({ where: { id: auth.companyId } })) }
+  },
+)
+
+route(
+  systemRouter,
+  {
+    method: 'patch',
+    path: '/company/service-billing',
+    tag: 'Jobs',
+    summary: 'Change the service call billing rules.',
+    access: ['jobs:write'],
+    body: {
+      travelHours: 'Hours of travel billed to each call (Morgan Sound: 0.5)',
+      includedHours: 'On-site hours covered by the trip charge (Morgan Sound: 1)',
+      incrementMinutes: 'Billing step for on-site time past that, in minutes (e.g. 15)',
+    },
+  },
+  async (req) => {
+    const auth = requireScope(req, 'jobs:write')
+    const b = (req.body ?? {}) as Record<string, unknown>
+    const hours = (v: unknown, field: string) => {
+      if (v === undefined) return undefined
+      const n = Number(v)
+      if (v === null || v === '' || !Number.isFinite(n) || n < 0 || n > 24) throw badRequest(`${field} must be a number of hours from 0 to 24.`, { field })
+      return n
+    }
+    let incrementMinutes: number | undefined
+    if (b.incrementMinutes !== undefined) {
+      const n = Number(b.incrementMinutes)
+      if (!Number.isInteger(n) || n < 1 || n > 240) throw badRequest('incrementMinutes must be a whole number from 1 to 240.', { field: 'incrementMinutes' })
+      incrementMinutes = n
+    }
+    const company = await prisma.company.update({
+      where: { id: auth.companyId },
+      data: {
+        serviceTravelHours: hours(b.travelHours, 'travelHours'),
+        serviceIncludedHours: hours(b.includedHours, 'includedHours'),
+        serviceIncrementMinutes: incrementMinutes,
+      },
+    })
+    return { rules: billingRules(company) }
   },
 )
 

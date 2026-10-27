@@ -5,6 +5,7 @@ import { bool, limitOf, optionalDate, requiredStr, route, str } from '../api.js'
 import { badRequest, notFound } from '../errors.js'
 import { requireScope } from '../auth/middleware.js'
 import { emit } from '../services/events.js'
+import { MODES } from '../services/punch.js'
 
 export const jobsRouter = Router()
 
@@ -204,8 +205,9 @@ route(
       name: 'Name (required)',
       short: 'Short label (defaults to the name)',
       key: 'Stable id, e.g. "site-survey" (made from the name when left out)',
-      laborCategory: 'engineering | install | programming | management | other (default install)',
+      laborCategory: 'engineering | install | programming | management | service | other (default install)',
       dayFlow: 'true if "Next" steps through it during the field day (default false)',
+      mode: 'Work mode it is offered in: install | service | office | shop (default office)',
       atShop: 'true if it happens at the shop',
       sortOrder: 'Position in the list (lower first)',
     },
@@ -233,6 +235,7 @@ route(
         short: str(b.short, 40) || name.slice(0, 40),
         laborCategory,
         dayFlow: bool(b.dayFlow) ?? false,
+        mode: modeOf(b.mode) ?? 'office',
         atShop: bool(b.atShop) ?? false,
         sortOrder: sortOrder == null ? (last?.sortOrder ?? 0) + 10 : Math.round(sortOrder),
       },
@@ -241,7 +244,14 @@ route(
   },
 )
 
-const LABOR_CATEGORIES = ['engineering', 'install', 'programming', 'management', 'other']
+const LABOR_CATEGORIES = ['engineering', 'install', 'programming', 'management', 'service', 'other']
+
+function modeOf(v: unknown): string | undefined {
+  if (v === undefined) return undefined
+  const m = String(v)
+  if (!(MODES as readonly string[]).includes(m)) throw badRequest(`mode must be one of ${MODES.join(', ')}.`, { field: 'mode' })
+  return m
+}
 
 route(
   jobsRouter,
@@ -255,8 +265,9 @@ route(
       name: 'Name',
       short: 'Short label',
       sortOrder: 'Position in the list (lower first)',
-      laborCategory: 'engineering | install | programming | management | other',
+      laborCategory: 'engineering | install | programming | management | service | other',
       dayFlow: 'true if "Next" steps through it during the field day',
+      mode: 'install | service | office | shop',
       active: 'false hides it from the picker',
     },
   },
@@ -279,6 +290,7 @@ route(
         sortOrder: sortOrder === undefined ? undefined : Math.round(sortOrder),
         laborCategory,
         dayFlow: bool(b.dayFlow),
+        mode: modeOf(b.mode),
         active: bool(b.active),
       },
     })
