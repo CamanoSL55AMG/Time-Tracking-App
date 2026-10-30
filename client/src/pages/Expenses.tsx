@@ -241,7 +241,7 @@ export function ExpenseDialog({
                 onChange={(_, v) => setJob(v)}
                 getOptionLabel={jobLabel}
                 isOptionEqualToValue={(a, b) => a.id === b.id}
-                groupBy={(j) => ({ project: 'Projects', service: 'Service calls', shop: 'Shop', other: 'Office' })[j.kind] ?? 'Other'}
+                groupBy={(j) => ({ project: 'Projects', service: 'Service calls', shop: 'Shop', repair: 'Repair tickets', other: 'Office' })[j.kind] ?? 'Other'}
                 renderInput={(params) => <TextField {...params} label="Job" placeholder="Search by name or number" />}
               />
             )}

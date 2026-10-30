@@ -192,6 +192,24 @@ and see their month with totals ("Pay me back" is what they paid themselves).
 Still to do from §8: expense reports as batches, export to payroll / accounts payable, and the
 expenses-per-job view in GED.
 
+## 4c. Bench Repair (built 2026-10-29)
+
+Sixth start-screen tile, for Electronic Repair at the shop bench. Units are checked in at
+**AV Inventory's Service Dept.** (`/service/new`), which opens the SD ticket and its invoice
+with the bench fee. AV Inventory pushes each ticket here as a job of kind **`repair`**
+(`PUT /jobs/by-ref/avinv/SD-000123`); Bench Repair mode offers only those, and other modes
+never show them.
+
+- Tasks (mode `bench`, labor category service): **Diagnose, Repair, Test / burn-in, Parts
+  lookup**. Switching task or ticket works like Shop; each ticket is an open item, so the
+  end-of-day close-out asks about it.
+- AV Inventory reads the hours on the ticket's job (`GET /reports/hours?jobId=`) and puts
+  them on the SD invoice as **Bench labor**: rounded up to the next 15 minutes × the bench
+  labor rate ($145/h), as a line separate from the hand-entered Repair labor (Art,
+  2026-10-29). When the ticket is picked up or closed, AV Inventory switches the job off.
+- The link needs a Logbook API key for AV Inventory with `jobs:read`, `jobs:write`,
+  `reports:read`. Details in AV Inventory's `docs/COUNTER-SERVICE.md`.
+
 ## 5. Architecture
 
 Same stack as Project Report so there is nothing new to learn or deploy.

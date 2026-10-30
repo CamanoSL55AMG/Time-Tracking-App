@@ -20,6 +20,27 @@ const theme = createTheme({
     button: { textTransform: 'none', fontWeight: 700 },
   },
   components: {
+    // Tooltips open ABOVE the control: the mouse pointer hangs down from its
+    // tip, so a tooltip below the control gets hidden under the hand cursor.
+    // Near the top of the window (no room above) they move to the side, and
+    // only go below as a last resort. They never block clicks.
+    MuiTooltip: {
+      defaultProps: {
+        placement: 'top',
+        enterDelay: 700,
+        enterNextDelay: 500,
+        leaveDelay: 0,
+        disableInteractive: true,
+        slotProps: {
+          popper: {
+            modifiers: [
+              { name: 'offset', options: { offset: [0, 10] } },
+              { name: 'flip', options: { fallbackPlacements: ['right', 'left', 'bottom'] } },
+            ],
+          },
+        },
+      },
+    },
     MuiButton: { defaultProps: { disableElevation: true } },
     MuiPaper: { defaultProps: { elevation: 0 }, styleOverrides: { root: { border: '1px solid #e2e5ea' } } },
   },

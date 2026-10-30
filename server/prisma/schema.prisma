@@ -70,7 +70,7 @@ model Person {
 model Job {
   id          String   @id @default(uuid())
   companyId   String
-  kind        String   @default("project") // project | service | shop | other (other = office, incl. the OVERHEAD job)
+  kind        String   @default("project") // project | service | shop | repair (an SD bench-repair ticket from AV Inventory) | other (office, incl. the OVERHEAD job)
   name        String
   code        String   @default("") // P-number, service ticket, etc.
   active      Boolean  @default(true)

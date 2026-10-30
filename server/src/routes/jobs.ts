@@ -9,7 +9,8 @@ import { MODES } from '../services/punch.js'
 
 export const jobsRouter = Router()
 
-const KINDS = ['project', 'service', 'shop', 'other']
+// repair = an Electronic Repair (SD) ticket from AV Inventory's Service Dept. check-in.
+const KINDS = ['project', 'service', 'shop', 'repair', 'other']
 
 const num = (v: unknown, field: string): number | null | undefined => {
   if (v === undefined) return undefined
@@ -21,7 +22,7 @@ const num = (v: unknown, field: string): number | null | undefined => {
 
 function jobFields(body: Record<string, unknown> | undefined) {
   const kind = body?.kind === undefined ? undefined : String(body.kind)
-  if (kind !== undefined && !KINDS.includes(kind)) throw badRequest('kind must be project, service, shop or other.', { field: 'kind' })
+  if (kind !== undefined && !KINDS.includes(kind)) throw badRequest('kind must be project, service, shop, repair or other.', { field: 'kind' })
   const radius = num(body?.siteRadiusM, 'siteRadiusM')
   return {
     kind,

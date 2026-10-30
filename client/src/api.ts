@@ -53,7 +53,8 @@ export interface Person {
 }
 export interface Job {
   id: string
-  kind: 'project' | 'service' | 'shop' | 'other'
+  /** repair = an Electronic Repair (SD) ticket from AV Inventory's check-in. */
+  kind: 'project' | 'service' | 'shop' | 'repair' | 'other'
   name: string
   code: string
   active: boolean
@@ -80,8 +81,8 @@ export interface Phase {
   /** Switched-off phases only come back from allPhases(). */
   active?: boolean
 }
-export type WorkMode = 'install' | 'service' | 'office' | 'shop' | 'cad'
-export const WORK_MODES: WorkMode[] = ['install', 'service', 'office', 'shop', 'cad']
+export type WorkMode = 'install' | 'service' | 'office' | 'shop' | 'cad' | 'bench'
+export const WORK_MODES: WorkMode[] = ['install', 'service', 'office', 'shop', 'cad', 'bench']
 
 /** A service ticket (Service) or task (Shop, Office, CAD) still open: paused when switched away from, closed by the person. */
 export interface OpenItem {

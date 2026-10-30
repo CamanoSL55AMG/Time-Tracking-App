@@ -15,11 +15,11 @@ export type PunchSource = 'app' | 'api' | 'lead'
 
 // Work modes on the start screen. Each phase belongs to one; "Next" walks the
 // field-day steps of the mode the person is in and never crosses into another.
-export const MODES = ['install', 'service', 'office', 'shop', 'cad'] as const
+export const MODES = ['install', 'service', 'office', 'shop', 'cad', 'bench'] as const
 export type Mode = (typeof MODES)[number]
 
-/** Modes whose work is tracked as open items (service tickets, shop / office / CAD tasks). */
-export const ITEM_MODES = new Set<string>(['service', 'shop', 'office', 'cad'])
+/** Modes whose work is tracked as open items (service tickets, shop / office / CAD / bench repair tasks). */
+export const ITEM_MODES = new Set<string>(['service', 'shop', 'office', 'cad', 'bench'])
 
 /** The job that holds time on the clock that is not charged to a project. */
 export const OVERHEAD_CODE = 'OVERHEAD'

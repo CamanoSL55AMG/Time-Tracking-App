@@ -234,7 +234,7 @@ function Jobs() {
             <TextField label="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
             <TextField label="Number or code" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} helperText="P-number, service ticket…" />
             <TextField select label="Kind" value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value })}>
-              {['project', 'service', 'shop', 'other'].map((k) => (
+              {['project', 'service', 'shop', 'repair', 'other'].map((k) => (
                 <MenuItem key={k} value={k}>
                   {k}
                 </MenuItem>

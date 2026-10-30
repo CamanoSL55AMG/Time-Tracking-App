@@ -8,7 +8,7 @@ import { PrismaClient } from '@prisma/client'
 const prisma = new PrismaClient()
 
 // mode = the work mode on the start screen the phase belongs to (install, service,
-// office, shop, cad). "Next" walks the field-day steps (dayFlow) of one mode only.
+// office, shop, cad, bench). "Next" walks the field-day steps (dayFlow) of one mode only.
 const PHASES = [
   // Install: the field day, walked with "Next".
   { key: 'shop-load', name: 'Shop — load vans', short: 'Load', atShop: true, mode: 'install' },
@@ -48,6 +48,12 @@ const PHASES = [
   { key: 'cad-revisions', name: 'CAD — Revisions / redlines', short: 'Revisions', atShop: false, laborCategory: 'engineering', dayFlow: false, mode: 'cad' },
   { key: 'cad-as-builts', name: 'CAD — As-built / record drawings', short: 'As-builts', atShop: false, laborCategory: 'engineering', dayFlow: false, mode: 'cad' },
   { key: 'cad-plotting', name: 'CAD — Plotting / printing', short: 'Plotting', atShop: false, laborCategory: 'engineering', dayFlow: false, mode: 'cad' },
+  // Bench Repair: Electronic Repair tickets checked in at AV Inventory's Service
+  // Dept. Every hour on the ticket posts to its SD invoice at the bench labor rate.
+  { key: 'bench-diagnose', name: 'Bench — Diagnose', short: 'Diagnose', atShop: true, laborCategory: 'service', dayFlow: false, mode: 'bench' },
+  { key: 'bench-repair', name: 'Bench — Repair', short: 'Repair', atShop: true, laborCategory: 'service', dayFlow: false, mode: 'bench' },
+  { key: 'bench-test', name: 'Bench — Test / burn-in', short: 'Test', atShop: true, laborCategory: 'service', dayFlow: false, mode: 'bench' },
+  { key: 'bench-parts', name: 'Bench — Parts lookup', short: 'Parts', atShop: true, laborCategory: 'service', dayFlow: false, mode: 'bench' },
 ]
 
 const OVERHEAD_CODE = 'OVERHEAD'

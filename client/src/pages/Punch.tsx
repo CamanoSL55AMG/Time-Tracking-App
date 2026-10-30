@@ -63,14 +63,16 @@ import { applyDecision, CloseOutDialog, DecisionBox, OpenItemsCard, type Decisio
 // With no signal, taps are kept on the phone and the screen carries on as if they
 // had gone through.
 
-type Group = 'Today' | 'Projects' | 'Service' | 'Shop' | 'Office'
-const KIND_GROUP: Record<Job['kind'], Group> = { project: 'Projects', service: 'Service', shop: 'Shop', other: 'Office' }
+type Group = 'Today' | 'Projects' | 'Service' | 'Shop' | 'Repair' | 'Office'
+const KIND_GROUP: Record<Job['kind'], Group> = { project: 'Projects', service: 'Service', shop: 'Shop', repair: 'Repair', other: 'Office' }
 const MODE_GROUPS: Record<WorkMode, Group[]> = {
   install: ['Today', 'Projects', 'Shop', 'Service', 'Office'],
   service: ['Today', 'Service', 'Shop', 'Projects', 'Office'],
   office: ['Today', 'Projects', 'Office', 'Service', 'Shop'],
   shop: ['Today', 'Projects', 'Shop', 'Service', 'Office'],
   cad: ['Today', 'Projects', 'Office', 'Service', 'Shop'],
+  // Bench Repair offers only the Electronic Repair tickets (see choices).
+  bench: ['Repair'],
 }
 interface Choice {
   job: Job
@@ -226,8 +228,11 @@ export default function PunchPage({ canCrew = false, meId = '', meName = '' }: {
       seen.add(a.job!.id)
       out.push({ job: a.job!, group: 'Today', hint: [a.shopTime && `${a.shopTime} shop`, a.title].filter(Boolean).join(' · ') })
     }
-    for (const j of jobs) if (!seen.has(j.id) && j.code !== OVERHEAD_CODE) out.push({ job: j, group: KIND_GROUP[j.kind] })
-    return out.sort((a, b) => order.indexOf(a.group) - order.indexOf(b.group) || labelOf(a.job).localeCompare(labelOf(b.job)))
+    for (const j of jobs) if (!seen.has(j.id) && j.code !== OVERHEAD_CODE) out.push({ job: j, group: KIND_GROUP[j.kind] ?? 'Office' })
+    // Repair tickets belong to Bench Repair, and Bench Repair offers nothing else.
+    const fits = (c: Choice) => (mode === 'bench' ? c.job.kind === 'repair' : c.job.kind !== 'repair')
+    const rank = (g: Group) => (order.indexOf(g) < 0 ? 99 : order.indexOf(g))
+    return out.filter(fits).sort((a, b) => rank(a.group) - rank(b.group) || labelOf(a.job).localeCompare(labelOf(b.job)))
   }, [state?.assignments, jobs, mode])
 
   // Suggest a phase that belongs to the mode: where the day is up to, else the
@@ -357,7 +362,7 @@ export default function PunchPage({ canCrew = false, meId = '', meName = '' }: {
   const flowPhases = modePhases.filter((p) => p.dayFlow !== false)
   const phaseIndex = open?.phase ? flowPhases.findIndex((p) => p.id === open.phase!.id) : -1
   const scheduledToday = (state.assignments ?? []).filter((a) => a.title)
-  const recent = (state.recentJobs ?? []).filter((j) => j.id !== open?.jobId).slice(0, 6)
+  const recent = (state.recentJobs ?? []).filter((j) => j.id !== open?.jobId && (mode === 'bench') === (j.kind === 'repair')).slice(0, 6)
   const shopJob = jobs.find((j) => j.kind === 'shop' && j.code === 'SHOP') ?? jobs.find((j) => j.kind === 'shop')
   const svcTravel = phaseByKey('svc-travel')
   const svcOnsite = phaseByKey('svc-onsite')
@@ -367,7 +372,7 @@ export default function PunchPage({ canCrew = false, meId = '', meName = '' }: {
   const back = !state.onClock ? state.lastSegment : null
   const pickedPhase = state.phases.find((p) => p.id === phaseId)
   const phaseLabel = mode === 'install' ? 'Phase' : 'Task'
-  const taskMode = mode === 'office' || mode === 'shop' || mode === 'cad'
+  const taskMode = mode === 'office' || mode === 'shop' || mode === 'cad' || mode === 'bench'
 
   return (
     <Stack spacing={2}>
@@ -524,7 +529,7 @@ export default function PunchPage({ canCrew = false, meId = '', meName = '' }: {
               options={choices}
               value={choice}
               onChange={(_, v) => setChoice(v)}
-              groupBy={(c) => (c.group === 'Today' ? "Today's schedule" : c.group)}
+              groupBy={(c) => (c.group === 'Today' ? "Today's schedule" : c.group === 'Repair' ? 'Repair tickets' : c.group)}
               getOptionLabel={(c) => labelOf(c.job)}
               isOptionEqualToValue={(a, b) => a.job.id === b.job.id}
               renderOption={(props, c) => {
@@ -545,11 +550,11 @@ export default function PunchPage({ canCrew = false, meId = '', meName = '' }: {
               renderInput={(params) => (
                 <TextField
                   {...params}
-                  label={mode === 'service' ? (switching ? 'Switch to call' : 'Service call') : switching ? 'Switch to job' : 'Job'}
-                  placeholder="Search by name or number"
+                  label={mode === 'service' ? (switching ? 'Switch to call' : 'Service call') : mode === 'bench' ? (switching ? 'Switch to repair ticket' : 'Repair ticket') : switching ? 'Switch to job' : 'Job'}
+                  placeholder={mode === 'bench' ? 'SD number, customer or unit' : 'Search by name or number'}
                 />
               )}
-              noOptionsText="No matching job"
+              noOptionsText={mode === 'bench' ? 'No open repair ticket matches. Units are checked in at the Service Dept. first.' : 'No matching job'}
             />
             <SiteLine job={choice?.job} />
             {mode !== 'service' && (
@@ -701,7 +706,7 @@ export default function PunchPage({ canCrew = false, meId = '', meName = '' }: {
 
           <Stack direction="row" spacing={1} sx={{ '& .MuiButton-root': { whiteSpace: 'nowrap', px: 1 } }}>
             <Button fullWidth size="large" variant="outlined" disabled={busy} onClick={() => setSwitching(true)}>
-              {mode === 'service' ? 'Switch call' : 'Switch job'}
+              {mode === 'service' ? 'Switch call' : mode === 'bench' ? 'Switch ticket' : 'Switch job'}
             </Button>
             {(mode === 'office' || mode === 'shop') && state.overhead && !onOverhead && (
               <Button
@@ -747,7 +752,7 @@ export default function PunchPage({ canCrew = false, meId = '', meName = '' }: {
               options={choices.filter((c) => c.job.id !== open?.jobId)}
               value={choice && choice.job.id !== open?.jobId ? choice : null}
               onChange={(_, v) => setChoice(v)}
-              groupBy={(c) => (c.group === 'Today' ? "Today's schedule" : c.group)}
+              groupBy={(c) => (c.group === 'Today' ? "Today's schedule" : c.group === 'Repair' ? 'Repair tickets' : c.group)}
               getOptionLabel={(c) => labelOf(c.job)}
               isOptionEqualToValue={(a, b) => a.job.id === b.job.id}
               renderInput={(params) => <TextField {...params} label="Next service call" placeholder="Search by name or ticket" />}

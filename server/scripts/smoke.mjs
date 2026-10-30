@@ -289,6 +289,27 @@ try {
   check('the week adds up after the changes', Math.abs((r.json?.hours ?? 0) - 13) < 0.02 && r.json?.requests?.length === 4, `hours=${r.json?.hours} requests=${r.json?.requests?.length}`)
 
   // Open items: Service / Shop / Office / CAD work stays open across switches until closed.
+  check('Bench Repair has its own tasks', allPhases.filter((p) => p.mode === 'bench').length >= 3, JSON.stringify(allPhases.filter((p) => p.mode === 'bench').map((p) => p.key)))
+  {
+    // An SD ticket from AV Inventory's check-in arrives as a repair job; bench time on
+    // it adds up per ticket, which AV Inventory reads back onto the SD invoice.
+    const sd = `SD-SMK${stamp}`
+    let b = await call('PUT', `/jobs/by-ref/avinv/${sd}`, { token: key, body: { name: `${sd} · Crown XLS 1502 · Smoke Customer`, code: sd, kind: 'repair' } })
+    check('an SD repair ticket can be pushed in as a repair job', b.status === 200 && b.json?.job?.kind === 'repair', JSON.stringify(b.json))
+    const sdJob = b.json?.job?.id
+    const benchEmail = `smoke-bench-${stamp}@example.invalid`
+    await call('PUT', `/people/by-email/${encodeURIComponent(benchEmail)}`, { token: key, body: { name: 'Smoke Bench Tech' } })
+    const benchAs = { 'X-Act-As': benchEmail }
+    b = await call('POST', '/punches/in', { token: key, headers: benchAs, body: { jobId: sdJob, phaseKey: 'bench-diagnose', at: minutesAgo(70) } })
+    check('bench: clock in to diagnose a repair ticket', b.status === 200 && b.json?.punch?.phase?.key === 'bench-diagnose' && Boolean(b.json?.punch?.workItemId), JSON.stringify(b.json?.error ?? b.json?.punch ?? ''))
+    b = await call('POST', '/punches/next', { token: key, headers: benchAs, body: { phaseKey: 'bench-repair', at: minutesAgo(40) } })
+    check('bench: switch task to repair on the same ticket', b.status === 200 && b.json?.punch?.phase?.key === 'bench-repair')
+    await call('POST', '/punches/out', { token: key, headers: benchAs, body: { at: minutesAgo(5) } })
+    b = await call('GET', `/reports/hours?groupBy=job,person&jobId=${sdJob}&from=2020-01-01&to=2099-12-31`, { token: key })
+    check('bench hours on the ticket add up for AV Inventory to read', b.status === 200 && Math.abs((b.json?.totalHours ?? 0) - 65 / 60) < 0.02, JSON.stringify(b.json))
+    await call('PUT', `/jobs/by-ref/avinv/${sd}`, { token: key, body: { active: false } })
+    await call('PUT', `/people/by-email/${encodeURIComponent(benchEmail)}`, { token: key, body: { active: false } })
+  }
   check('the CAD team has its own tasks', allPhases.filter((p) => p.mode === 'cad').length >= 5, JSON.stringify(allPhases.filter((p) => p.mode === 'cad').map((p) => p.key)))
   const officeTask = allPhases.find((p) => p.mode === 'office' && p.key !== 'admin-overhead')
   r = await call('PUT', `/jobs/by-ref/smoke/${stamp}-2`, { token: key, body: { name: `Smoke second job ${stamp}`, kind: 'project', code: `SMK3-${stamp}` } })
@@ -397,7 +418,7 @@ try {
   // stays inside the mode. A service call: Drive → On site, billed by the rule.
   check(
     'every phase names its work mode',
-    allPhases.every((p) => ['install', 'service', 'office', 'shop'].includes(p.mode)),
+    allPhases.every((p) => ['install', 'service', 'office', 'shop', 'cad', 'bench'].includes(p.mode)),
     JSON.stringify(allPhases.map((p) => [p.key, p.mode])),
   )
   const svcEmail = `smoke-svc-${stamp}@example.invalid`

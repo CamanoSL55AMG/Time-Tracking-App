@@ -1,7 +1,7 @@
 import { Box, ButtonBase, Paper, Stack, Typography } from '@mui/material'
 import { fmtElapsed, fmtTime, type Punch, type WorkMode } from '../api'
 
-// The start screen after sign-in: Install, Service, Office, Shop or CAD. The choice
+// The start screen after sign-in: Install, Service, Office, Shop, CAD or Bench Repair. The choice
 // decides which phases and jobs the clock screen offers first. It is kept on this
 // phone for the day; once on the clock, the open segment's phase decides.
 
@@ -11,6 +11,7 @@ export const MODE_INFO: Record<WorkMode, { label: string; blurb: string; color: 
   office: { label: 'Office', blurb: 'One clock-in, switch between projects all day. Engineering, PM, admin.', color: '#6a1b9a' },
   shop: { label: 'Shop', blurb: 'Shop tasks against a project: UCI and rack building, prep, receiving.', color: '#e65100' },
   cad: { label: 'CAD', blurb: 'Drafting against a project: design, line diagrams, racks, submittals, as-builts.', color: '#00838f' },
+  bench: { label: 'Bench Repair', blurb: 'Electronic Repair on a checked-in unit: diagnose, repair, test. Hours post to its SD invoice.', color: '#ad1457' },
 }
 
 const MODE_KEY = 'tt_mode'
