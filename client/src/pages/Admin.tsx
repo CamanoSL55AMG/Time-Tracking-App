@@ -158,7 +158,7 @@ function People({ isAdmin }: { isAdmin: boolean }) {
                 autoComplete="new-password"
                 value={form.password}
                 onChange={(e) => setForm({ ...form, password: e.target.value })}
-                helperText="At least 10 characters. Leave blank if they sign in from GED"
+                helperText="At least 10 characters. Leave blank if they sign in from AIC Terminal"
               />
             )}
           </Stack>
@@ -661,7 +661,7 @@ function Keys() {
         <DialogTitle>Create key</DialogTitle>
         <DialogContent>
           <Stack spacing={1} sx={{ pt: 1 }}>
-            <TextField label="Which app is this for?" placeholder="GED" value={name} onChange={(e) => setName(e.target.value)} />
+            <TextField label="Which app is this for?" placeholder="AIC Terminal" value={name} onChange={(e) => setName(e.target.value)} />
             <Typography variant="subtitle2" sx={{ pt: 1 }}>
               What it may do
             </Typography>
