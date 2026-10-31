@@ -1,10 +1,10 @@
-// Connect GED to Time Tracking in one step:  npm run link-ged
+// Connect AIC Terminal to Time Tracking in one step:  npm run link-ged
 //
-// Creates an integration key for GED (revoking any earlier GED key) and writes it,
-// with the Time Tracking addresses, into GED's server/.env. The key is never
-// printed. Restart GED's server afterwards so it picks the settings up.
+// Creates an integration key for AIC Terminal (revoking any earlier AIC Terminal key) and writes it,
+// with the Time Tracking addresses, into AIC Terminal's server/.env. The key is never
+// printed. Restart AIC Terminal's server afterwards so it picks the settings up.
 //
-// Options:  --ged <path to GED server/.env>   (default ../../google-ecosystem-dashboard/server/.env)
+// Options:  --ged <path to AIC Terminal server/.env>   (default ../../google-ecosystem-dashboard/server/.env)
 //           --api <API base URL>              (default http://localhost:<PORT>/api/v1)
 //           --app <app URL techs open>        (default http://localhost:5195)
 import 'dotenv/config'

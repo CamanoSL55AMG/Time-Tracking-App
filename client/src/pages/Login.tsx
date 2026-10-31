@@ -107,7 +107,7 @@ export default function Login({ notice, onSignedIn }: { notice?: string; onSigne
             </Box>
             {dashboard && (
               <>
-                {/* One sign-in for the Dashboard and every add-on (GED's DASHBOARD-SIGN-IN.md) */}
+                {/* One sign-in for the Dashboard and every add-on (AIC Terminal's DASHBOARD-SIGN-IN.md) */}
                 <Button variant="contained" size="large" href="/api/v1/auth/dashboard/start" sx={{ py: 1.25 }}>
                   Sign in with Dashboard
                 </Button>

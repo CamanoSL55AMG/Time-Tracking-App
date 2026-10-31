@@ -15,7 +15,7 @@ cd client && npm run build      # tsc -b && vite build -> server/public
 ```
 
 After any change to `server/prisma/schema.prisma`: `npx prisma db push` (same convention
-as GED; do not use `prisma migrate dev`).
+as AIC Terminal; do not use `prisma migrate dev`).
 
 ## Rules
 

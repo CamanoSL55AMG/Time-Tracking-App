@@ -157,7 +157,7 @@ model Punch {
   @@index([companyId, updatedAt])
 }
 
-// Who is scheduled on which job on a given day. Pushed in by GED from the shared
+// Who is scheduled on which job on a given day. Pushed in by AIC Terminal from the shared
 // job calendar; pre-selects the job when a tech clocks in. A push for a date
 // replaces that date's rows from the same source.
 model Assignment {
@@ -307,7 +307,7 @@ model IdempotencyKey {
   @@unique([companyId, key])
 }
 
-// One-click sign-in tokens from GED are single use.
+// One-click sign-in tokens from AIC Terminal are single use.
 model SsoNonce {
   jti    String   @id
   usedAt DateTime @default(now())

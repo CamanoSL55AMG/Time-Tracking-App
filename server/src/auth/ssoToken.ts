@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from 'node:crypto'
 
-// One-click sign-in token shared with GED and the other add-ons:
+// One-click sign-in token shared with AIC Terminal and the other add-ons:
 //   v1.<base64url(json)>.<base64url(hmac-sha256("v1.<body>", ADDON_SSO_SECRET))>
 // Payload: { v, aud, email, name, iat, exp, jti }. Lives 60 seconds, single use.
 

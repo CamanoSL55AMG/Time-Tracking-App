@@ -58,7 +58,7 @@ export interface Job {
   name: string
   code: string
   active: boolean
-  /** Job site, sent across from Jetbuilt by GED. Empty when unknown. */
+  /** Job site, sent across from Jetbuilt by AIC Terminal. Empty when unknown. */
   siteAddress?: string
   siteLat?: number | null
   siteLng?: number | null

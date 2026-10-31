@@ -82,7 +82,7 @@ export default function App() {
   useEffect(() => {
     setSignedOutHandler(() => setPerson(null))
     const boot = async () => {
-      // Arriving from GED with a one-click sign-in link: /sso?token=…
+      // Arriving from AIC Terminal with a one-click sign-in link: /sso?token=…
       // Back from "Sign in with Dashboard": /sso#session=… (the session itself),
       // or /?signin_error=… when the Dashboard said no.
       const url = new URL(window.location.href)

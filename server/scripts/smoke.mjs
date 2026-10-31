@@ -363,7 +363,7 @@ try {
   r = await call('POST', '/crew/out', { token: tech, body: { personIds: [crewId] } })
   check('a tech cannot punch a crew', r.status === 403)
 
-  // One-click sign-in from GED, when the shared secret is configured.
+  // One-click sign-in from AIC Terminal, when the shared secret is configured.
   const sso = process.env.ADDON_SSO_SECRET
   if (sso) {
     const sign = (payload) => {
@@ -400,7 +400,7 @@ try {
   r = await call('GET', '/openapi.json')
   check('API describes itself', r.status === 200 && Boolean(r.json?.paths?.['/punches/in']?.post))
 
-  // Sign in with the Dashboard (GED's sign-in service), when it is set up here.
+  // Sign in with the Dashboard (AIC Terminal's sign-in service), when it is set up here.
   r = await call('GET', '/auth/config')
   check('sign-in page knows whether "Sign in with Dashboard" is offered', r.status === 200 && typeof r.json?.dashboard === 'boolean', JSON.stringify(r.json))
   if (r.json?.dashboard) {

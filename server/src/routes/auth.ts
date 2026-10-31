@@ -87,7 +87,7 @@ route(
 // Browser navigations, not JSON calls: start sends the browser to the Dashboard,
 // the Dashboard sends it back to callback, and callback hands the app a session.
 
-// GED roles that map onto ours for someone signing in here for the first time.
+// AIC Terminal roles that map onto ours for someone signing in here for the first time.
 const ROLE_FROM_DASHBOARD: Record<string, Person['role']> = { lead: 'lead', technician: 'tech' }
 
 route(
