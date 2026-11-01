@@ -167,7 +167,8 @@ export default function PunchPage({ canCrew = false, meId = '', meName = '' }: {
   }
 
   const punchCrew = async (kind: PunchKind, sent: boolean, next: DayState, job?: Job) => {
-    if (!crewOn || !crewIds.length) return
+    // Bench Repair is one person at the bench: no crew punch there.
+    if (!crewOn || !crewIds.length || mode === 'bench') return
     if (!sent) {
       setCrewMsg({ severity: 'warning', text: 'No signal, so your crew was not punched. Punch them once the signal is back.' })
       return
@@ -511,7 +512,8 @@ export default function PunchPage({ canCrew = false, meId = '', meName = '' }: {
         </Button>
       )}
 
-      <OpenItemsCard items={openItems} busy={busy} onResume={resume} />
+      {/* Bench Repair shows only its own repair tickets; Service calls and other tasks stay off the bench screen. */}
+      <OpenItemsCard items={mode === 'bench' ? openItems.filter((i) => i.mode === 'bench') : openItems} busy={busy} onResume={resume} />
 
       {picking && (
         <Paper sx={{ p: 2 }}>
@@ -807,7 +809,7 @@ export default function PunchPage({ canCrew = false, meId = '', meName = '' }: {
         </Alert>
       )}
 
-      {canCrew && (
+      {canCrew && mode !== 'bench' && (
         <Paper sx={{ p: 1.5 }}>
           <Stack direction="row" alignItems="center" spacing={1}>
             <FormControlLabel
@@ -908,9 +910,11 @@ export default function PunchPage({ canCrew = false, meId = '', meName = '' }: {
         </Paper>
       )}
 
-      <Typography variant="caption" color="text.secondary" textAlign="center">
-        Your location is recorded only at the moment you punch.
-      </Typography>
+      {mode !== 'bench' && (
+        <Typography variant="caption" color="text.secondary" textAlign="center">
+          Your location is recorded only at the moment you punch.
+        </Typography>
+      )}
     </Stack>
   )
 }
