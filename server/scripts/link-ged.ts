@@ -4,7 +4,7 @@
 // with the Time Tracking addresses, into AIC Terminal's server/.env. The key is never
 // printed. Restart AIC Terminal's server afterwards so it picks the settings up.
 //
-// Options:  --ged <path to AIC Terminal server/.env>   (default ../../google-ecosystem-dashboard/server/.env)
+// Options:  --aic-terminal <path to AIC Terminal server/.env>  (--ged still works)   (default ../../google-ecosystem-dashboard/server/.env)
 //           --api <API base URL>              (default http://localhost:<PORT>/api/v1)
 //           --app <app URL techs open>        (default http://localhost:5195)
 import 'dotenv/config'
@@ -18,7 +18,7 @@ const arg = (name: string, fallback: string) => {
   return i > 0 && process.argv[i + 1] ? process.argv[i + 1] : fallback
 }
 
-const gedEnv = path.resolve(arg('ged', '../../google-ecosystem-dashboard/server/.env'))
+const gedEnv = path.resolve(arg('aic-terminal', arg('ged', '../../google-ecosystem-dashboard/server/.env')))
 const apiUrl = arg('api', `http://localhost:${process.env.PORT || 5400}/api/v1`)
 const appUrl = arg('app', 'http://localhost:5195')
 const SCOPES = ['punch:read', 'punch:write:any', 'jobs:read', 'jobs:write', 'people:read', 'people:write', 'reports:read', 'events:read', 'assignments:write']
@@ -39,7 +39,7 @@ function setVars(file: string, vars: Record<string, string>) {
 }
 
 async function main() {
-  if (!fs.existsSync(gedEnv)) throw new Error(`GED settings not found at ${gedEnv}. Pass --ged <path to server/.env>.`)
+  if (!fs.existsSync(gedEnv)) throw new Error(`AIC Terminal settings not found at ${gedEnv}. Pass --aic-terminal <path to server/.env>.`)
   const prisma = new PrismaClient()
   try {
     const companies = await prisma.company.findMany({ take: 2 })

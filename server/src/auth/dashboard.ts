@@ -69,6 +69,8 @@ export async function startUrl(res: Response): Promise<string> {
   setStateCookie(res, { verifier, state, nonce })
   const url = oidc.buildAuthorizationUrl(conf, {
     redirect_uri: callbackUrl(),
+    // 'ged' is the sign-in scope's old name; the service also answers to 'aic_terminal'.
+    // Switch this once every Dashboard in use has that scope (tier 3 of the rename).
     scope: 'openid email profile ged',
     code_challenge: await oidc.calculatePKCECodeChallenge(verifier),
     code_challenge_method: 'S256',
