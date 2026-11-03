@@ -140,6 +140,8 @@ export interface DayState {
   lastJob?: Job | null
   /** Jobs worked in the last two weeks, newest first: the quick-switch list. */
   recentJobs?: Job[]
+  /** Bench Repair: clock in / clock out only onto the BENCH job, or the full ticket version. */
+  bench?: { clockOnly: boolean; job: Job | null; phase: Phase | null }
   /** "Stop project" while staying on the clock charges time here. */
   overhead?: { job: Job; phase: Phase | null } | null
   /** Off the clock: the last segment today, for "Back to …" after a break. */
@@ -414,6 +416,8 @@ export const api = {
     http.patch<{ phase: Phase }>(`/phases/${id}`, p).then((r) => r.data.phase),
 
   board: () => http.get<Board>('/board').then((r) => r.data),
+  benchSettings: () => http.get<{ clockOnly: boolean }>('/company/bench-settings').then((r) => r.data),
+  saveBenchSettings: (clockOnly: boolean) => http.patch<{ clockOnly: boolean }>('/company/bench-settings', { clockOnly }).then((r) => r.data),
 
   closeItem: (id: string, resolution: string) => http.post<{ item: OpenItem }>(`/me/items/${id}/close`, { resolution }).then((r) => r.data.item),
   keepItem: (id: string, reason: string) => http.post<{ item: OpenItem }>(`/me/items/${id}/keep`, { reason }).then((r) => r.data.item),

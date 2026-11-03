@@ -11,7 +11,7 @@ export const MODE_INFO: Record<WorkMode, { label: string; blurb: string; color: 
   office: { label: 'Office', blurb: 'One clock-in, switch between projects all day. Engineering, PM, admin.', color: '#6a1b9a' },
   shop: { label: 'Shop', blurb: 'Shop tasks against a project: UCI and rack building, prep, receiving.', color: '#e65100' },
   cad: { label: 'CAD', blurb: 'Drafting against a project: design, line diagrams, racks, submittals, as-builts.', color: '#00838f' },
-  bench: { label: 'Bench Repair', blurb: 'Electronic Repair on a checked-in unit: diagnose, repair, test. Hours post to its SD invoice.', color: '#ad1457' },
+  bench: { label: 'Bench Repair', blurb: 'Electronic Repair at the bench: clock in, clock out.', color: '#ad1457' },
 }
 
 const MODE_KEY = 'tt_mode'

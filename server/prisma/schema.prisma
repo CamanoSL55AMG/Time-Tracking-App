@@ -32,6 +32,10 @@ model Company {
   // category's account (Morgan Sound: 6-1140 Employee Business Expense). Mileage keeps
   // its category's account. Null = not set yet (the seed fills it); "" = off.
   reimbursementAccountCode String?
+  // Bench Repair mode is a plain clock in / clock out onto the BENCH job (Zach's team,
+  // 2026-11-02). Off = the full version: pick the SD repair ticket and a task, with
+  // the hours going to that ticket's SD invoice in AV Inventory.
+  benchClockOnly           Boolean @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 

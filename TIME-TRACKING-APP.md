@@ -192,7 +192,16 @@ and see their month with totals ("Pay me back" is what they paid themselves).
 Still to do from §8: expense reports as batches, export to payroll / accounts payable, and the
 expenses-per-job view in GED.
 
-## 4c. Bench Repair (built 2026-10-29)
+## 4c. Bench Repair (built 2026-10-29; clock in / clock out only since 2026-11-02)
+
+**Current setting (Zach, 2026-11-02): his team just clocks in and out.** With
+`Company.benchClockOnly` on (the default), Bench Repair is one Clock In and one Clock Out
+button. Time goes to the **Bench Repair** job (code `BENCH`, phase `bench-repair`); no ticket,
+task, notes, expenses or open items. Switch: Manage → Phases, "Bench Repair: clock in and
+clock out only" (`GET/PATCH /company/bench-settings`). Everything below is the full version,
+kept in the code and used only when the switch is off.
+
+
 
 Sixth start-screen tile, for Electronic Repair at the shop bench. Units are checked in at
 **AV Inventory's Service Dept.** (`/service/new`), which opens the SD ticket and its invoice

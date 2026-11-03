@@ -23,6 +23,9 @@ export const ITEM_MODES = new Set<string>(['service', 'shop', 'office', 'cad', '
 
 /** The job that holds time on the clock that is not charged to a project. */
 export const OVERHEAD_CODE = 'OVERHEAD'
+/** The one job Bench Repair clocks onto when it is clock in / clock out only. */
+export const BENCH_CODE = 'BENCH'
+const BENCH_PHASE = 'bench-repair'
 const OVERHEAD_PHASE = 'admin-overhead'
 
 export interface PunchInput {
@@ -147,7 +150,7 @@ async function openSegment(
   // until the person closes it. The overhead job and the drive back to the shop are
   // not items.
   let workItemId: string | null = null
-  if (phase && ITEM_MODES.has(phase.mode) && job.code !== OVERHEAD_CODE && !(phase.mode === 'service' && job.kind === 'shop')) {
+  if (phase && ITEM_MODES.has(phase.mode) && job.code !== OVERHEAD_CODE && job.code !== BENCH_CODE && !(phase.mode === 'service' && job.kind === 'shop')) {
     const note = (input.notes ?? '').trim()
     const item = await tx.workItem.findFirst({ where: { personId: person.id, jobId: job.id, mode: phase.mode, status: 'open' } })
     if (item) {
@@ -444,7 +447,7 @@ export async function personState(person: Person) {
   const company = await prisma.company.findUniqueOrThrow({ where: { id: person.companyId } })
   const now = new Date()
   const { start, end, date } = dayBounds(now, company.timezone)
-  const [open, today, phases, assignments, lastPunch, recent, overheadJob] = await Promise.all([
+  const [open, today, phases, assignments, lastPunch, recent, overheadJob, benchJob] = await Promise.all([
     prisma.punch.findFirst({ where: { personId: person.id, clockOut: null }, include }),
     prisma.punch.findMany({
       where: { personId: person.id, clockIn: { gte: start, lt: end } },
@@ -471,6 +474,7 @@ export async function personState(person: Person) {
       include: { job: true },
     }),
     prisma.job.findFirst({ where: { companyId: person.companyId, code: OVERHEAD_CODE, active: true } }),
+    prisma.job.findFirst({ where: { companyId: person.companyId, code: BENCH_CODE, active: true } }),
   ])
 
   const byJob = new Map<string, { jobId: string; jobName: string; hours: number }>()
@@ -532,6 +536,12 @@ export async function personState(person: Person) {
     openItems: await openItemsFor(person.id, open?.workItemId ?? null, now),
     // "Stop project" without clocking out charges the time here.
     overhead: overheadJob ? { job: overheadJob, phase: overheadPhase } : null,
+    // Bench Repair: clock in / clock out only onto the BENCH job, or the full ticket version.
+    bench: {
+      clockOnly: company.benchClockOnly,
+      job: benchJob,
+      phase: phases.find((ph) => ph.key === BENCH_PHASE) ?? null,
+    },
     // The last segment today, for "Back to …" after a break.
     lastSegment: open ? null : lastToday,
     asOf: now,

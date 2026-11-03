@@ -1,0 +1,22 @@
+# systemd unit for Logbook on the shop server (API + built app, one port).
+# deploy/install-service.sh fills __USER__ / __APP__ and installs this.
+[Unit]
+Description=Logbook time tracking (Express + Prisma + web app, port 5400)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__APP__/server
+# .env is read by dotenv from the working directory; these override it.
+Environment=NODE_ENV=production
+Environment=PORT=5400
+ExecStart=/usr/bin/node dist/main.js
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
