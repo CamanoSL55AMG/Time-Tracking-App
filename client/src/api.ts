@@ -53,8 +53,8 @@ export interface Person {
 }
 export interface Job {
   id: string
-  /** repair = an Electronic Repair (SD) ticket from AV Inventory's check-in. */
-  kind: 'project' | 'service' | 'shop' | 'repair' | 'other'
+  /** repair = an Electronic Repair (SD) ticket from AV Inventory's check-in; visit = a pre-sale site visit (not billed). */
+  kind: 'project' | 'service' | 'visit' | 'shop' | 'repair' | 'other'
   name: string
   code: string
   active: boolean
@@ -64,6 +64,26 @@ export interface Job {
   siteLng?: number | null
   siteRadiusM?: number | null
   refs?: { system: string; externalId: string }[]
+  /** Client and who to call there (always set for clients a tech added). */
+  clientName?: string
+  contactName?: string
+  contactPhone?: string
+  contactEmail?: string
+  /** Set when a tech added this client from the punch screen. */
+  addedById?: string | null
+  addedBy?: { id: string; name: string } | null
+  /** When the office checked a tech-added client. */
+  reviewedAt?: string | null
+  createdAt?: string
+}
+export interface NewClient {
+  kind: 'service' | 'visit'
+  clientName: string
+  siteAddress: string
+  contactName: string
+  contactPhone: string
+  contactEmail: string
+  note?: string
 }
 export interface Phase {
   id: string
@@ -407,6 +427,12 @@ export const api = {
   allJobs: () => http.get<{ data: Job[] }>('/jobs', { params: { active: 'all', limit: 500 } }).then((r) => r.data.data),
   addJob: (job: { name: string; kind: string; code: string }) => http.post<{ job: Job }>('/jobs', job).then((r) => r.data.job),
   setJobActive: (id: string, active: boolean) => http.patch<{ job: Job }>(`/jobs/${id}`, { active }).then((r) => r.data.job),
+  /** A tech adds a Service Call or Site Visit for a client not in the list yet. */
+  addClient: (c: NewClient) => http.post<{ created: boolean; job: Job }>('/me/jobs', c).then((r) => r.data),
+  /** Clients techs added that the office has not checked yet ("all" for every one). */
+  addedJobs: (which: 'review' | 'all' = 'review') => http.get<{ data: Job[] }>('/jobs', { params: { added: which, active: 'all', limit: 500 } }).then((r) => r.data.data),
+  updateJob: (id: string, patch: Partial<Pick<Job, 'name' | 'code' | 'kind' | 'active' | 'siteAddress' | 'clientName' | 'contactName' | 'contactPhone' | 'contactEmail'>> & { reviewed?: boolean }) =>
+    http.patch<{ job: Job }>(`/jobs/${id}`, patch).then((r) => r.data.job),
 
   phases: () => http.get<{ data: Phase[] }>('/phases').then((r) => r.data.data),
   allPhases: () => http.get<{ data: Phase[] }>('/phases', { params: { all: 'true' } }).then((r) => r.data.data),

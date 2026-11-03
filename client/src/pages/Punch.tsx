@@ -45,6 +45,7 @@ import {
 } from '../api'
 import { DayTimeline, jobColor, MODE_INFO, ModePicker, readMode, writeMode } from './modes'
 import { ExpenseDialog } from './Expenses'
+import { ContactLine, NewClientDialog } from './NewClient'
 import { applyDecision, CloseOutDialog, DecisionBox, OpenItemsCard, type Decision } from './items'
 
 // The clock screen. After sign-in the person picks what the day is: Install,
@@ -63,14 +64,16 @@ import { applyDecision, CloseOutDialog, DecisionBox, OpenItemsCard, type Decisio
 // With no signal, taps are kept on the phone and the screen carries on as if they
 // had gone through.
 
-type Group = 'Today' | 'Projects' | 'Service' | 'Shop' | 'Repair' | 'Office'
-const KIND_GROUP: Record<Job['kind'], Group> = { project: 'Projects', service: 'Service', shop: 'Shop', repair: 'Repair', other: 'Office' }
+type Group = 'Today' | 'Projects' | 'Service' | 'Visits' | 'Shop' | 'Repair' | 'Office'
+const KIND_GROUP: Record<Job['kind'], Group> = { project: 'Projects', service: 'Service', visit: 'Visits', shop: 'Shop', repair: 'Repair', other: 'Office' }
+const GROUP_LABEL: Partial<Record<Group, string>> = { Today: "Today's schedule", Service: 'Service calls', Visits: 'Site visits', Repair: 'Repair tickets' }
+const groupLabel = (g: Group) => GROUP_LABEL[g] ?? g
 const MODE_GROUPS: Record<WorkMode, Group[]> = {
-  install: ['Today', 'Projects', 'Shop', 'Service', 'Office'],
-  service: ['Today', 'Service', 'Shop', 'Projects', 'Office'],
-  office: ['Today', 'Projects', 'Office', 'Service', 'Shop'],
-  shop: ['Today', 'Projects', 'Shop', 'Service', 'Office'],
-  cad: ['Today', 'Projects', 'Office', 'Service', 'Shop'],
+  install: ['Today', 'Projects', 'Shop', 'Service', 'Visits', 'Office'],
+  service: ['Today', 'Service', 'Visits', 'Shop', 'Projects', 'Office'],
+  office: ['Today', 'Projects', 'Office', 'Visits', 'Service', 'Shop'],
+  shop: ['Today', 'Projects', 'Shop', 'Service', 'Visits', 'Office'],
+  cad: ['Today', 'Projects', 'Office', 'Visits', 'Service', 'Shop'],
   // Bench Repair offers only the Electronic Repair tickets (see choices).
   bench: ['Repair'],
 }
@@ -134,6 +137,8 @@ export default function PunchPage({ canCrew = false, meId = '', meName = '' }: {
   // The work mode picked on the start screen today (null = show the start screen).
   const [picked, setPicked] = useState<WorkMode | null>(() => readMode())
   const [choosingMode, setChoosingMode] = useState(false)
+  // A tech adding a client that is not in the list (Service Call or Site Visit).
+  const [addingClient, setAddingClient] = useState(false)
   // A mode picked with "Change" while still on the clock wins over the open punch's mode,
   // so the screen moves to the new mode and the next switch lands there.
   const [modeOverride, setModeOverride] = useState<WorkMode | null>(null)
@@ -508,6 +513,7 @@ export default function PunchPage({ canCrew = false, meId = '', meName = '' }: {
                 </Typography>
               )}
               <SiteLine job={open.job} />
+              <ContactLine job={open.job} />
             </Box>
           ) : (
             <Typography variant="h5" sx={{ fontWeight: 700 }}>
@@ -607,7 +613,7 @@ export default function PunchPage({ canCrew = false, meId = '', meName = '' }: {
               options={choices}
               value={choice}
               onChange={(_, v) => setChoice(v)}
-              groupBy={(c) => (c.group === 'Today' ? "Today's schedule" : c.group === 'Repair' ? 'Repair tickets' : c.group)}
+              groupBy={(c) => groupLabel(c.group)}
               getOptionLabel={(c) => labelOf(c.job)}
               isOptionEqualToValue={(a, b) => a.job.id === b.job.id}
               renderOption={(props, c) => {
@@ -628,13 +634,19 @@ export default function PunchPage({ canCrew = false, meId = '', meName = '' }: {
               renderInput={(params) => (
                 <TextField
                   {...params}
-                  label={mode === 'service' ? (switching ? 'Switch to call' : 'Service call') : mode === 'bench' ? (switching ? 'Switch to repair ticket' : 'Repair ticket') : switching ? 'Switch to job' : 'Job'}
+                  label={mode === 'service' ? (switching ? 'Switch to call or visit' : 'Service call or site visit') : mode === 'bench' ? (switching ? 'Switch to repair ticket' : 'Repair ticket') : switching ? 'Switch to job' : 'Job'}
                   placeholder={mode === 'bench' ? 'SD number, customer or unit' : 'Search by name or number'}
                 />
               )}
               noOptionsText={mode === 'bench' ? 'No open repair ticket matches. Units are checked in at the Service Dept. first.' : 'No matching job'}
             />
             <SiteLine job={choice?.job} />
+            <ContactLine job={choice?.job} />
+            {mode === 'service' && (
+              <Button size="small" onClick={() => setAddingClient(true)} disabled={busy} sx={{ alignSelf: 'flex-start' }}>
+                + Add new client
+              </Button>
+            )}
             {mode !== 'service' && (
               <TextField select label={phaseLabel} value={modePhases.some((p) => p.id === phaseId) ? phaseId : ''} onChange={(e) => setPhaseId(e.target.value)}>
                 {modePhases.map((p) => (
@@ -812,6 +824,17 @@ export default function PunchPage({ canCrew = false, meId = '', meName = '' }: {
         </Stack>
       )}
 
+      <NewClientDialog
+        open={addingClient}
+        onClose={() => setAddingClient(false)}
+        onAdded={(job) => {
+          setJobs((js) => (js.some((j) => j.id === job.id) ? js : [...js, job]))
+          setChoice({ job, group: KIND_GROUP[job.kind] ?? 'Service' })
+          setAddingClient(false)
+          // On the clock: open the picker so the next tap moves the clock onto the new item.
+          if (state?.onClock && !completing) setSwitching(true)
+        }}
+      />
       <Dialog open={completing} onClose={() => setCompleting(false)} fullWidth maxWidth="xs">
         <DialogTitle>Call complete. Where to next?</DialogTitle>
         <DialogContent dividers>
@@ -830,11 +853,15 @@ export default function PunchPage({ canCrew = false, meId = '', meName = '' }: {
               options={choices.filter((c) => c.job.id !== open?.jobId)}
               value={choice && choice.job.id !== open?.jobId ? choice : null}
               onChange={(_, v) => setChoice(v)}
-              groupBy={(c) => (c.group === 'Today' ? "Today's schedule" : c.group === 'Repair' ? 'Repair tickets' : c.group)}
+              groupBy={(c) => groupLabel(c.group)}
               getOptionLabel={(c) => labelOf(c.job)}
               isOptionEqualToValue={(a, b) => a.job.id === b.job.id}
-              renderInput={(params) => <TextField {...params} label="Next service call" placeholder="Search by name or ticket" />}
+              renderInput={(params) => <TextField {...params} label="Next call or site visit" placeholder="Search by name or ticket" />}
             />
+            <ContactLine job={choice && choice.job.id !== open?.jobId ? choice.job : null} />
+            <Button size="small" onClick={() => setAddingClient(true)} disabled={busy} sx={{ alignSelf: 'flex-start' }}>
+              + Add new client
+            </Button>
             <Button
               size="large"
               variant="contained"

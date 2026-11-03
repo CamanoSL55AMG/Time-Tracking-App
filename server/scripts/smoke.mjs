@@ -306,6 +306,55 @@ try {
   r = await call('GET', `/timesheets/${crewId}?week=${lastWeek}`, { token: admin })
   check('the week adds up after the changes', Math.abs((r.json?.hours ?? 0) - 13) < 0.02 && r.json?.requests?.length === 4, `hours=${r.json?.hours} requests=${r.json?.requests?.length}`)
 
+  // A tech adds a new client in the field (Service Call or Site Visit), then switches onto it.
+  {
+    const techEmail = `smoke-addclient-${stamp}@example.invalid`
+    await call('PUT', `/people/by-email/${encodeURIComponent(techEmail)}`, { token: key, body: { name: 'Smoke Add Client' } })
+    const as = { 'X-Act-As': techEmail }
+    const client = { kind: 'service', clientName: `Smoke Client ${stamp}`, siteAddress: '123 Main St, Lynnwood', contactName: 'Pat Doe', contactPhone: '(425) 555-0100', contactEmail: 'Pat@Example.com' }
+    let r = await call('POST', '/me/jobs', { token: key, headers: as, body: { ...client, contactEmail: '' } })
+    check('adding a client needs an email', r.status === 400 && r.json?.error?.details?.field === 'contactEmail', JSON.stringify(r.json?.error ?? ''))
+    r = await call('POST', '/me/jobs', { token: key, headers: as, body: { ...client, contactPhone: '555-0100' } })
+    check('adding a client needs a phone with area code', r.status === 400 && r.json?.error?.details?.field === 'contactPhone')
+    r = await call('POST', '/me/jobs', { token: key, headers: as, body: { ...client, contactName: ' ' } })
+    check('adding a client needs a contact person', r.status === 400 && r.json?.error?.details?.field === 'contactName')
+    r = await call('POST', '/me/jobs', { token: key, headers: as, body: { ...client, kind: 'project' } })
+    check('techs add only Service Calls and Site Visits', r.status === 400 && r.json?.error?.details?.field === 'kind')
+    r = await call('POST', '/me/jobs', { token: key, headers: as, body: client })
+    const svc = r.json?.job
+    check('a tech adds a Service Call for a new client', r.status === 201 && r.json?.created === true && svc?.kind === 'service' && /^NEW-\d{4}$/.test(svc?.code ?? '') && svc?.contactEmail === 'pat@example.com' && svc?.addedBy?.name === 'Smoke Add Client' && !svc?.reviewedAt, JSON.stringify(r.json))
+    r = await call('POST', '/me/jobs', { token: key, headers: as, body: { ...client, clientName: client.clientName.toUpperCase() } })
+    check('the same client and address again hands back the one already added', r.json?.created === false && r.json?.job?.id === svc?.id)
+    r = await call('POST', '/me/jobs', { token: key, headers: as, body: { ...client, kind: 'visit' } })
+    const visit = r.json?.job
+    check('a tech adds a Site Visit', r.status === 201 && visit?.kind === 'visit' && visit?.name.startsWith('Site visit') && visit?.id !== svc?.id, JSON.stringify(r.json?.error ?? ''))
+    r = await call('GET', `/jobs?q=${encodeURIComponent(`Smoke Client ${stamp}`)}`, { token: key, headers: as })
+    check('the new client shows in the job list for everyone', (r.json?.data ?? []).some((j) => j.id === svc?.id))
+    r = await call('GET', '/jobs?added=review&active=all&limit=500', { token: admin })
+    check('the office sees it under added by techs, unchecked', (r.json?.data ?? []).some((j) => j.id === svc?.id && j.addedBy?.name === 'Smoke Add Client'))
+    if (svc && visit) {
+      const phases = (await call('GET', '/phases', { token: admin })).json?.data ?? []
+      const travel = phases.find((p) => p.key === 'svc-travel')
+      const onsite = phases.find((p) => p.key === 'svc-onsite')
+      r = await call('POST', '/punches/in', { token: key, headers: as, body: { jobId: visit.id, phaseId: travel?.id, at: minutesAgo(90) } })
+      check('switch onto the new Site Visit (drive)', r.status === 200 && r.json?.punch?.jobId === visit.id, JSON.stringify(r.json?.error ?? ''))
+      r = await call('POST', '/punches/in', { token: key, headers: as, body: { jobId: visit.id, phaseId: onsite?.id, at: minutesAgo(60) } })
+      r = await call('POST', '/punches/in', { token: key, headers: as, body: { jobId: svc.id, phaseId: onsite?.id, at: minutesAgo(30) } })
+      check('switch onto the new Service Call', r.status === 200 && r.json?.punch?.jobId === svc.id, JSON.stringify(r.json?.error ?? ''))
+      r = await call('POST', '/punches/out', { token: key, headers: as, body: {} })
+      const span = `from=${encodeURIComponent(minutesAgo(180))}&to=${encodeURIComponent(minutesAgo(-1))}`
+      const billVisit = await call('GET', `/reports/service-billing?${span}&jobId=${visit.id}`, { token: admin })
+      const billSvc = await call('GET', `/reports/service-billing?${span}&jobId=${svc.id}`, { token: admin })
+      check('a Site Visit is never billed; the new Service Call is', billVisit.status === 200 && (billVisit.json?.rows ?? []).length === 0 && (billSvc.json?.rows ?? []).length === 1, JSON.stringify([billVisit.json?.rows?.length, billSvc.json?.rows?.length, billSvc.json?.error]))
+      r = await call('PATCH', `/jobs/${svc.id}`, { token: admin, body: { reviewed: true, code: 'SVC-9001' } })
+      check('the office marks it checked and gives it a ticket number', r.status === 200 && Boolean(r.json?.job?.reviewedAt) && r.json?.job?.code === 'SVC-9001')
+      r = await call('GET', '/jobs?added=review&active=all&limit=500', { token: admin })
+      check('a checked client leaves the to-check list', !(r.json?.data ?? []).some((j) => j.id === svc.id) && (r.json?.data ?? []).some((j) => j.id === visit.id))
+      await call('PATCH', `/jobs/${visit.id}`, { token: admin, body: { reviewed: true, active: false } })
+      await call('PATCH', `/jobs/${svc.id}`, { token: admin, body: { active: false } })
+    }
+  }
+
   // Open items: Service / Shop / Office / CAD work stays open across switches until closed.
   {
     // Bench Repair, clock in / clock out only: one job, no ticket, no task, no open item.

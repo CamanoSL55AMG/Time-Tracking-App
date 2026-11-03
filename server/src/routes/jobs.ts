@@ -3,14 +3,18 @@ import type { Job, Prisma } from '@prisma/client'
 import { prisma, type Tx } from '../db.js'
 import { bool, limitOf, optionalDate, requiredStr, route, str } from '../api.js'
 import { badRequest, notFound } from '../errors.js'
-import { requireScope } from '../auth/middleware.js'
+import { requirePerson, requireScope } from '../auth/middleware.js'
+import { SELF } from '../auth/apiKeys.js'
 import { emit } from '../services/events.js'
 import { MODES } from '../services/punch.js'
 
 export const jobsRouter = Router()
 
 // repair = an Electronic Repair (SD) ticket from AV Inventory's Service Dept. check-in.
-const KINDS = ['project', 'service', 'shop', 'repair', 'other']
+// visit = a pre-sale site visit: paid time, never billed to the client.
+const KINDS = ['project', 'service', 'visit', 'shop', 'repair', 'other']
+/** What a tech can add from the punch screen. */
+const FIELD_KINDS = ['service', 'visit']
 
 const num = (v: unknown, field: string): number | null | undefined => {
   if (v === undefined) return undefined
@@ -22,7 +26,7 @@ const num = (v: unknown, field: string): number | null | undefined => {
 
 function jobFields(body: Record<string, unknown> | undefined) {
   const kind = body?.kind === undefined ? undefined : String(body.kind)
-  if (kind !== undefined && !KINDS.includes(kind)) throw badRequest('kind must be project, service, shop, repair or other.', { field: 'kind' })
+  if (kind !== undefined && !KINDS.includes(kind)) throw badRequest('kind must be project, service, visit, shop, repair or other.', { field: 'kind' })
   const radius = num(body?.siteRadiusM, 'siteRadiusM')
   return {
     kind,
@@ -33,8 +37,35 @@ function jobFields(body: Record<string, unknown> | undefined) {
     siteLng: num(body?.siteLng, 'siteLng'),
     siteRadiusM: radius === null || radius === undefined ? radius : Math.round(radius),
     siteAddress: body?.siteAddress === undefined ? undefined : str(body.siteAddress, 300),
+    clientName: body?.clientName === undefined ? undefined : str(body.clientName, 200),
+    contactName: body?.contactName === undefined ? undefined : str(body.contactName, 200),
+    contactPhone: body?.contactPhone === undefined ? undefined : phoneOf(body.contactPhone, false),
+    contactEmail: body?.contactEmail === undefined ? undefined : emailOf(body.contactEmail, false),
   }
 }
+
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/
+function emailOf(v: unknown, required: boolean): string {
+  const s = str(v, 200)
+  if (!s) {
+    if (required) throw badRequest('contactEmail is required.', { field: 'contactEmail' })
+    return ''
+  }
+  if (!EMAIL.test(s)) throw badRequest('contactEmail does not look like an email address.', { field: 'contactEmail' })
+  return s.toLowerCase()
+}
+function phoneOf(v: unknown, required: boolean): string {
+  const s = str(v, 40)
+  if (!s) {
+    if (required) throw badRequest('contactPhone is required.', { field: 'contactPhone' })
+    return ''
+  }
+  const digits = s.replace(/\D/g, '')
+  if (digits.length < 10) throw badRequest('contactPhone needs at least 10 digits, with the area code.', { field: 'contactPhone' })
+  return s
+}
+
+const ADDED_BY = { addedBy: { select: { id: true, name: true } } } as const
 
 async function withRefs(jobs: Job[]) {
   if (!jobs.length) return []
@@ -60,6 +91,7 @@ route(
       active: 'true (default) or false; "all" for both',
       kind: 'project | service | shop | other',
       q: 'Search name and code',
+      added: '"review" for clients techs added that the office has not checked yet; "all" for every tech-added client',
       updatedSince: 'ISO date-time; only jobs changed after it',
       limit: 'Page size, 100 by default, 500 at most',
       cursor: 'nextCursor from the previous page',
@@ -73,13 +105,17 @@ route(
       active: req.query.active === 'all' ? undefined : bool(req.query.active) ?? true,
       kind: req.query.kind ? String(req.query.kind) : undefined,
       updatedAt: req.query.updatedSince ? { gt: optionalDate(req.query.updatedSince, 'updatedSince') } : undefined,
-      OR: q ? [{ name: { contains: q, mode: 'insensitive' } }, { code: { contains: q, mode: 'insensitive' } }] : undefined,
+      OR: q
+        ? [{ name: { contains: q, mode: 'insensitive' } }, { code: { contains: q, mode: 'insensitive' } }, { clientName: { contains: q, mode: 'insensitive' } }]
+        : undefined,
+      ...(req.query.added === 'review' ? { addedById: { not: null }, reviewedAt: null } : req.query.added === 'all' ? { addedById: { not: null } } : {}),
     }
     const limit = limitOf(req.query.limit)
     const cursor = str(req.query.cursor, 80)
     const rows = await prisma.job.findMany({
       where,
-      orderBy: [{ name: 'asc' }, { id: 'asc' }],
+      include: ADDED_BY,
+      orderBy: req.query.added ? [{ createdAt: 'desc' }, { id: 'asc' }] : [{ name: 'asc' }, { id: 'asc' }],
       take: limit + 1,
       ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
     })
@@ -105,7 +141,21 @@ route(
     if (!f.name) throw badRequest('name is required.', { field: 'name' })
     const job = await prisma.$transaction(async (tx) => {
       const created = await tx.job.create({
-        data: { companyId: auth.companyId, name: f.name!, kind: f.kind ?? 'project', code: f.code ?? '', active: f.active ?? true, siteLat: f.siteLat, siteLng: f.siteLng, siteRadiusM: f.siteRadiusM, siteAddress: f.siteAddress ?? '' },
+        data: {
+          companyId: auth.companyId,
+          name: f.name!,
+          kind: f.kind ?? 'project',
+          code: f.code ?? '',
+          active: f.active ?? true,
+          siteLat: f.siteLat,
+          siteLng: f.siteLng,
+          siteRadiusM: f.siteRadiusM,
+          siteAddress: f.siteAddress ?? '',
+          clientName: f.clientName ?? '',
+          contactName: f.contactName ?? '',
+          contactPhone: f.contactPhone ?? '',
+          contactEmail: f.contactEmail ?? '',
+        },
       })
       await announce(tx, created)
       return created
@@ -114,16 +164,103 @@ route(
   },
 )
 
+// ─── A tech adds a client from the field ─────────────────────────────────────
+// Any tech can add a Service Call or a Site Visit for a client that is not in the
+// list yet (Art, 2026-11-02), then switch onto it. Name, address, a contact person,
+// phone and email are the minimum. The office sees it under Manage > Jobs, "Added
+// by techs", until someone marks it checked.
 route(
   jobsRouter,
-  { method: 'patch', path: '/jobs/:id', tag: 'Jobs', summary: 'Change a job. Set active to false to close it to new time.', access: ['jobs:write'], body: { name: 'Name', kind: 'Kind', code: 'Code', active: 'true or false' } },
+  {
+    method: 'post',
+    path: '/me/jobs',
+    tag: 'Jobs',
+    summary: 'Add a Service Call or Site Visit for a new client, from the punch screen. Re-sending the same client and address returns the one already added.',
+    access: [SELF],
+    status: 201,
+    body: {
+      kind: 'service (Service Call) | visit (Site Visit, pre-sale, not billed)',
+      clientName: 'Client name (required)',
+      siteAddress: 'Street address (required)',
+      contactName: 'Contact person (required)',
+      contactPhone: 'Contact phone, with area code (required)',
+      contactEmail: 'Contact email (required)',
+      note: 'What the call is about (optional)',
+    },
+  },
+  async (req) => {
+    const auth = requireScope(req, SELF)
+    const person = requirePerson(auth)
+    const b = (req.body ?? {}) as Record<string, unknown>
+    const kind = String(b.kind ?? '')
+    if (!FIELD_KINDS.includes(kind)) throw badRequest('kind must be service (Service Call) or visit (Site Visit).', { field: 'kind' })
+    const clientName = requiredStr(b.clientName, 'clientName', 200)
+    const siteAddress = requiredStr(b.siteAddress, 'siteAddress', 300)
+    const contactName = requiredStr(b.contactName, 'contactName', 200)
+    const contactPhone = phoneOf(b.contactPhone, true)
+    const contactEmail = emailOf(b.contactEmail, true)
+
+    const result = await prisma.$transaction(async (tx) => {
+      // The same client at the same address, still open: hand that one back
+      // (a double tap, or two techs on one call) instead of a duplicate.
+      const same = await tx.job.findFirst({
+        where: {
+          companyId: auth.companyId,
+          kind,
+          active: true,
+          clientName: { equals: clientName, mode: 'insensitive' },
+          siteAddress: { equals: siteAddress, mode: 'insensitive' },
+        },
+        include: ADDED_BY,
+      })
+      if (same) return { created: false, job: same }
+      const n = await tx.job.count({ where: { companyId: auth.companyId, code: { startsWith: 'NEW-' } } })
+      const created = await tx.job.create({
+        data: {
+          companyId: auth.companyId,
+          kind,
+          name: kind === 'visit' ? `Site visit — ${clientName}` : clientName,
+          code: `NEW-${String(n + 1).padStart(4, '0')}`,
+          clientName,
+          siteAddress,
+          contactName,
+          contactPhone,
+          contactEmail,
+          addedById: person.id,
+        },
+        include: ADDED_BY,
+      })
+      await announce(tx, created)
+      await emit(tx, auth.companyId, 'job.added_by_tech', {
+        job: { id: created.id, kind, code: created.code, name: created.name, clientName, siteAddress, contactName, contactPhone, contactEmail },
+        person: { id: person.id, name: person.name },
+        note: str(b.note, 500) || undefined,
+      })
+      return { created: true, job: created }
+    })
+    return { created: result.created, job: (await withRefs([result.job]))[0] }
+  },
+)
+
+route(
+  jobsRouter,
+  {
+    method: 'patch',
+    path: '/jobs/:id',
+    tag: 'Jobs',
+    summary: 'Change a job. Set active to false to close it to new time; reviewed true marks a tech-added client as checked by the office.',
+    access: ['jobs:write'],
+    body: { name: 'Name', kind: 'Kind', code: 'Code', active: 'true or false', clientName: 'Client', contactName: 'Contact', contactPhone: 'Phone', contactEmail: 'Email', reviewed: 'true or false' },
+  },
   async (req) => {
     const auth = requireScope(req, 'jobs:write')
     const existing = await prisma.job.findFirst({ where: { id: req.params.id, companyId: auth.companyId } })
     if (!existing) throw notFound('Job')
     const f = jobFields(req.body)
+    const reviewed = bool(req.body?.reviewed)
+    const data = { ...f, ...(reviewed === undefined ? {} : { reviewedAt: reviewed ? existing.reviewedAt ?? new Date() : null }) }
     const job = await prisma.$transaction(async (tx) => {
-      const saved = await tx.job.update({ where: { id: existing.id }, data: f })
+      const saved = await tx.job.update({ where: { id: existing.id }, data, include: ADDED_BY })
       await announce(tx, saved)
       return saved
     })

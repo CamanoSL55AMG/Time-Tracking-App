@@ -585,3 +585,14 @@ Decided 2026-10-07
 - The construction-worker sick-leave payout rule does not apply to Morgan Sound.
 - Sick leave and vacation are separate banks.
 - Sick and vacation balances are kept today in a spreadsheet maintained by Gary (finance).
+
+## 4d. Projects from Jetbuilt; techs add new clients (built 2026-11-03)
+
+Art's decisions (2026-11-02):
+
+- **Projects come from Jetbuilt.** GED pulls Jetbuilt itself (at most hourly, sharing the Dashboard's pull) and pushes every P-number to Logbook. Only the **Proposal, Contract, Install and Review** stages are open for time; every other stage is switched off. If Jetbuilt can't be reached GED uses its last good snapshot, and only falls back to its own project list if it has never reached Jetbuilt. (GED: `LOGBOOK_STAGES` in `server/src/services/timeTrackingLink.ts`, `pullJetbuiltDashboard()` in `server/src/routes/jetbuilt.ts`.)
+- **Any tech can add a client** from the Service screen, with **+ Add new client**, in the picker and in "Call complete, where to next?". It is either a **Service Call** or a **Site Visit**. The client name, address, contact person, phone (with area code) and email are all required. The new item becomes the pick, so the next tap (Start drive / Switch) moves the clock onto it. The same client at the same address hands back the one already added instead of making a duplicate. Codes are `NEW-0001`, `NEW-0002`…
+- **A Site Visit is a pre-sale walk**: job kind `visit`, the time is paid, never billed. The service-billing report counts only `service` jobs.
+- **The office checks every tech-added client** under Manage > Jobs > "New clients added by techs". There it can edit the name, the code (e.g. the real service ticket) and the contact, then mark it checked. Each add also emits a `job.added_by_tech` event for GED / AccountEdge to pick up later.
+
+API: `POST /me/jobs` (any signed-in person), `GET /jobs?added=review|all`, `PATCH /jobs/:id` with `reviewed`. Job now has `clientName`, `contactName`, `contactPhone`, `contactEmail`, `addedById`, `reviewedAt`. Run `npx prisma db push` after pulling.

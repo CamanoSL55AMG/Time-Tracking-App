@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Alert, Box, Button, Divider, Paper, Stack, TextField, Typography } from '@mui/material'
 import { api, errorText, setToken, type Person } from '../api'
+import PasswordField from '../PasswordField'
 
 const GSI_SRC = 'https://accounts.google.com/gsi/client'
 
@@ -129,7 +130,7 @@ export default function Login({ notice, onSignedIn }: { notice?: string; onSigne
               </>
             )}
             <TextField label="Email" type="email" autoComplete="username" inputMode="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoFocus={!googleClientId} />
-            <TextField label="Password" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+            <PasswordField label="Password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
             {error && <Alert severity="error">{error}</Alert>}
             <Button type="submit" variant={dashboard ? 'outlined' : 'contained'} size="large" disabled={busy || !email || !password}>
               {busy ? 'Signing in…' : 'Sign in'}

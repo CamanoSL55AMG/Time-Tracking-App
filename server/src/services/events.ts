@@ -10,6 +10,7 @@ export type EventType =
   | 'punch.switched'
   | 'punch.edited'
   | 'job.upserted'
+  | 'job.added_by_tech'
   | 'person.upserted'
   | 'timesheet.signed'
   | 'timesheet.approved'

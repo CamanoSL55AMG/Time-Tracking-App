@@ -11,23 +11,23 @@ datasource db {
 // install later needs no schema change.
 
 model Company {
-  id          String   @id @default(uuid())
-  name        String
-  timezone    String   @default("America/Los_Angeles")
-  shopLat     Float?
-  shopLng     Float?
-  shopRadiusM Int      @default(150)
+  id                       String   @id @default(uuid())
+  name                     String
+  timezone                 String   @default("America/Los_Angeles")
+  shopLat                  Float?
+  shopLng                  Float?
+  shopRadiusM              Int      @default(150)
   // First day of the timesheet week, 0 = Sunday … 6 = Saturday. Monday until the
   // pay period is settled with payroll.
-  weekStartDay Int     @default(1)
+  weekStartDay             Int      @default(1)
   // Service call billing (Morgan Sound default). Payroll always uses the real
   // punched time; these only shape what the customer is invoiced.
-  serviceTravelHours       Float @default(0.5) // travel billed to each call, whatever the real drive
-  serviceIncludedHours     Float @default(1) // on-site time covered by the trip charge
-  serviceIncrementMinutes  Int   @default(15) // on-site time past that is billed in these steps
+  serviceTravelHours       Float    @default(0.5) // travel billed to each call, whatever the real drive
+  serviceIncludedHours     Float    @default(1) // on-site time covered by the trip charge
+  serviceIncrementMinutes  Int      @default(15) // on-site time past that is billed in these steps
   // Mileage reimbursement per mile. IRS business rate for 2026 is $0.725. The rate in
   // force is copied onto each mileage line, so a later change leaves old lines alone.
-  mileageRate              Float @default(0.725)
+  mileageRate              Float    @default(0.725)
   // Expense lines paid with the employee's own money post here instead of their
   // category's account (Morgan Sound: 6-1140 Employee Business Expense). Mileage keeps
   // its category's account. Null = not set yet (the seed fills it); "" = off.
@@ -39,17 +39,17 @@ model Company {
   // Bench Repair mode is a plain clock in / clock out onto the BENCH job (Zach's team,
   // 2026-11-02). Off = the full version: pick the SD repair ticket and a task, with
   // the hours going to that ticket's SD invoice in AV Inventory.
-  benchClockOnly           Boolean @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  benchClockOnly           Boolean  @default(true)
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
 
-  people  Person[]
-  jobs    Job[]
-  phases  Phase[]
-  punches Punch[]
-  apiKeys ApiKey[]
-  timesheets Timesheet[]
-  expenses   Expense[]
+  people            Person[]
+  jobs              Job[]
+  phases            Phase[]
+  punches           Punch[]
+  apiKeys           ApiKey[]
+  timesheets        Timesheet[]
+  expenses          Expense[]
   expenseCategories ExpenseCategory[]
 }
 
@@ -73,43 +73,54 @@ model Person {
   timesheets  Timesheet[]
   expenses    Expense[]
   workItems   WorkItem[]
+  jobsAdded   Job[]        @relation("JobAddedBy")
 
   @@index([companyId, active])
 }
 
 model Job {
-  id          String   @id @default(uuid())
-  companyId   String
-  kind        String   @default("project") // project | service | shop | repair (an SD bench-repair ticket from AV Inventory) | other (office, incl. the OVERHEAD job)
-  name        String
-  code        String   @default("") // P-number, service ticket, etc.
-  active      Boolean  @default(true)
-  siteLat     Float?
-  siteLng     Float?
-  siteRadiusM Int?
-  siteAddress String   @default("") // street address of the job site, for directions
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id           String    @id @default(uuid())
+  companyId    String
+  kind         String    @default("project") // project | service | visit (pre-sale site visit, not billed) | shop | repair (an SD bench-repair ticket from AV Inventory) | other (office, incl. the OVERHEAD job)
+  name         String
+  code         String    @default("") // P-number, service ticket, etc.
+  active       Boolean   @default(true)
+  siteLat      Float?
+  siteLng      Float?
+  siteRadiusM  Int?
+  siteAddress  String    @default("") // street address of the job site, for directions
+  // The client and who to call there. Required when a tech adds a client in the field.
+  clientName   String    @default("")
+  contactName  String    @default("")
+  contactPhone String    @default("")
+  contactEmail String    @default("")
+  // A tech added this client from the punch screen (Service Call or Site Visit); the
+  // office checks it and sets reviewedAt. Null for jobs from Jetbuilt/GED or Manage.
+  addedById    String?
+  reviewedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
   company     Company      @relation(fields: [companyId], references: [id])
   punches     Punch[]
   assignments Assignment[]
   expenses    Expense[]
   workItems   WorkItem[]
+  addedBy     Person?      @relation("JobAddedBy", fields: [addedById], references: [id])
 
   @@index([companyId, active])
 }
 
 // The task picker: the phases of a work day, in order.
 model Phase {
-  id        String  @id @default(uuid())
-  companyId String
-  key       String // stable slug, e.g. "travel-out"
-  name      String
-  short     String
-  sortOrder Int
-  atShop    Boolean @default(false)
-  active    Boolean @default(true)
+  id            String  @id @default(uuid())
+  companyId     String
+  key           String // stable slug, e.g. "travel-out"
+  name          String
+  short         String
+  sortOrder     Int
+  atShop        Boolean @default(false)
+  active        Boolean @default(true)
   // The sold-labor line this phase's hours roll up to, so hours line up with the
   // labor budget in Jetbuilt: engineering | install | programming | management | other.
   laborCategory String  @default("install")
@@ -152,12 +163,12 @@ model Punch {
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
-  company Company     @relation(fields: [companyId], references: [id])
-  person  Person      @relation(fields: [personId], references: [id])
-  job     Job         @relation(fields: [jobId], references: [id])
-  phase   Phase?      @relation(fields: [phaseId], references: [id])
-  workItem WorkItem?  @relation(fields: [workItemId], references: [id])
-  edits   PunchEdit[]
+  company  Company     @relation(fields: [companyId], references: [id])
+  person   Person      @relation(fields: [personId], references: [id])
+  job      Job         @relation(fields: [jobId], references: [id])
+  phase    Phase?      @relation(fields: [phaseId], references: [id])
+  workItem WorkItem?   @relation(fields: [workItemId], references: [id])
+  edits    PunchEdit[]
 
   @@unique([companyId, clientId])
   @@index([personId, clockIn])

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import PasswordField from '../PasswordField'
 import {
   Alert,
   Box,
@@ -61,13 +62,14 @@ function useLoader<T>(fn: () => Promise<T>) {
     } catch (err) {
       setError(errorText(err))
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [fn])
   useEffect(() => {
     void load()
   }, [load])
   return { data, error, setError, load }
 }
+
+const allExpenseCategories = () => api.expenseCategories(true)
 
 const Row = ({ children, dim }: { children: ReactNode; dim?: boolean }) => (
   <Paper sx={{ p: 1.5, opacity: dim ? 0.55 : 1 }}>
@@ -152,9 +154,8 @@ function People({ isAdmin }: { isAdmin: boolean }) {
               ))}
             </TextField>
             {isAdmin && (
-              <TextField
+              <PasswordField
                 label="Starting password"
-                type="password"
                 autoComplete="new-password"
                 value={form.password}
                 onChange={(e) => setForm({ ...form, password: e.target.value })}
@@ -207,6 +208,7 @@ function Jobs() {
   return (
     <Stack spacing={1.5}>
       {error && <Alert severity="error">{error}</Alert>}
+      <AddedByTechs onChange={() => void load()} />
       <Box>
         <Button variant="contained" onClick={() => setAdding(true)}>
           Add job
@@ -234,7 +236,7 @@ function Jobs() {
             <TextField label="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
             <TextField label="Number or code" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} helperText="P-number, service ticket…" />
             <TextField select label="Kind" value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value })}>
-              {['project', 'service', 'shop', 'repair', 'other'].map((k) => (
+              {['project', 'service', 'visit', 'shop', 'repair', 'other'].map((k) => (
                 <MenuItem key={k} value={k}>
                   {k}
                 </MenuItem>
@@ -250,6 +252,118 @@ function Jobs() {
         </DialogActions>
       </Dialog>
     </Stack>
+  )
+}
+
+// Clients a tech added from the punch screen (Service Call or Site Visit). The office
+// checks each one (puts it in Jetbuilt / AccountEdge, fixes the code or name) and
+// marks it checked. Projects themselves come from Jetbuilt through GED.
+function AddedByTechs({ onChange }: { onChange: () => void }) {
+  const [showAll, setShowAll] = useState(false)
+  const loader = useCallback(() => api.addedJobs(showAll ? 'all' : 'review'), [showAll])
+  const { data, error, setError, load } = useLoader(loader)
+  const [editing, setEditing] = useState<Job | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  const mark = async (j: Job, reviewed: boolean, patch: Parameters<typeof api.updateJob>[1] = {}) => {
+    setBusy(true)
+    try {
+      await api.updateJob(j.id, { ...patch, reviewed })
+      setEditing(null)
+      await load()
+      onChange()
+    } catch (err) {
+      setError(errorText(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+  const rows = data ?? []
+  if (!showAll && !rows.length && !error) {
+    return (
+      <Typography variant="body2" color="text.secondary">
+        No new clients from techs waiting for a check.{' '}
+        <Button size="small" onClick={() => setShowAll(true)}>
+          Show all added by techs
+        </Button>
+      </Typography>
+    )
+  }
+  return (
+    <Paper variant="outlined" sx={{ p: 1.5, borderColor: rows.some((j) => !j.reviewedAt) ? 'warning.main' : undefined }}>
+      <Stack spacing={1}>
+        <Stack direction="row" alignItems="center" spacing={1}>
+          <Typography variant="subtitle1" sx={{ fontWeight: 700, flex: 1 }}>
+            New clients added by techs{rows.filter((j) => !j.reviewedAt).length ? ` (${rows.filter((j) => !j.reviewedAt).length} to check)` : ''}
+          </Typography>
+          <Button size="small" onClick={() => setShowAll((v) => !v)}>
+            {showAll ? 'Only unchecked' : 'Show all'}
+          </Button>
+        </Stack>
+        {error && <Alert severity="error">{error}</Alert>}
+        {rows.map((j) => (
+          <Row key={j.id} dim={!!j.reviewedAt}>
+            <Box sx={{ flex: 1, minWidth: 0 }}>
+              <Typography sx={{ fontWeight: 600 }}>
+                {j.clientName || j.name} <Chip size="small" label={j.kind === 'visit' ? 'Site visit' : 'Service call'} sx={{ ml: 0.5 }} />
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                {[j.siteAddress, j.contactName, j.contactPhone, j.contactEmail].filter(Boolean).join(' · ')}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                {j.code} · added by {j.addedBy?.name ?? 'a tech'}
+                {j.createdAt ? ` on ${new Date(j.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric' })}` : ''}
+                {j.reviewedAt ? ' · checked' : ''}
+              </Typography>
+            </Box>
+            <Button size="small" onClick={() => setEditing(j)} disabled={busy}>
+              Edit
+            </Button>
+            <Button size="small" variant={j.reviewedAt ? 'text' : 'contained'} onClick={() => void mark(j, !j.reviewedAt)} disabled={busy}>
+              {j.reviewedAt ? 'Uncheck' : 'Mark checked'}
+            </Button>
+          </Row>
+        ))}
+      </Stack>
+      {editing && <EditAddedJob job={editing} busy={busy} onClose={() => setEditing(null)} onSave={(patch) => void mark(editing, true, patch)} />}
+    </Paper>
+  )
+}
+
+function EditAddedJob({ job, busy, onClose, onSave }: { job: Job; busy: boolean; onClose: () => void; onSave: (patch: Parameters<typeof api.updateJob>[1]) => void }) {
+  const [f, setF] = useState({
+    name: job.name,
+    code: job.code,
+    clientName: job.clientName ?? '',
+    siteAddress: job.siteAddress ?? '',
+    contactName: job.contactName ?? '',
+    contactPhone: job.contactPhone ?? '',
+    contactEmail: job.contactEmail ?? '',
+  })
+  const field = (k: keyof typeof f, label: string, helper?: string) => (
+    <TextField label={label} value={f[k]} onChange={(e) => setF({ ...f, [k]: e.target.value })} helperText={helper} />
+  )
+  return (
+    <Dialog open onClose={onClose} fullWidth maxWidth="xs">
+      <DialogTitle>Check new client</DialogTitle>
+      <DialogContent>
+        <Stack spacing={2} sx={{ pt: 1 }}>
+          {field('name', 'Name in Logbook')}
+          {field('code', 'Number or code', 'Put the service ticket or Jetbuilt number here once it has one')}
+          {field('clientName', 'Client')}
+          {field('siteAddress', 'Address')}
+          {field('contactName', 'Contact person')}
+          {field('contactPhone', 'Phone')}
+          {field('contactEmail', 'Email')}
+        </Stack>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>Cancel</Button>
+        <Button variant="contained" disabled={busy || !f.name.trim()} onClick={() => onSave(f)}>
+          Save and mark checked
+        </Button>
+      </DialogActions>
+    </Dialog>
   )
 }
 
@@ -465,7 +579,7 @@ function Phases() {
 // ─── Expense categories and mileage rate ───────────────────────────────────
 
 function ExpenseSetup() {
-  const { data, error, setError, load } = useLoader(() => api.expenseCategories(true))
+  const { data, error, setError, load } = useLoader(allExpenseCategories)
   const [name, setName] = useState('')
   const [kind, setKind] = useState<'expense' | 'mileage'>('expense')
   const [rate, setRate] = useState('')

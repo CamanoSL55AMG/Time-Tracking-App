@@ -17,12 +17,12 @@ import {
   Paper,
   Stack,
   SvgIcon,
-  TextField,
   Toolbar,
   Typography,
 } from '@mui/material'
 import { api, errorText, getToken, setSignedOutHandler, setToken, type Person } from './api'
 import Login from './pages/Login'
+import PasswordField from './PasswordField'
 import PunchPage from './pages/Punch'
 import BoardPage from './pages/Board'
 import AdminPage from './pages/Admin'
@@ -233,8 +233,8 @@ function PasswordDialog({ open, onClose }: { open: boolean; onClose: () => void 
             <Alert severity="success">Password changed.</Alert>
           ) : (
             <>
-              <TextField label="Current password" type="password" autoComplete="current-password" value={current} onChange={(e) => setCurrent(e.target.value)} helperText="Leave blank if you have never set one" />
-              <TextField label="New password" type="password" autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} helperText="At least 10 characters" />
+              <PasswordField label="Current password" autoComplete="current-password" value={current} onChange={(e) => setCurrent(e.target.value)} helperText="Leave blank if you have never set one" />
+              <PasswordField label="New password" autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} helperText="At least 10 characters" />
               {error && <Alert severity="error">{error}</Alert>}
             </>
           )}
