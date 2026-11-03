@@ -81,6 +81,7 @@ interface Choice {
 }
 
 const OVERHEAD_CODE = 'OVERHEAD'
+const BENCH_CODE = 'BENCH'
 /** After this long on unallocated time, remind the person to pick a project. */
 const UNALLOCATED_NUDGE_MIN = 30
 
@@ -133,6 +134,9 @@ export default function PunchPage({ canCrew = false, meId = '', meName = '' }: {
   // The work mode picked on the start screen today (null = show the start screen).
   const [picked, setPicked] = useState<WorkMode | null>(() => readMode())
   const [choosingMode, setChoosingMode] = useState(false)
+  // A mode picked with "Change" while still on the clock wins over the open punch's mode,
+  // so the screen moves to the new mode and the next switch lands there.
+  const [modeOverride, setModeOverride] = useState<WorkMode | null>(null)
   // Service: what to do when a call is done.
   const [completing, setCompleting] = useState(false)
   // Close or leave open the service ticket when a call is complete.
@@ -161,6 +165,9 @@ export default function PunchPage({ canCrew = false, meId = '', meName = '' }: {
   const pickMode = (m: WorkMode) => {
     writeMode(m)
     setPicked(m)
+    setModeOverride(state?.onClock ? m : null)
+    // Still on the clock in another mode: open the picker so the next tap moves the clock over.
+    setSwitching(Boolean(state?.onClock && state.open?.phase && modeOfPhase(state.open.phase) !== m))
     setChoosingMode(false)
     setPhaseId('')
     setChoice(null)
@@ -215,7 +222,7 @@ export default function PunchPage({ canCrew = false, meId = '', meName = '' }: {
   }, [queue.waiting, load])
 
   // On the clock, the open segment's phase says which mode the person is in.
-  const mode: WorkMode = state?.open?.phase ? modeOfPhase(state.open.phase) : picked ?? 'install'
+  const mode: WorkMode = modeOverride ?? (state?.open?.phase ? modeOfPhase(state.open.phase) : picked ?? 'install')
   const modePhases = useMemo(() => (state?.phases ?? []).filter((p) => modeOfPhase(p) === mode), [state?.phases, mode])
   const phaseByKey = (key: string) => state?.phases.find((p) => p.key === key)
 
@@ -269,6 +276,7 @@ export default function PunchPage({ canCrew = false, meId = '', meName = '' }: {
       const r = await run()
       const next = r.sent ? r.state : simulate(state, kind, { ...local, at: r.at })
       setState(next)
+      setModeOverride(null)
       setSwitching(false)
       setCompleting(false)
       setClosingOut(null)
@@ -322,6 +330,7 @@ export default function PunchPage({ canCrew = false, meId = '', meName = '' }: {
     const m = item.mode as WorkMode
     writeMode(m)
     setPicked(m)
+    setModeOverride(null)
     setSwitching(false)
     const first = (state?.phases ?? []).find((p) => modeOfPhase(p) === m && p.key !== 'admin-overhead')
     const phase = m === 'service' ? phaseByKey('svc-travel')?.id : item.lastPhaseId ?? first?.id
@@ -352,6 +361,73 @@ export default function PunchPage({ canCrew = false, meId = '', meName = '' }: {
             You stay on the clock. The new mode starts with your next switch.
           </Typography>
         )}
+      </Stack>
+    )
+  }
+
+  // Bench Repair, clock in / clock out only (Zach's team, 2026-11-02): one button, no
+  // tickets, tasks, notes, expenses or open items. The full version stays behind the
+  // switch in Manage > Phases.
+  const bench = state.bench
+  if (mode === 'bench' && bench?.clockOnly && (!state.open || state.open.job.code === BENCH_CODE)) {
+    const benchOpen = state.open
+    return (
+      <Stack spacing={2}>
+        {queue.waiting > 0 && (
+          <Alert severity="info">
+            {queue.waiting === 1 ? '1 punch is' : `${queue.waiting} punches are`} saved on this phone and will be sent when the signal comes back.
+          </Alert>
+        )}
+        {queue.failed.length > 0 && (
+          <Alert severity="warning" onClose={clearFailedPunches}>
+            {queue.failed.join(' ')}
+          </Alert>
+        )}
+        <Stack direction="row" alignItems="center" spacing={1}>
+          <Chip label={`${MODE_INFO.bench.label} mode`} sx={{ fontWeight: 700, color: '#fff', bgcolor: MODE_INFO.bench.color }} />
+          <Button size="small" onClick={() => setChoosingMode(true)}>
+            Change
+          </Button>
+        </Stack>
+        <Paper sx={{ p: 2.5, borderColor: benchOpen ? 'success.main' : undefined, borderWidth: benchOpen ? 2 : 1 }}>
+          <Stack spacing={1.5}>
+            <Stack direction="row" alignItems="center" spacing={1}>
+              <Chip size="small" color={benchOpen ? 'success' : 'default'} label={benchOpen ? 'On the clock' : 'Off the clock'} sx={{ fontWeight: 700 }} />
+              <Box sx={{ flex: 1 }} />
+              <Typography variant="body2" color="text.secondary" sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                Today {fmtHours(liveHours(state, now))}
+              </Typography>
+            </Stack>
+            <Typography variant="h4" sx={{ fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
+              {benchOpen ? fmtElapsed(benchOpen.clockIn, now) : now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+            </Typography>
+            {benchOpen && <Typography color="text.secondary">Clocked in at {fmtTime(benchOpen.clockIn)}</Typography>}
+          </Stack>
+        </Paper>
+        {error && <Alert severity="error">{error}</Alert>}
+        {mirror && state.parallelRun && (
+          <Alert severity="warning" onClose={() => setMirror(null)}>
+            <strong>{mirror === 'out' ? 'Now clock out in Timesheets.com too.' : 'Now clock in to Timesheets.com too.'}</strong> Payroll still runs from Timesheets.com until{' '}
+            {fmtUntil(state.parallelRun.until)}.
+          </Alert>
+        )}
+        {benchOpen ? (
+          <Button size="large" variant="contained" color="warning" disabled={busy} onClick={() => void punchOut()} sx={{ py: 3, fontSize: 24 }}>
+            {busy ? 'Recording…' : 'Clock Out'}
+          </Button>
+        ) : (
+          <Button
+            size="large"
+            variant="contained"
+            color="success"
+            disabled={busy || !bench.job}
+            onClick={() => bench.job && void clockIn(bench.job, bench.phase?.id)}
+            sx={{ py: 3, fontSize: 24 }}
+          >
+            {busy ? 'Recording…' : 'Clock In'}
+          </Button>
+        )}
+        {!bench.job && <Alert severity="warning">The Bench Repair job is missing. Ask an admin to run the setup (seed) again.</Alert>}
       </Stack>
     )
   }

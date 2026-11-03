@@ -267,6 +267,34 @@ const CATEGORIES: { value: string; label: string }[] = [
   { value: 'other', label: 'Other' },
 ]
 
+/** Bench Repair: plain clock in / clock out, or the full version with repair tickets and tasks. */
+function BenchSwitch() {
+  const [on, setOn] = useState<boolean | null>(null)
+  const [error, setError] = useState('')
+  useEffect(() => {
+    api.benchSettings().then((r) => setOn(r.clockOnly), (err) => setError(errorText(err)))
+  }, [])
+  const flip = async () => {
+    try {
+      setOn((await api.saveBenchSettings(!on)).clockOnly)
+    } catch (err) {
+      setError(errorText(err))
+    }
+  }
+  if (on === null) return error ? <Alert severity="error">{error}</Alert> : null
+  return (
+    <Paper sx={{ p: 2 }}>
+      <FormControlLabel control={<Switch checked={on} onChange={() => void flip()} />} label={<Typography sx={{ fontWeight: 600 }}>Bench Repair: clock in and clock out only</Typography>} />
+      <Typography variant="body2" color="text.secondary">
+        {on
+          ? 'On: Bench Repair is one Clock In and one Clock Out button. Time goes to the Bench Repair job; no tickets or tasks are asked for.'
+          : 'Off: bench techs pick the SD repair ticket and a task (Diagnose, Repair, Test, Parts), and the hours post to that ticket\u2019s SD invoice in AV Inventory.'}
+      </Typography>
+      {error && <Alert severity="error">{error}</Alert>}
+    </Paper>
+  )
+}
+
 function Phases() {
   const { data, error, setError, load } = useLoader(api.allPhases)
   const [adding, setAdding] = useState(false)
@@ -331,8 +359,9 @@ function Phases() {
   return (
     <Stack spacing={1.5}>
       {error && <Alert severity="error">{error}</Alert>}
+      <BenchSwitch />
       <Typography variant="body2" color="text.secondary">
-        Each phase belongs to a work mode on the start screen (Install, Service, Office, Shop). Field-day steps are walked in this order with
+        Each phase belongs to a work mode on the start screen (Install, Service, Office, Shop, CAD, Bench Repair). Field-day steps are walked in this order with
         "Next", inside their own mode. Other phases are picked directly. The labor category decides which line of the Jetbuilt labor budget the
         hours count against.
       </Typography>

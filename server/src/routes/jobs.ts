@@ -186,6 +186,41 @@ route(
   },
 )
 
+route(
+  jobsRouter,
+  {
+    method: 'get',
+    path: '/company/bench-settings',
+    tag: 'Jobs',
+    summary: 'Bench Repair: clock in / clock out only, or the full version with repair tickets and tasks.',
+    access: ['jobs:read'],
+  },
+  async (req) => {
+    const auth = requireScope(req, 'jobs:read')
+    const c = await prisma.company.findUniqueOrThrow({ where: { id: auth.companyId } })
+    return { clockOnly: c.benchClockOnly }
+  },
+)
+
+route(
+  jobsRouter,
+  {
+    method: 'patch',
+    path: '/company/bench-settings',
+    tag: 'Jobs',
+    summary: 'Switch Bench Repair between clock in / clock out only and the full version (repair tickets, tasks, hours to the SD invoice).',
+    access: ['jobs:write'],
+    body: { clockOnly: 'true = clock in and clock out only; false = pick the repair ticket and task' },
+  },
+  async (req) => {
+    const auth = requireScope(req, 'jobs:write')
+    const clockOnly = bool(req.body?.clockOnly)
+    if (clockOnly === undefined) throw badRequest('clockOnly must be true or false.', { field: 'clockOnly' })
+    const c = await prisma.company.update({ where: { id: auth.companyId }, data: { benchClockOnly: clockOnly } })
+    return { clockOnly: c.benchClockOnly }
+  },
+)
+
 const slug = (s: string) =>
   s
     .toLowerCase()

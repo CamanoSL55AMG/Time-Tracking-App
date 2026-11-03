@@ -14,3 +14,6 @@ interface Window {
     }
   }
 }
+
+// This build's id, baked in by vite.config.ts; the same id is written to version.json.
+declare const __APP_BUILD__: string

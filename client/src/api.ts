@@ -140,6 +140,8 @@ export interface DayState {
   lastJob?: Job | null
   /** Jobs worked in the last two weeks, newest first: the quick-switch list. */
   recentJobs?: Job[]
+  /** Bench Repair: clock in / clock out only onto the BENCH job, or the full ticket version. */
+  bench?: { clockOnly: boolean; job: Job | null; phase: Phase | null }
   /** "Stop project" while staying on the clock charges time here. */
   overhead?: { job: Job; phase: Phase | null } | null
   /** Off the clock: the last segment today, for "Back to …" after a break. */
@@ -414,6 +416,8 @@ export const api = {
     http.patch<{ phase: Phase }>(`/phases/${id}`, p).then((r) => r.data.phase),
 
   board: () => http.get<Board>('/board').then((r) => r.data),
+  benchSettings: () => http.get<{ clockOnly: boolean }>('/company/bench-settings').then((r) => r.data),
+  saveBenchSettings: (clockOnly: boolean) => http.patch<{ clockOnly: boolean }>('/company/bench-settings', { clockOnly }).then((r) => r.data),
 
   closeItem: (id: string, resolution: string) => http.post<{ item: OpenItem }>(`/me/items/${id}/close`, { resolution }).then((r) => r.data.item),
   keepItem: (id: string, reason: string) => http.post<{ item: OpenItem }>(`/me/items/${id}/keep`, { reason }).then((r) => r.data.item),
@@ -626,4 +630,21 @@ if (typeof window !== 'undefined') {
   setInterval(() => {
     if (queuedPunches().length) void flushPunches()
   }, 20_000)
+}
+
+/**
+ * The build the server is serving now, from the version.json the client build
+ * writes next to index.html (see vite.config.ts). null when it can't be read
+ * (offline, an older build without the file). Never cached.
+ */
+export async function fetchServerBuild(): Promise<string | null> {
+  try {
+    const r = await axios.get<{ build?: unknown }>(`${import.meta.env.BASE_URL}version.json`, {
+      params: { t: Date.now() },
+      timeout: 10_000,
+    })
+    return typeof r.data?.build === 'string' ? r.data.build : null
+  } catch {
+    return null
+  }
 }

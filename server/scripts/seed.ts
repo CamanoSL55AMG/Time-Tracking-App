@@ -163,6 +163,12 @@ async function main() {
   }
   console.log(`Expense categories ready (${CATEGORIES.length}${addedCats ? `, ${addedCats} added` : ''})`)
 
+  // Bench Repair clock in / clock out lands here (no ticket, no task).
+  if (!(await prisma.job.findFirst({ where: { companyId: company.id, code: 'BENCH' } }))) {
+    await prisma.job.create({ data: { companyId: company.id, kind: 'repair', name: 'Bench Repair', code: 'BENCH' } })
+    console.log('Added job: Bench Repair')
+  }
+
   // Where time goes when someone stops a project but stays on the clock.
   if (!(await prisma.job.findFirst({ where: { companyId: company.id, code: OVERHEAD_CODE } }))) {
     await prisma.job.create({ data: { companyId: company.id, kind: 'other', name: 'Unallocated / overhead', code: OVERHEAD_CODE } })

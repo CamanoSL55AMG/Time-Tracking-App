@@ -30,3 +30,4 @@ _to_delete/
 # Windows / cloud-sync folder metadata
 desktop.ini
 Thumbs.db
+deploy/deploy.log

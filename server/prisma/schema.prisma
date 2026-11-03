@@ -36,6 +36,10 @@ model Company {
   // Morgan Sound) go out as overtime. Washington counts overtime by the week only,
   // not by the day. 0 = no overtime split (every hour goes out as regular).
   overtimeWeeklyHours      Float @default(40)
+  // Bench Repair mode is a plain clock in / clock out onto the BENCH job (Zach's team,
+  // 2026-11-02). Off = the full version: pick the SD repair ticket and a task, with
+  // the hours going to that ticket's SD invoice in AV Inventory.
+  benchClockOnly           Boolean @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 

@@ -201,7 +201,11 @@ try {
   const asB = { 'X-Act-As': crewEmail }
   const tz = 'America/Los_Angeles'
   const ymd = (d) => new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(d)
-  const t0 = new Date(Date.now() - 7 * 86_400_000 - 14 * 3_600_000)
+  // Last week's Wednesday, 14:00 UTC (6 or 7 am in Lynnwood), so the 13-hour day and
+  // the late punch after it stay inside one Monday-to-Sunday week whatever day this runs.
+  const weekAgo = new Date(Date.now() - 7 * 86_400_000)
+  const dow = (new Date(`${ymd(weekAgo)}T12:00:00Z`).getUTCDay() + 6) % 7 // Monday = 0
+  const t0 = new Date(`${ymd(new Date(weekAgo.getTime() + (2 - dow) * 86_400_000))}T14:00:00Z`)
   const lastWeek = ymd(t0)
   r = await call('POST', '/punches/in', { token: key, headers: asB, body: { jobId, at: t0.toISOString() } })
   const oldId = r.json?.punch?.id
@@ -303,6 +307,24 @@ try {
   check('the week adds up after the changes', Math.abs((r.json?.hours ?? 0) - 13) < 0.02 && r.json?.requests?.length === 4, `hours=${r.json?.hours} requests=${r.json?.requests?.length}`)
 
   // Open items: Service / Shop / Office / CAD work stays open across switches until closed.
+  {
+    // Bench Repair, clock in / clock out only: one job, no ticket, no task, no open item.
+    let b = await call('GET', '/company/bench-settings', { token: admin })
+    check('Bench Repair says whether it is clock in / clock out only', b.status === 200 && typeof b.json?.clockOnly === 'boolean', JSON.stringify(b.json))
+    const simpleEmail = `smoke-bench-simple-${stamp}@example.invalid`
+    await call('PUT', `/people/by-email/${encodeURIComponent(simpleEmail)}`, { token: key, body: { name: 'Smoke Bench Clock' } })
+    const simpleAs = { 'X-Act-As': simpleEmail }
+    b = await call('GET', '/me/state', { token: key, headers: simpleAs })
+    const benchJob = b.json?.bench?.job
+    check('the Bench Repair job is there for clock in / clock out', benchJob?.code === 'BENCH' && Boolean(b.json?.bench?.phase), JSON.stringify(b.json?.bench ?? null))
+    if (benchJob) {
+      b = await call('POST', '/punches/in', { token: key, headers: simpleAs, body: { jobId: benchJob.id, phaseId: b.json.bench.phase?.id, at: minutesAgo(20) } })
+      check('bench clock in opens no ticket or task item', b.status === 200 && !b.json?.punch?.workItemId && (b.json?.state?.openItems ?? []).length === 0, JSON.stringify(b.json?.error ?? b.json?.punch ?? ''))
+      b = await call('POST', '/punches/out', { token: key, headers: simpleAs, body: {} })
+      check('bench clock out', b.status === 200 && b.json?.state?.onClock === false)
+    }
+    await call('PUT', `/people/by-email/${encodeURIComponent(simpleEmail)}`, { token: key, body: { active: false } })
+  }
   check('Bench Repair has its own tasks', allPhases.filter((p) => p.mode === 'bench').length >= 3, JSON.stringify(allPhases.filter((p) => p.mode === 'bench').map((p) => p.key)))
   {
     // An SD ticket from AV Inventory's check-in arrives as a repair job; bench time on

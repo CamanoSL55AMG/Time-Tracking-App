@@ -105,6 +105,10 @@ dev-web.cmd     # app on http://localhost:5195
 For one server that serves both the app and the API on :5400, run `build.bat`, then
 `npm start` in `server`.
 
+After an update, anyone who opens the app (or comes back to it) on the old version sees a
+"New version available" bar with Reload. Each build writes its id to `version.json` next to
+`index.html` and into the page; the bar compares the two. There is no timer.
+
 Phones only share their location with pages loaded over HTTPS, so for real use put the
 app behind the Cloudflare tunnel the same way as the other apps.
 
