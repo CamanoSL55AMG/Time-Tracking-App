@@ -32,6 +32,10 @@ model Company {
   // category's account (Morgan Sound: 6-1140 Employee Business Expense). Mileage keeps
   // its category's account. Null = not set yet (the seed fills it); "" = off.
   reimbursementAccountCode String?
+  // Payroll export: hours past this many in one workweek (weekStartDay, Mon-Sun at
+  // Morgan Sound) go out as overtime. Washington counts overtime by the week only,
+  // not by the day. 0 = no overtime split (every hour goes out as regular).
+  overtimeWeeklyHours      Float @default(40)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -54,6 +58,8 @@ model Person {
   role         String   @default("tech") // tech | lead | manager | payroll | admin
   passwordHash String?
   active       Boolean  @default(true)
+  // Salaried / exempt: the payroll export sends all of their hours as regular.
+  overtimeExempt Boolean @default(false)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 

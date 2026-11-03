@@ -19,6 +19,7 @@ import { timesheetsRouter } from './routes/timesheets.js'
 import { assignmentsRouter } from './routes/assignments.js'
 import { expensesRouter } from './routes/expenses.js'
 import { itemsRouter } from './routes/items.js'
+import { payrollRouter } from './routes/payroll.js'
 
 assertConfig()
 
@@ -60,6 +61,7 @@ v1.use(assignmentsRouter)
 v1.use(timesheetsRouter)
 v1.use(expensesRouter)
 v1.use(itemsRouter)
+v1.use(payrollRouter)
 v1.use((req, _res, next) => next(new ApiError(404, 'not_found', `No such endpoint: ${req.method} ${req.originalUrl}`)))
 app.use('/api/v1', v1)
 app.use('/api', (req, _res, next) => next(new ApiError(404, 'not_found', `No such endpoint: ${req.method} ${req.originalUrl}. The API lives under /api/v1.`)))

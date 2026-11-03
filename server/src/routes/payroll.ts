@@ -1,0 +1,42 @@
+import { Router } from 'express'
+import { route, str } from '../api.js'
+import { ApiError } from '../errors.js'
+import { requireScope } from '../auth/middleware.js'
+import { config } from '../config.js'
+import { laborCsv, laborExport } from '../services/payroll.js'
+
+export const payrollRouter = Router()
+
+route(
+  payrollRouter,
+  {
+    method: 'get',
+    path: '/payroll/labor',
+    tag: 'Payroll',
+    summary:
+      'Approved hours for a pay period, for payroll: one line per person, day, job and phase with regular and overtime hours. ' +
+      'Weeks not approved yet are listed under notReady. Off unless PAYROLL_EXPORT_ENABLED=true.',
+    access: ['payroll:read'],
+    query: {
+      from: 'First day of the pay period, YYYY-MM-DD (company time)',
+      to: 'Last day of the pay period, YYYY-MM-DD, inclusive',
+      format: 'json (default) or csv',
+    },
+  },
+  async (req, res) => {
+    const auth = requireScope(req, 'payroll:read')
+    if (!config.payrollExportEnabled) {
+      throw new ApiError(403, 'payroll_export_off', 'The payroll labor export is turned off. Set PAYROLL_EXPORT_ENABLED=true in server/.env and restart to turn it on.')
+    }
+    const from = str(req.query.from, 10)
+    const to = str(req.query.to, 10) || from
+    const result = await laborExport(auth.companyId, from, to)
+    if (str(req.query.format, 10).toLowerCase() === 'csv') {
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8')
+      res.setHeader('Content-Disposition', `attachment; filename="labor-${result.from}-to-${result.to}.csv"`)
+      res.status(200).send(laborCsv(result.lines))
+      return
+    }
+    return result
+  },
+)

@@ -38,6 +38,10 @@ export const config = {
   dashboardIssuer: (process.env.DASHBOARD_ISSUER ?? '').trim(),
   dashboardClientId: (process.env.DASHBOARD_CLIENT_ID ?? '').trim() || 'time_tracking',
   dashboardClientSecret: (process.env.DASHBOARD_CLIENT_SECRET ?? '').trim(),
+  // Labor export for payroll (GET /payroll/labor), read by AIC Accounting. Off unless
+  // PAYROLL_EXPORT_ENABLED=true, so nothing leaves while payroll still runs from
+  // Timesheets.com.
+  payrollExportEnabled: /^(1|true|yes|on)$/i.test((process.env.PAYROLL_EXPORT_ENABLED ?? '').trim()),
 }
 
 /** Refuse to start with a missing or weak signing secret. */

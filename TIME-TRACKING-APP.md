@@ -340,6 +340,7 @@ Payroll
 | GET | `/pay-periods` | Periods and their status |
 | POST | `/pay-periods/{id}/lock` | Freeze a period |
 | GET | `/pay-periods/{id}/export?format=accountedge` | Payroll file. Marks the period exported |
+| GET | `/payroll/labor?from=&to=[&format=csv]` | **Built 2026-11-03.** Approved hours for any date range, per person / day / job / phase, regular and overtime. Read by AIC Accounting. Off unless `PAYROLL_EXPORT_ENABLED=true` |
 | POST | `/approvals/sign`, `/approvals/approve` | Tech signs, manager approves |
 
 Leave
@@ -524,6 +525,16 @@ screen, and change requests (a person asks for a fix or for missing time; a supe
 approves or turns it down; nobody approves their own). Kiosk mode, webhooks and the reconcile report inside this app are still to do
 (GED's Time page has a reconcile tab for the parallel run). Weeks run Monday to Sunday
 (`Company.weekStartDay`) until the pay period is settled (open decision 4).
+
+Status 2026-11-03: payroll labor export built (`GET /payroll/labor`, scope `payroll:read`,
+off unless `PAYROLL_EXPORT_ENABLED=true`). Approved weeks only; every labor type goes out
+(one line per person, day, job and phase, with the phase's sold-labor category).
+Overtime: hours past `Company.overtimeWeeklyHours` (default 40, 0 = no split) in a
+workweek, in the order worked, counted over the whole week even when the pay period ends
+mid-week; `Person.overtimeExempt` people get none. No rounding rule; hours to the
+hundredth. AIC Accounting imports it (its `PAYROLL_LABOR_IMPORT` switch). Still to do:
+pay periods that lock, leave hours, and confirming the overtime rule and pay period with
+payroll (open decision 4).
 
 Rounding, overtime, break and leave rules are legal requirements, not design choices.
 They must be confirmed with whoever runs payroll, and the leave rules with L&I guidance or
