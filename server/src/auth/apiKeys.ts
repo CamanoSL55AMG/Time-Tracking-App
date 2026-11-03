@@ -27,6 +27,7 @@ export const SCOPES = [
   'assignments:write',
   'expenses:read',
   'expenses:approve',
+  'payroll:read',
 ] as const
 export type Scope = (typeof SCOPES)[number]
 
@@ -49,8 +50,8 @@ export const ROLE_SCOPES: Record<Role, string[]> = {
   tech: TECH,
   lead: LEAD,
   manager: MANAGER,
-  payroll: [SELF, 'jobs:read', 'punch:read', 'people:read', 'reports:read', APPROVE, 'expenses:read', 'expenses:approve'],
-  admin: [...MANAGER, KEYS_MANAGE],
+  payroll: [SELF, 'jobs:read', 'punch:read', 'people:read', 'reports:read', APPROVE, 'expenses:read', 'expenses:approve', 'payroll:read'],
+  admin: [...MANAGER, KEYS_MANAGE, 'payroll:read'],
 }
 
 export const isRole = (v: unknown): v is Role => typeof v === 'string' && (ROLES as readonly string[]).includes(v)

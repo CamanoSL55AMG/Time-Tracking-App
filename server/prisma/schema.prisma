@@ -32,6 +32,10 @@ model Company {
   // category's account (Morgan Sound: 6-1140 Employee Business Expense). Mileage keeps
   // its category's account. Null = not set yet (the seed fills it); "" = off.
   reimbursementAccountCode String?
+  // Payroll export: hours past this many in one workweek (weekStartDay, Mon-Sun at
+  // Morgan Sound) go out as overtime. Washington counts overtime by the week only,
+  // not by the day. 0 = no overtime split (every hour goes out as regular).
+  overtimeWeeklyHours      Float @default(40)
   // Bench Repair mode is a plain clock in / clock out onto the BENCH job (Zach's team,
   // 2026-11-02). Off = the full version: pick the SD repair ticket and a task, with
   // the hours going to that ticket's SD invoice in AV Inventory.
@@ -58,6 +62,8 @@ model Person {
   role         String   @default("tech") // tech | lead | manager | payroll | admin
   passwordHash String?
   active       Boolean  @default(true)
+  // Salaried / exempt: the payroll export sends all of their hours as regular.
+  overtimeExempt Boolean @default(false)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 

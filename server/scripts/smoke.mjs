@@ -235,6 +235,20 @@ try {
   check('a week that is not over cannot be approved', r.status === 409 && r.json?.error?.code === 'week_not_over')
   r = await call('POST', '/timesheets/approve', { token: admin, body: { personIds: [crewId], week: lastWeek } })
   check('approve last week', r.status === 200 && r.json?.approved === 1, JSON.stringify(r.json))
+  // Payroll labor export: approved weeks only, off unless PAYROLL_EXPORT_ENABLED=true.
+  r = await call('GET', `/payroll/labor?from=${lastWeek}&to=${lastWeek}`, { token: tech })
+  check('a tech cannot read the payroll export', r.status === 403)
+  r = await call('GET', `/payroll/labor?from=${lastWeek}&to=${lastWeek}`, { token: admin })
+  if (/^(1|true|yes|on)$/i.test(process.env.PAYROLL_EXPORT_ENABLED ?? '')) {
+    const pl = r.json?.lines?.filter((l) => l.personId === crewId) ?? []
+    check(
+      'payroll export carries the approved day as regular hours',
+      r.status === 200 && pl.length === 1 && Math.abs(pl[0].regularHours - 13) < 0.02 && pl[0].overtimeHours === 0 && Boolean(pl[0].laborCategory),
+      JSON.stringify(r.json?.error ?? pl),
+    )
+  } else {
+    check('payroll export is off until turned on', r.status === 403 && r.json?.error?.code === 'payroll_export_off', JSON.stringify(r.json))
+  }
   r = await call('PATCH', `/punches/${oldId}`, { token: key, body: { notes: 'after approval', reason: 'smoke' } })
   check('an approved week refuses corrections', r.status === 409 && r.json?.error?.code === 'week_approved', JSON.stringify(r.json))
   r = await call('POST', '/punches/in', { token: key, headers: asB, body: { jobId, at: new Date(t0.getTime() + 13.5 * 3_600_000).toISOString() } })

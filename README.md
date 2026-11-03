@@ -58,8 +58,16 @@ server/   Express + TypeScript + Prisma + PostgreSQL — the API at /api/v1     
   into; the Expenses tab adds lines on their own (any job or none), with receipt photos,
   mileage at the company rate, and approval on the Review screen.
 
-Not built yet: expense export, pay periods and the payroll export, leave, kiosk mode,
-webhooks. See the phases in the plan.
+- **Payroll labor export** (`GET /api/v1/payroll/labor?from=&to=`, JSON or `&format=csv`):
+  approved weeks only, one line per person, day, job and phase (every labor type, each
+  with its sold-labor category), regular and overtime hours. Overtime is hours past
+  `Company.overtimeWeeklyHours` (40) in a workweek; people marked `overtimeExempt` get
+  none. Weeks not approved yet come back under `notReady`. AIC Accounting imports it.
+  **Off** unless `PAYROLL_EXPORT_ENABLED=true` in `server/.env`. Needs the
+  `payroll:read` scope (payroll and admin roles, or an API key).
+
+Not built yet: expense export, pay periods (locking) and leave hours in the payroll
+export, kiosk mode, webhooks. See the phases in the plan.
 
 ## First-time setup (Windows)
 
