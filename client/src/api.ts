@@ -631,3 +631,20 @@ if (typeof window !== 'undefined') {
     if (queuedPunches().length) void flushPunches()
   }, 20_000)
 }
+
+/**
+ * The build the server is serving now, from the version.json the client build
+ * writes next to index.html (see vite.config.ts). null when it can't be read
+ * (offline, an older build without the file). Never cached.
+ */
+export async function fetchServerBuild(): Promise<string | null> {
+  try {
+    const r = await axios.get<{ build?: unknown }>(`${import.meta.env.BASE_URL}version.json`, {
+      params: { t: Date.now() },
+      timeout: 10_000,
+    })
+    return typeof r.data?.build === 'string' ? r.data.build : null
+  } catch {
+    return null
+  }
+}
