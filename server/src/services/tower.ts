@@ -34,12 +34,27 @@ export function readSwitch(body: unknown): boolean | null {
   return logbook.includes('core')
 }
 
-type Fetch = (url: string, init: { headers: Record<string, string>; signal: AbortSignal }) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>
+type Fetch = (
+  url: string,
+  init: { headers: Record<string, string>; signal: AbortSignal; redirect: 'manual' },
+) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>
 
 export interface TowerSettings {
   url: string
   token: string
+  /** Cloudflare Access service token, when the Tower sits behind Access (same pair as
+   *  TOWER_ACCESS_ID / TOWER_ACCESS_SECRET in /etc/ged-health-check.conf). */
+  accessId?: string
+  accessSecret?: string
   timeoutMs?: number
+}
+
+/** Headers for one Tower request. Exported for tests. */
+export function towerHeaders(s: TowerSettings): Record<string, string> {
+  const h: Record<string, string> = { Authorization: `Bearer ${s.token}`, Accept: 'application/json' }
+  if (s.accessId) h['CF-Access-Client-Id'] = s.accessId
+  if (s.accessSecret) h['CF-Access-Client-Secret'] = s.accessSecret
+  return h
 }
 
 /** One question to the Tower. Never throws. */
@@ -47,9 +62,16 @@ export async function askTower(s: TowerSettings, fetchImpl: Fetch = fetch as unk
   if (!s.url || !s.token) return { on: true, reason: 'not_configured', checkedAt: null }
   try {
     const r = await fetchImpl(`${s.url.replace(/\/+$/, '')}/api/agent/entitlements`, {
-      headers: { Authorization: `Bearer ${s.token}`, Accept: 'application/json' },
+      headers: towerHeaders(s),
       signal: AbortSignal.timeout(s.timeoutMs ?? 5000),
+      // A redirect here is Cloudflare Access sending us to its sign-in page: say so
+      // instead of following it to an HTML page.
+      redirect: 'manual',
     })
+    if (r.status >= 300 && r.status < 400) {
+      const why = s.accessId ? 'check TOWER_ACCESS_ID / TOWER_ACCESS_SECRET' : 'set TOWER_ACCESS_ID / TOWER_ACCESS_SECRET'
+      return { on: true, reason: 'unreachable', checkedAt: null, detail: `Control Tower answered ${r.status} (Cloudflare Access sign-in; ${why})` }
+    }
     if (!r.ok) return { on: true, reason: 'unreachable', checkedAt: null, detail: `Control Tower answered ${r.status}` }
     const on = readSwitch(await r.json())
     if (on === null) return { on: true, reason: 'unreachable', checkedAt: null, detail: 'Control Tower answer not understood' }
@@ -88,7 +110,12 @@ export function resetSwitch(): void {
 
 /** Check now, then every TOWER_CHECK_SECONDS. Does nothing without TOWER_URL and TOWER_TOKEN. */
 export function startTowerSwitch(): void {
-  const s = { url: config.towerUrl, token: config.towerToken }
+  const s: TowerSettings = {
+    url: config.towerUrl,
+    token: config.towerToken,
+    accessId: config.towerAccessId,
+    accessSecret: config.towerAccessSecret,
+  }
   if (!s.url || !s.token) {
     console.log('[tower] TOWER_URL / TOWER_TOKEN not set: the Control Tower switch is not checked (Logbook stays ON).')
     return
