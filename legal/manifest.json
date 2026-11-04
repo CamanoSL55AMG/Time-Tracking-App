@@ -1,0 +1,8 @@
+{
+  "app": "logbook",
+  "documents": [
+    { "id": "logbook-privacy", "title": "Logbook Privacy Policy", "kind": "privacy", "version": "2026-11-04-placeholder", "file": "logbook-privacy.md" },
+    { "id": "logbook-eula", "title": "Logbook End User License Agreement", "kind": "eula", "version": "2026-11-04-placeholder", "file": "logbook-eula.md" },
+    { "id": "aic-platform-terms", "title": "AIC Platform Terms", "kind": "global", "version": "2026-11-04-placeholder", "file": "aic-platform-terms.md" }
+  ]
+}

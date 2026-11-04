@@ -18,12 +18,25 @@ let onSignedOut: (() => void) | null = null
 export const setSignedOutHandler = (fn: () => void) => {
   onSignedOut = fn
 }
+// The server holds a signed-in person's calls until they accept the terms; the app
+// then shows the terms screen.
+let onTermsRequired: (() => void) | null = null
+export const setTermsRequiredHandler = (fn: () => void) => {
+  onTermsRequired = fn
+}
+const errorCode = (err: unknown): string | undefined =>
+  axios.isAxiosError(err) ? (err.response?.data as { error?: { code?: string } } | undefined)?.error?.code : undefined
+/** The server refused because the person has terms to accept first. */
+export const isTermsRequired = (err: unknown) => axios.isAxiosError(err) && err.response?.status === 403 && errorCode(err) === 'terms_required'
+
 http.interceptors.response.use(
   (r) => r,
   (err: AxiosError) => {
     if (err.response?.status === 401 && getToken() && !String(err.config?.url ?? '').startsWith('/auth/')) {
       setToken(null)
       onSignedOut?.()
+    } else if (isTermsRequired(err)) {
+      onTermsRequired?.()
     }
     return Promise.reject(err)
   },
@@ -282,6 +295,28 @@ export interface ExpenseBody {
 }
 export const fmtMoney = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD' })
 
+// ─── First sign-in terms ────────────────────────────────────────────────────
+
+export type TermsKind = 'privacy' | 'eula' | 'global'
+export interface TermsBrief {
+  id: string
+  title: string
+  kind: TermsKind
+  version: string
+}
+export interface TermsStatus {
+  enabled: boolean
+  /** Nothing left to accept (always true while the gate is off). */
+  complete: boolean
+  /** Still to accept, in the order they must be accepted. */
+  pending: TermsBrief[]
+  documents: (TermsBrief & { accepted: boolean })[]
+}
+export interface TermsDocument extends TermsBrief {
+  /** Markdown. */
+  text: string
+}
+
 export interface ApiKey {
   id: string
   name: string
@@ -417,6 +452,9 @@ export const api = {
   google: (credential: string) => http.post<{ token: string; person: Person }>('/auth/google', { credential }).then((r) => r.data),
   me: () => http.get<{ person: Person | null; scopes: string[] }>('/auth/me').then((r) => r.data),
   changePassword: (current: string, next: string) => http.post('/auth/password', { current, next }).then((r) => r.data),
+  termsStatus: () => http.get<TermsStatus>('/terms/status').then((r) => r.data),
+  termsDocument: (id: string) => http.get<TermsDocument>(`/terms/documents/${encodeURIComponent(id)}`).then((r) => r.data),
+  acceptTerms: (documentId: string, version: string) => http.post<TermsStatus>('/terms/accept', { documentId, version }).then((r) => r.data),
 
   state: () => http.get<DayState>('/me/state').then((r) => r.data),
   punchIn: (jobId: string, phaseId: string | undefined, notes?: string) => punch('in', { jobId, phaseId, notes: notes?.trim() || undefined }),
@@ -634,9 +672,10 @@ export async function flushPunches(): Promise<boolean> {
         sentAny = true
       } catch (err) {
         if (isOffline(err)) break
-        // Signed out: keep the punch until someone signs in again.
+        // Signed out, or terms still to accept: keep the punch until that is done.
         if (axios.isAxiosError(err) && err.response?.status === 401) break
-        const code = axios.isAxiosError(err) ? (err.response?.data as { error?: { code?: string } } | undefined)?.error?.code : undefined
+        if (isTermsRequired(err)) break
+        const code = errorCode(err)
         // Clocking out when already out is not worth a warning.
         if (!(q[0].kind === 'out' && code === 'not_clocked_in')) {
           const when = new Date(String(q[0].body.at)).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })

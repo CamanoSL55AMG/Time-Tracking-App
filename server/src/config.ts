@@ -1,4 +1,5 @@
 import 'dotenv/config'
+import { isOn } from './lib/flag.js'
 
 const num = (v: string | undefined): number | null => {
   if (v === undefined || v.trim() === '') return null
@@ -41,7 +42,13 @@ export const config = {
   // Labor export for payroll (GET /payroll/labor), read by AIC Accounting. Off unless
   // PAYROLL_EXPORT_ENABLED=true, so nothing leaves while payroll still runs from
   // Timesheets.com.
-  payrollExportEnabled: /^(1|true|yes|on)$/i.test((process.env.PAYROLL_EXPORT_ENABLED ?? '').trim()),
+  payrollExportEnabled: isOn(process.env.PAYROLL_EXPORT_ENABLED),
+  // First sign-in terms: each person must accept the Privacy Policy, the EULA and the
+  // AIC Platform Terms (legal/manifest.json) before the app does anything else for
+  // them. Off unless TERMS_GATE_ENABLED=true.
+  termsGateEnabled: isOn(process.env.TERMS_GATE_ENABLED),
+  // Folder holding manifest.json and the documents. Empty = <repo>/legal.
+  termsDir: (process.env.TERMS_DIR ?? '').trim(),
 }
 
 /** Refuse to start with a missing or weak signing secret. */
