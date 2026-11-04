@@ -20,6 +20,7 @@ import { assignmentsRouter } from './routes/assignments.js'
 import { expensesRouter } from './routes/expenses.js'
 import { itemsRouter } from './routes/items.js'
 import { payrollRouter } from './routes/payroll.js'
+import { logbookSwitch, startTowerSwitch } from './services/tower.js'
 
 assertConfig()
 
@@ -50,6 +51,7 @@ app.use(express.json({ limit: '1mb' }))
 
 // ─── API v1 ─────────────────────────────────────────────────────────────────
 const v1 = express.Router()
+v1.use(logbookSwitch) // AIC Control Tower on/off; fails open (services/tower.ts)
 v1.use(authenticate)
 v1.use(rateLimit)
 v1.use(systemRouter)
@@ -113,6 +115,7 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
 
 const server = app.listen(config.port, () => {
   console.log(`Time Tracking API on http://localhost:${config.port}  (docs: /api/v1/docs)`)
+  startTowerSwitch()
 })
 
 const shutdown = () => {

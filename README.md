@@ -80,6 +80,12 @@ server/   Express + TypeScript + Prisma + PostgreSQL — the API at /api/v1     
   ready in the payroll report until they are approved too. Overtime is split in the
   order worked, so the approved days pay the same as they will once the week ends.
 
+- **On/off from AIC Control Tower**: the Tower's Manifest has a Logbook switch per
+  company. With `TOWER_URL` and `TOWER_TOKEN` set, Logbook checks it every minute; when
+  it is OFF, sign-in and the API answer 403 `app_off` with a plain message (the sign-in
+  page shows it, and punches waiting on a phone stay queued). If the Tower can't be
+  reached, Logbook stays ON and logs a warning. `GET /api/v1/health` shows the switch.
+
 Not built yet: expense export, pay periods (locking) and leave hours in the payroll
 export, kiosk mode, webhooks. See the phases in the plan.
 

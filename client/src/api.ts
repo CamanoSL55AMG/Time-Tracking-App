@@ -455,7 +455,7 @@ export type LaborExport = {
 export const api = {
   login: (email: string, password: string) => http.post<{ token: string; person: Person }>('/auth/login', { email, password }).then((r) => r.data),
   sso: (token: string) => http.post<{ token: string; person: Person }>('/auth/sso', { token }).then((r) => r.data),
-  authConfig: () => http.get<{ googleClientId: string | null; dashboard?: boolean }>('/auth/config').then((r) => r.data),
+  authConfig: () => http.get<{ googleClientId: string | null; dashboard?: boolean; switchedOff?: string | null }>('/auth/config').then((r) => r.data),
   google: (credential: string) => http.post<{ token: string; person: Person }>('/auth/google', { credential }).then((r) => r.data),
   me: () => http.get<{ person: Person | null; scopes: string[] }>('/auth/me').then((r) => r.data),
   changePassword: (current: string, next: string) => http.post('/auth/password', { current, next }).then((r) => r.data),
@@ -691,6 +691,8 @@ export async function flushPunches(): Promise<boolean> {
         // Signed out: keep the punch until someone signs in again.
         if (axios.isAxiosError(err) && err.response?.status === 401) break
         const code = axios.isAxiosError(err) ? (err.response?.data as { error?: { code?: string } } | undefined)?.error?.code : undefined
+        // Logbook switched off in AIC Control Tower: keep the punch until it is back on.
+        if (code === 'app_off') break
         // Clocking out when already out is not worth a warning.
         if (!(q[0].kind === 'out' && code === 'not_clocked_in')) {
           const when = new Date(String(q[0].body.at)).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })

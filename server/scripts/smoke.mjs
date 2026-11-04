@@ -42,6 +42,8 @@ const minutesAgo = (m) => new Date(Date.now() - m * 60_000).toISOString()
 try {
   let r = await call('GET', '/health')
   check('health', r.status === 200 && r.json?.ok === true, JSON.stringify(r.json))
+  // AIC Control Tower switch: smoke needs Logbook ON (or the Tower not configured / unreachable = fail open).
+  check('control tower switch reported and ON', r.json?.tower?.logbookOn === true, JSON.stringify(r.json?.tower))
 
   r = await call('GET', '/me/state')
   check('anonymous call is refused with 401', r.status === 401 && r.json?.error?.code === 'unauthorized')
