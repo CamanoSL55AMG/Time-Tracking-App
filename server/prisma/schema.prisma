@@ -230,6 +230,10 @@ model Timesheet {
   signedById   String?
   approvedAt   DateTime?
   approvedById String?
+  // Last day (YYYY-MM-DD) the approval covers. Approvers can sign off any time, so a
+  // week can be approved through the 15th or month end before it is over; the days
+  // after it stay open. Null on an approved week means the whole week.
+  approvedThrough String?
   note         String    @default("") // why it was reopened, or the approver's note
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt

@@ -2,7 +2,9 @@ import type { ChangeRequest, Person, Prisma } from '@prisma/client'
 import { prisma } from '../db.js'
 import { badRequest, conflict, forbidden, notFound } from '../errors.js'
 import { localDate } from '../lib/time.js'
+import { config } from '../config.js'
 import { emit } from './events.js'
+import { requestWindowProblem } from './requestRules.js'
 import { addSegmentTx, editPunchTx } from './punch.js'
 import { weekOf } from './timesheets.js'
 
@@ -18,6 +20,23 @@ export interface RequestInput {
   phaseId?: string | null
   notes?: string
   reason: string
+}
+
+/**
+ * A request has to be about recent time in a week nobody has approved yet. Older
+ * time and approved weeks are the supervisor's to correct (reopen, then fix).
+ */
+async function checkReach(person: Person, tz: string, weekStartDay: number, times: Date[]) {
+  const problem = requestWindowProblem(times, new Date(), tz, config.changeRequestDays)
+  if (problem?.code === 'future') throw badRequest('A change cannot be for a time that has not happened yet.', { field: 'clockIn' })
+  if (problem?.code === 'too_old') {
+    throw conflict('too_old', `You can ask for changes back to ${problem.earliest}. For older time, ask your supervisor to fix it.`, { earliest: problem.earliest })
+  }
+  const weeks = [...new Set(times.map((t) => weekOf(localDate(t, tz), weekStartDay)))]
+  const approved = await prisma.timesheet.findFirst({ where: { personId: person.id, weekStart: { in: weeks }, status: 'approved' } })
+  if (approved) {
+    throw conflict('week_approved', `The week of ${approved.weekStart} is already approved. Ask your supervisor to reopen it and fix the time.`, { weekStart: approved.weekStart })
+  }
 }
 
 const segInclude = { job: { select: { id: true, name: true, code: true } }, phase: { select: { id: true, key: true, name: true, short: true } } } as const
@@ -40,6 +59,10 @@ export async function createRequest(person: Person, input: RequestInput) {
       (input.phaseId !== undefined && input.phaseId !== seg.phaseId) ||
       (input.notes !== undefined && input.notes !== seg.notes)
     if (!changes) throw badRequest('Nothing to change: the request matches the segment as it is.')
+    const newIn = input.clockIn ?? seg.clockIn
+    const newOut = input.clockOut ?? seg.clockOut
+    if (newOut && newOut.getTime() <= newIn.getTime()) throw badRequest('The end must be after the start.', { field: 'clockOut' })
+    await checkReach(person, company.timezone, company.weekStartDay, [seg.clockIn, ...(seg.clockOut ? [seg.clockOut] : []), newIn, ...(newOut ? [newOut] : [])])
     const pending = await prisma.changeRequest.findFirst({ where: { punchId: seg.id, status: 'pending' } })
     if (pending) throw conflict('request_pending', 'There is already a change waiting for approval on this segment. Withdraw it first to ask for something else.')
     await checkRefs(person.companyId, input)
@@ -80,6 +103,7 @@ export async function createRequest(person: Person, input: RequestInput) {
   if (!input.clockIn || !input.clockOut || !input.jobId) throw badRequest('Missing time needs a start, an end and a job.', { field: 'clockIn' })
   if (input.clockOut.getTime() <= input.clockIn.getTime()) throw badRequest('The end must be after the start.', { field: 'clockOut' })
   if (input.clockIn.getTime() > Date.now()) throw badRequest('Missing time cannot be in the future.', { field: 'clockIn' })
+  await checkReach(person, company.timezone, company.weekStartDay, [input.clockIn, input.clockOut])
   await checkRefs(person.companyId, input)
   return prisma.$transaction(async (tx) => {
     const req = await tx.changeRequest.create({

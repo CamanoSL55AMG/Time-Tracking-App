@@ -233,10 +233,23 @@ try {
   check('a tech cannot approve', r.status === 403)
   r = await call('GET', '/timesheets', { token: tech })
   check('a tech cannot see everyone\'s week', r.status === 403)
-  r = await call('POST', '/timesheets/approve', { token: admin, body: { personIds: [row?.personId] } })
-  check('a week that is not over cannot be approved', r.status === 409 && r.json?.error?.code === 'week_not_over')
+  r = await call('POST', '/timesheets/approve', { token: admin, body: { personIds: [row?.personId], through: ymd(new Date()) } })
+  check('today cannot be approved until it is over', r.status === 409 && r.json?.error?.code === 'day_not_over', JSON.stringify(r.json))
+  // Approvers can sign off any time: approve last week only through the day before
+  // the punch. That day isn't paid yet and still takes punches.
+  r = await call('POST', '/timesheets/approve', { token: admin, body: { personIds: [crewId], week: lastWeek, through: ymd(new Date(t0.getTime() - 86_400_000)) } })
+  check('part of a week can be approved early', r.status === 200 && r.json?.approved === 1, JSON.stringify(r.json))
+  r = await call('GET', `/timesheets/${crewId}?week=${lastWeek}`, { token: admin })
+  check('a part-week approval says through which day', r.json?.partlyApproved === true && r.json?.approvedThrough < lastWeek, JSON.stringify(r.json?.approvedThrough))
+  r = await call('GET', `/payroll/labor?from=${lastWeek}&to=${lastWeek}`, { token: admin })
+  if (r.status === 200) {
+    const waiting = r.json?.notReady?.find((n) => n.personId === crewId)
+    check('a day after a part-week approval waits as not ready', !r.json?.lines?.some((l) => l.personId === crewId) && waiting?.approvedThrough < lastWeek, JSON.stringify(r.json?.notReady))
+  }
   r = await call('POST', '/timesheets/approve', { token: admin, body: { personIds: [crewId], week: lastWeek } })
   check('approve last week', r.status === 200 && r.json?.approved === 1, JSON.stringify(r.json))
+  r = await call('GET', `/timesheets/${crewId}?week=${lastWeek}`, { token: admin })
+  check('approving again covers the whole week', r.json?.partlyApproved === false && r.json?.status === 'approved', JSON.stringify(r.json?.approvedThrough))
   // Payroll labor export: approved weeks only, off unless PAYROLL_EXPORT_ENABLED=true.
   r = await call('GET', `/payroll/labor?from=${lastWeek}&to=${lastWeek}`, { token: tech })
   check('a tech cannot read the payroll export', r.status === 403)
@@ -251,6 +264,14 @@ try {
   } else {
     check('payroll export is off until turned on', r.status === 403 && r.json?.error?.code === 'payroll_export_off', JSON.stringify(r.json))
   }
+  r = await call('GET', '/payroll/periods', { token: admin })
+  check(
+    'pay periods are the 1st to the 15th and the 16th to month end',
+    r.status === 200 && /-(01|16)$/.test(r.json?.current?.from ?? '') && /-(01|16)$/.test(r.json?.previous?.from ?? '') && typeof r.json?.exportEnabled === 'boolean',
+    JSON.stringify(r.json),
+  )
+  r = await call('GET', '/payroll/periods', { token: tech })
+  check('a tech cannot read the pay periods', r.status === 403)
   r = await call('PATCH', `/punches/${oldId}`, { token: key, body: { notes: 'after approval', reason: 'smoke' } })
   check('an approved week refuses corrections', r.status === 409 && r.json?.error?.code === 'week_approved', JSON.stringify(r.json))
   r = await call('POST', '/punches/in', { token: key, headers: asB, body: { jobId, at: new Date(t0.getTime() + 13.5 * 3_600_000).toISOString() } })
@@ -279,6 +300,16 @@ try {
   check('a tech cannot approve a change request', r.status === 403)
   r = await call('GET', '/requests?status=pending', { token: admin })
   check('supervisors see waiting requests', r.status === 200 && r.json?.data?.some((x) => x.id === reqId))
+  {
+    // Time fixes are approved by managers and admins only, not payroll (Art, 2026-11-04).
+    const payEmail = `smoke-payroll-${stamp}@example.invalid`
+    const payPw = `pw-${randomBytes(9).toString('base64url')}`
+    await call('PUT', `/people/by-email/${encodeURIComponent(payEmail)}`, { token: admin, body: { name: 'Smoke Payroll', role: 'payroll', password: payPw } })
+    const pay = (await call('POST', '/auth/login', { body: { email: payEmail, password: payPw } })).json?.token
+    r = await call('POST', `/requests/${reqId}/approve`, { token: pay, body: {} })
+    check('payroll cannot approve a time fix', Boolean(pay) && r.status === 403, JSON.stringify(r.json))
+    await call('PUT', `/people/by-email/${encodeURIComponent(payEmail)}`, { token: admin, body: { active: false } })
+  }
   r = await call('POST', `/requests/${reqId}/approve`, { token: admin, body: {} })
   check('approve the change', r.status === 200 && r.json?.request?.status === 'approved', JSON.stringify(r.json))
   r = await call('GET', `/punches/${oldId}`, { token: key })
@@ -307,6 +338,27 @@ try {
   check('approve missing time', r.status === 200 && r.json?.request?.status === 'approved', JSON.stringify(r.json))
   r = await call('GET', `/timesheets/${crewId}?week=${lastWeek}`, { token: admin })
   check('the week adds up after the changes', Math.abs((r.json?.hours ?? 0) - 13) < 0.02 && r.json?.requests?.length === 4, `hours=${r.json?.hours} requests=${r.json?.requests?.length}`)
+
+  // What a person can still ask about: not the future, not older than CHANGE_REQUEST_DAYS,
+  // not an approved week. The clock screen shows fixes waiting for a supervisor.
+  r = await call('POST', '/me/requests', { token: key, headers: asB, body: { punchId: oldId, clockOut: new Date(Date.now() + 3 * H).toISOString(), reason: 'smoke: future' } })
+  check('a change cannot be for time that has not happened', r.status === 400, JSON.stringify(r.json))
+  const reqDays = Number(process.env.CHANGE_REQUEST_DAYS ?? 21)
+  if (reqDays > 0) {
+    const old = new Date(Date.now() - (reqDays + 3) * 86_400_000)
+    r = await call('POST', '/me/requests', { token: key, headers: asB, body: { clockIn: old.toISOString(), clockOut: new Date(old.getTime() + H).toISOString(), jobId, reason: 'smoke: old' } })
+    check('time older than the request window goes to a supervisor', r.status === 409 && r.json?.error?.code === 'too_old', JSON.stringify(r.json))
+  }
+  r = await call('POST', '/me/requests', { token: key, headers: asB, body: { punchId: oldId, notes: 'smoke: waiting', reason: 'smoke: shows on the clock screen' } })
+  const waitId = r.json?.request?.id
+  r = await call('GET', '/me/state', { token: key, headers: asB })
+  check('the clock screen lists fixes waiting for a supervisor', r.status === 200 && r.json?.pendingChanges?.some((c) => c.id === waitId && c.punchId === oldId), JSON.stringify(r.json?.pendingChanges ?? r.json))
+  await call('POST', `/me/requests/${waitId}/withdraw`, { token: key, headers: asB })
+  r = await call('POST', '/timesheets/approve', { token: admin, body: { personIds: [crewId], week: lastWeek } })
+  check('approve the corrected week', r.status === 200 && r.json?.approved === 1, JSON.stringify(r.json))
+  r = await call('POST', '/me/requests', { token: key, headers: asB, body: { punchId: oldId, notes: 'too late', reason: 'smoke: approved week' } })
+  check('no change requests into an approved week', r.status === 409 && r.json?.error?.code === 'week_approved', JSON.stringify(r.json))
+  await call('POST', '/timesheets/reopen', { token: admin, body: { personId: crewId, week: lastWeek, reason: 'smoke: reopen after request checks' } })
 
   // A tech adds a new client in the field (Service Call or Site Visit), then switches onto it.
   {

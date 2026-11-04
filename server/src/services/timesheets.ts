@@ -6,8 +6,11 @@ import { emit } from './events.js'
 import { findExceptions, type TimeException } from './exceptions.js'
 
 // Weekly timesheets. The tech signs their week; a manager or payroll approves it.
-// Approval locks the week: punches and corrections inside it are refused until an
-// approver reopens it. Any change inside a signed week sends it back for signing.
+// Approval locks the days it covers: punches and corrections inside them are refused
+// until an approver reopens the week. Approvers can sign off any time, so a week can
+// be approved through a day before it is over (the 15th, month end): the days after
+// that stay open until approved too. Any change inside a signed week sends it back
+// for signing.
 // A week belongs to the local date its segments START on, like every other report.
 
 export type TimesheetStatus = 'open' | 'signed' | 'approved'
@@ -31,6 +34,37 @@ export function resolveWeek(company: Company, raw: string | undefined): string {
 
 const fmtWeek = (weekStart: string) =>
   new Date(`${weekStart}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })
+const fmtDayName = (ymd: string) =>
+  new Date(`${ymd}T12:00:00Z`).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' })
+
+/** Last day an approved sheet covers (YYYY-MM-DD), or null when it is not approved. */
+export function approvedThroughOf(ts: Pick<Timesheet, 'status' | 'approvedThrough' | 'weekStart'> | null | undefined): string | null {
+  if (!ts || ts.status !== 'approved') return null
+  return ts.approvedThrough ?? addDays(ts.weekStart, 6)
+}
+
+/** Whether an approval covers that day, so the day is locked and paid. */
+export function approvalCovers(ts: Pick<Timesheet, 'status' | 'approvedThrough' | 'weekStart'> | null | undefined, ymd: string): boolean {
+  const through = approvedThroughOf(ts)
+  return through !== null && ymd <= through
+}
+
+/**
+ * The last day an approval should cover. Given: any day of the week. Not given: the
+ * whole week once it is over, otherwise through yesterday. A day that is not over yet
+ * can't be approved, since people may still punch on it.
+ */
+export function resolveThrough(weekStart: string, today: string, raw?: string): { through: string } | { code: string; message: string } {
+  const weekEnd = addDays(weekStart, 6)
+  let through = raw || (today > weekEnd ? weekEnd : addDays(today, -1))
+  if (raw && (!isYmd(raw) || raw < weekStart || raw > weekEnd)) {
+    return { code: 'bad_through', message: `Approve through a day from ${fmtDayName(weekStart)} to ${fmtDayName(weekEnd)}.` }
+  }
+  if (through >= today) return { code: 'day_not_over', message: `${fmtDayName(through)} isn't over yet. Approve through ${fmtDayName(addDays(today, -1))} or wait until the day ends.` }
+  if (through < weekStart) return { code: 'nothing_to_approve', message: `No day of the week of ${fmtWeek(weekStart)} is over yet.` }
+  through = through > weekEnd ? weekEnd : through
+  return { through }
+}
 
 // ─── The lock ───────────────────────────────────────────────────────────────
 
@@ -41,12 +75,29 @@ const fmtWeek = (weekStart: string) =>
  */
 export async function touchWeeks(tx: Tx, companyId: string, personId: string, instants: Date[], why: string): Promise<void> {
   const company = await tx.company.findUniqueOrThrow({ where: { id: companyId } })
-  const weeks = [...new Set(instants.map((at) => weekOf(localDate(at, company.timezone), company.weekStartDay)))]
-  for (const weekStart of weeks) {
+  const daysByWeek = new Map<string, string[]>()
+  for (const at of instants) {
+    const day = localDate(at, company.timezone)
+    const weekStart = weekOf(day, company.weekStartDay)
+    daysByWeek.set(weekStart, [...(daysByWeek.get(weekStart) ?? []), day])
+  }
+  for (const [weekStart, days] of daysByWeek) {
     const ts = await tx.timesheet.findUnique({ where: { personId_weekStart: { personId, weekStart } } })
     if (!ts || ts.status === 'open') continue
     if (ts.status === 'approved') {
-      throw conflict('week_approved', `The week of ${fmtWeek(weekStart)} is approved and locked. A manager has to reopen it first.`, { weekStart })
+      if (days.some((d) => approvalCovers(ts, d))) {
+        const through = approvedThroughOf(ts) as string
+        const whole = through >= addDays(weekStart, 6)
+        throw conflict(
+          'week_approved',
+          whole
+            ? `The week of ${fmtWeek(weekStart)} is approved and locked. A manager has to reopen it first.`
+            : `The week of ${fmtWeek(weekStart)} is approved through ${fmtDayName(through)} and those days are locked. A manager has to reopen it first.`,
+          { weekStart, approvedThrough: through },
+        )
+      }
+      // Days after a part-week approval stay open and change freely.
+      continue
     }
     await tx.timesheet.update({
       where: { id: ts.id },
@@ -64,8 +115,10 @@ const segInclude = {
   _count: { select: { edits: true } },
 } as const
 
-const sheetView = (ts: Timesheet | null, names: Map<string, string>) => ({
+const sheetView = (ts: Timesheet | null, names: Map<string, string>, weekEnd: string) => ({
   status: (ts?.status ?? 'open') as TimesheetStatus,
+  approvedThrough: approvedThroughOf(ts),
+  partlyApproved: (approvedThroughOf(ts) ?? weekEnd) < weekEnd,
   signedAt: ts?.signedAt ?? null,
   approvedAt: ts?.approvedAt ?? null,
   approvedBy: ts?.approvedById ? names.get(ts.approvedById) ?? null : null,
@@ -115,7 +168,7 @@ export async function personWeek(companyId: string, personId: string, rawWeek?: 
     hours: dayRows.reduce((s, d) => s + d.hours, 0),
     openSegment: segments.some((s) => !s.clockOut),
     weekOver: now.getTime() >= end.getTime(),
-    ...sheetView(ts, names),
+    ...sheetView(ts, names, days[6]),
     exceptions,
   }
 }
@@ -161,7 +214,7 @@ export async function weekSheet(companyId: string, rawWeek?: string) {
         openSegment: r.open,
         problems: problemsBy.get(p.id) ?? 0,
         pendingRequests: pendingBy.get(p.id) ?? 0,
-        ...sheetView(sheetBy.get(p.id) ?? null, names),
+        ...sheetView(sheetBy.get(p.id) ?? null, names, days[6]),
       }
     })
     .sort((a, b) => a.person.name.localeCompare(b.person.name))
@@ -176,7 +229,8 @@ export async function weekSheet(companyId: string, rawWeek?: string) {
     quiet: quiet.sort((a, b) => a.name.localeCompare(b.name)),
     exceptions,
     counts: {
-      approved: out.filter((r) => r.status === 'approved').length,
+      approved: out.filter((r) => r.status === 'approved' && !r.partlyApproved).length,
+      partlyApproved: out.filter((r) => r.partlyApproved).length,
       signed: out.filter((r) => r.status === 'signed').length,
       open: out.filter((r) => r.status === 'open').length,
       pendingRequests: pendingRows.length,
@@ -186,8 +240,9 @@ export async function weekSheet(companyId: string, rawWeek?: string) {
 
 // ─── Sign, approve, reopen ──────────────────────────────────────────────────
 
-async function weekTotal(tx: Tx, personId: string, company: Company, weekStart: string) {
-  const { start, end } = weekBounds(weekStart, company.timezone)
+async function weekTotal(tx: Tx, personId: string, company: Company, weekStart: string, through = addDays(weekStart, 6)) {
+  const { start } = weekBounds(weekStart, company.timezone)
+  const end = startOfLocalDay(addDays(through, 1), company.timezone)
   const segs = await tx.punch.findMany({ where: { personId, clockIn: { gte: start, lt: end } }, select: { clockIn: true, clockOut: true } })
   return { open: segs.some((s) => !s.clockOut), hours: segs.reduce((s, p) => s + hoursBetween(p.clockIn, p.clockOut), 0), end }
 }
@@ -203,7 +258,13 @@ export async function signWeek(person: Person, rawWeek?: string) {
     const t = await weekTotal(tx, person.id, company, weekStart)
     if (t.open) throw conflict('open_segment', 'You are still on the clock in this week. Clock out first.')
     const existing = await tx.timesheet.findUnique({ where: { personId_weekStart: { personId: person.id, weekStart } } })
-    if (existing?.status === 'approved') throw conflict('week_approved', 'This week is already approved.')
+    if (existing?.status === 'approved') {
+      if (approvalCovers(existing, addDays(weekStart, 6))) throw conflict('week_approved', 'This week is already approved.')
+      // Part of the week is approved already: record the signature, keep the approval.
+      const ts = await tx.timesheet.update({ where: { id: existing.id }, data: { signedAt: new Date(), signedById: person.id } })
+      await emit(tx, person.companyId, 'timesheet.signed', { personId: person.id, weekStart, hours: t.hours })
+      return ts
+    }
     const ts = await tx.timesheet.upsert({
       where: { personId_weekStart: { personId: person.id, weekStart } },
       create: { companyId: person.companyId, personId: person.id, weekStart, status: 'signed', hours: t.hours, signedAt: new Date(), signedById: person.id },
@@ -222,12 +283,20 @@ export interface ApproveResult {
   hours?: number
 }
 
-/** Approve a week for one or more people. The week must be over and nobody may still be on the clock in it. */
-export async function approveWeek(companyId: string, approverId: string, personIds: string[], rawWeek?: string, note = ''): Promise<ApproveResult[]> {
+/**
+ * Approve a week for one or more people, any time: through `rawThrough` (a day of the
+ * week), or by default the whole week once it is over and through yesterday before
+ * that. Nobody may still be on the clock on the days approved. Approving again
+ * extends the approval; it never shrinks one.
+ */
+export async function approveWeek(companyId: string, approverId: string, personIds: string[], rawWeek?: string, note = '', rawThrough?: string): Promise<ApproveResult[]> {
   const company = await prisma.company.findUniqueOrThrow({ where: { id: companyId } })
   const weekStart = resolveWeek(company, rawWeek)
-  const { end } = weekBounds(weekStart, company.timezone)
-  if (Date.now() < end.getTime()) throw conflict('week_not_over', `The week of ${fmtWeek(weekStart)} is not over yet.`)
+  const resolved = resolveThrough(weekStart, localDate(new Date(), company.timezone), rawThrough)
+  if ('code' in resolved) {
+    if (resolved.code === 'bad_through') throw badRequest(resolved.message, { field: 'through' })
+    throw conflict(resolved.code, resolved.message)
+  }
   const results: ApproveResult[] = []
   for (const personId of [...new Set(personIds)]) {
     try {
@@ -235,18 +304,21 @@ export async function approveWeek(companyId: string, approverId: string, personI
       if (!person) throw notFound('Person')
       const r = await prisma.$transaction(async (tx) => {
         await lockPerson(tx, personId)
-        const t = await weekTotal(tx, personId, company, weekStart)
-        if (t.open) throw conflict('open_segment', `${person.name} is still on the clock in this week. Close that segment first.`)
+        const existing = await tx.timesheet.findUnique({ where: { personId_weekStart: { personId, weekStart } } })
+        const prior = approvedThroughOf(existing)
+        const through = prior && prior > resolved.through ? prior : resolved.through
+        const t = await weekTotal(tx, personId, company, weekStart, through)
+        if (t.open) throw conflict('open_segment', `${person.name} is still on the clock on a day being approved. Close that segment first.`)
         const pending = await tx.changeRequest.count({ where: { personId, weekStart, status: 'pending' } })
         if (pending) {
           throw conflict('pending_request', `${person.name} has ${pending === 1 ? 'a change request' : `${pending} change requests`} waiting for this week. Approve or turn ${pending === 1 ? 'it' : 'them'} down first.`)
         }
         await tx.timesheet.upsert({
           where: { personId_weekStart: { personId, weekStart } },
-          create: { companyId, personId, weekStart, status: 'approved', hours: t.hours, approvedAt: new Date(), approvedById: approverId, note },
-          update: { status: 'approved', hours: t.hours, approvedAt: new Date(), approvedById: approverId, note },
+          create: { companyId, personId, weekStart, status: 'approved', hours: t.hours, approvedAt: new Date(), approvedById: approverId, approvedThrough: through, note },
+          update: { status: 'approved', hours: t.hours, approvedAt: new Date(), approvedById: approverId, approvedThrough: through, note },
         })
-        await emit(tx, companyId, 'timesheet.approved', { personId, weekStart, hours: t.hours, by: approverId })
+        await emit(tx, companyId, 'timesheet.approved', { personId, weekStart, through, hours: t.hours, by: approverId })
         return t.hours
       })
       results.push({ personId, ok: true, hours: r })
@@ -270,7 +342,7 @@ export async function reopenWeek(companyId: string, approverId: string, personId
     if (ts.status === 'open') return ts
     const updated = await tx.timesheet.update({
       where: { id: ts.id },
-      data: { status: 'open', signedAt: null, signedById: null, approvedAt: null, approvedById: null, note: reason.trim() },
+      data: { status: 'open', signedAt: null, signedById: null, approvedAt: null, approvedById: null, approvedThrough: null, note: reason.trim() },
     })
     await emit(tx, companyId, 'timesheet.reopened', { personId, weekStart, reason: reason.trim(), by: approverId })
     return updated

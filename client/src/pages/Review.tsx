@@ -33,7 +33,23 @@ import type { ChangeRequest, ServiceBilling } from '../api'
 // Approve the rows that are right; an approved week is locked until reopened.
 // Leads can look; only managers and payroll approve.
 
-export default function ReviewPage({ canApprove, canEdit, canApproveExpenses = false, meId }: { canApprove: boolean; canEdit: boolean; canApproveExpenses?: boolean; meId?: string }) {
+export default function ReviewPage({
+  canApprove,
+  canEdit,
+  canApproveExpenses = false,
+  meId,
+  onWaitingChange,
+  canDecideFixes = false,
+}: {
+  canApprove: boolean
+  /** Approve or turn down time fixes: managers and admins (not payroll or leads). */
+  canDecideFixes?: boolean
+  canEdit: boolean
+  canApproveExpenses?: boolean
+  meId?: string
+  /** How many time fixes are waiting, so the Review tab's count stays right. */
+  onWaitingChange?: (n: number) => void
+}) {
   const [sheet, setSheet] = useState<WeekSheet | null>(null)
   const [at, setAt] = useState<string | undefined>(undefined)
   const [picked, setPicked] = useState<Set<string>>(new Set())
@@ -51,11 +67,12 @@ export default function ReviewPage({ canApprove, canEdit, canApproveExpenses = f
       const [s, reqs] = await Promise.all([api.weekSheet(to), api.pendingRequests()])
       setSheet(s)
       setRequests(reqs)
+      onWaitingChange?.(reqs.length)
       setPicked(new Set())
     } catch (err) {
       setError(errorText(err))
     }
-  }, [])
+  }, [onWaitingChange])
 
   useEffect(() => {
     // Open on last week: that is the one waiting for approval.
@@ -68,7 +85,20 @@ export default function ReviewPage({ canApprove, canEdit, canApproveExpenses = f
     void load(at)
   }, [at, load])
 
-  const approvable = (r: WeekSheetRow) => canApprove && Boolean(sheet?.weekOver) && r.status !== 'approved' && !r.openSegment
+  // Approvers can sign off any time. Before the week is over, approval runs through a
+  // day that is already over (yesterday by default, or the 15th / month end); the days
+  // after it stay open. Someone on the clock today doesn't block approving yesterday.
+  const yesterday = (() => {
+    const d = new Date()
+    d.setDate(d.getDate() - 1)
+    return d.toLocaleDateString('en-CA')
+  })()
+  const [through, setThrough] = useState('')
+  const lastDay = sheet ? (sheet.weekOver ? sheet.weekEnd : yesterday < sheet.weekEnd ? yesterday : sheet.weekEnd) : ''
+  const throughDay = sheet?.weekOver ? sheet.weekEnd : through && through >= (sheet?.weekStart ?? '') && through <= lastDay ? through : lastDay
+  const anyDayOver = Boolean(sheet) && lastDay >= (sheet?.weekStart ?? '')
+  const approvable = (r: WeekSheetRow) =>
+    canApprove && anyDayOver && (r.status !== 'approved' || (r.approvedThrough ?? '') < throughDay) && (!sheet?.weekOver || !r.openSegment)
   const selectable = useMemo(() => (sheet?.rows ?? []).filter(approvable), [sheet, canApprove]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const approve = async (ids: string[]) => {
@@ -77,7 +107,7 @@ export default function ReviewPage({ canApprove, canEdit, canApproveExpenses = f
     setError('')
     setNotice('')
     try {
-      const r = await api.approve(ids, sheet.weekStart)
+      const r = await api.approve(ids, sheet.weekStart, undefined, sheet.weekOver ? undefined : throughDay)
       const failed = r.results.filter((x) => !x.ok)
       setNotice(`${r.approved} approved.${failed.length ? ` Not approved: ${failed.map((f) => f.message).join(' ')}` : ''}`)
       setOpen(null)
@@ -109,6 +139,7 @@ export default function ReviewPage({ canApprove, canEdit, canApproveExpenses = f
       <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', rowGap: 1 }}>
         <Chip label={`${sheet.rows.length} people · ${total.toFixed(1)} h`} />
         <Chip color="success" variant="outlined" label={`${sheet.counts.approved} approved`} />
+        {sheet.counts.partlyApproved > 0 && <Chip color="success" variant="outlined" label={`${sheet.counts.partlyApproved} approved part way`} />}
         <Chip color="info" variant="outlined" label={`${sheet.counts.signed} signed`} />
         <Chip variant="outlined" label={`${sheet.counts.open} not signed`} />
         {!sheet.weekOver && <Chip color="warning" variant="outlined" label="Week not over yet" />}
@@ -117,12 +148,17 @@ export default function ReviewPage({ canApprove, canEdit, canApproveExpenses = f
       {requests.length > 0 && (
         <Stack spacing={1}>
           <Typography variant="subtitle2">Change requests waiting ({requests.length})</Typography>
+          {!canDecideFixes && (
+            <Typography variant="caption" color="text.secondary">
+              A manager or admin approves these.
+            </Typography>
+          )}
           {requests.map((r) => (
             <RequestCard
               key={r.id}
               req={r}
               showName
-              actions={canApprove ? <DecideButtons req={r} onDone={() => void load(sheet.weekStart)} /> : undefined}
+              actions={canDecideFixes ? <DecideButtons req={r} onDone={() => void load(sheet.weekStart)} /> : undefined}
             />
           ))}
         </Stack>
@@ -197,7 +233,13 @@ export default function ReviewPage({ canApprove, canEdit, canApproveExpenses = f
                   </TableCell>
                   <TableCell>
                     <Stack direction="row" spacing={0.5}>
-                      {r.openSegment ? <Chip size="small" color="warning" label="On the clock" /> : <StatusChip status={r.status} />}
+                      {r.openSegment ? (
+                        <Chip size="small" color="warning" label="On the clock" />
+                      ) : r.partlyApproved && r.approvedThrough ? (
+                        <Chip size="small" color="success" variant="outlined" label={`Approved to ${fmtDay(r.approvedThrough, { weekday: 'short' })}`} sx={{ fontWeight: 700 }} />
+                      ) : (
+                        <StatusChip status={r.status} />
+                      )}
                       {r.pendingRequests > 0 && <Chip size="small" color="warning" variant="outlined" label={`${r.pendingRequests} change${r.pendingRequests === 1 ? '' : 's'} waiting`} />}
                     </Stack>
                   </TableCell>
@@ -216,12 +258,27 @@ export default function ReviewPage({ canApprove, canEdit, canApproveExpenses = f
       </Paper>
 
       {canApprove && (
-        <Stack direction="row" spacing={1} alignItems="center">
+        <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: 'wrap', rowGap: 1 }}>
+          {!sheet.weekOver && anyDayOver && (
+            <TextField
+              size="small"
+              type="date"
+              label="Approve through"
+              value={throughDay}
+              onChange={(e) => setThrough(e.target.value)}
+              inputProps={{ min: sheet.weekStart, max: lastDay }}
+              InputLabelProps={{ shrink: true }}
+            />
+          )}
           <Button variant="contained" disabled={busy || !picked.size} onClick={() => approve([...picked])}>
             {busy ? 'Approving…' : `Approve ${picked.size || ''}`.trim()}
           </Button>
           <Typography variant="caption" color="text.secondary">
-            {sheet.weekOver ? 'Approved weeks are locked until reopened. Rows still on the clock cannot be approved.' : 'A week can be approved once it is over.'}
+            {sheet.weekOver
+              ? 'Approved weeks are locked until reopened. Rows still on the clock cannot be approved.'
+              : anyDayOver
+                ? `Approves ${fmtDay(sheet.weekStart, { weekday: 'short' })} to ${fmtDay(throughDay, { weekday: 'short', month: 'short', day: 'numeric' })}, so payroll can run on the 15th or month end. Those days lock; the rest of the week stays open.`
+                : 'No day of this week is over yet.'}
           </Typography>
         </Stack>
       )}
@@ -253,7 +310,7 @@ export default function ReviewPage({ canApprove, canEdit, canApproveExpenses = f
 
       <ServiceBillingPanel from={sheet.weekStart} to={sheet.weekEnd} />
 
-      {open && <PersonDialog row={open} weekStart={sheet.weekStart} canApprove={canApprove} canEdit={canEdit} approvable={approvable(open)} busy={busy} onApprove={() => approve([open.person.id])} onClose={() => setOpen(null)} onChanged={() => void load(sheet.weekStart)} />}
+      {open && <PersonDialog row={open} weekStart={sheet.weekStart} canApprove={canApprove} canDecideFixes={canDecideFixes} canEdit={canEdit} approvable={approvable(open)} busy={busy} onApprove={() => approve([open.person.id])} onClose={() => setOpen(null)} onChanged={() => void load(sheet.weekStart)} />}
     </Stack>
   )
 }
@@ -262,6 +319,7 @@ function PersonDialog({
   row,
   weekStart,
   canApprove,
+  canDecideFixes,
   canEdit,
   approvable,
   busy,
@@ -272,6 +330,7 @@ function PersonDialog({
   row: WeekSheetRow
   weekStart: string
   canApprove: boolean
+  canDecideFixes: boolean
   canEdit: boolean
   approvable: boolean
   busy: boolean
@@ -329,7 +388,7 @@ function PersonDialog({
                 Not signed by {row.person.name.split(' ')[0]} yet. You can still approve.
               </Typography>
             )}
-            <WeekDetail week={week} onEdit={canEdit && week.status !== 'approved' ? setEditing : undefined} />
+            <WeekDetail week={week} onEdit={canEdit && (week.status !== 'approved' || week.partlyApproved) ? setEditing : undefined} />
             <ExceptionList items={week.exceptions} />
             {week.requests.length > 0 && (
               <Stack spacing={1}>
@@ -339,7 +398,7 @@ function PersonDialog({
                     key={q.id}
                     req={q}
                     actions={
-                      canApprove && q.status === 'pending' ? (
+                      canDecideFixes && q.status === 'pending' ? (
                         <DecideButtons
                           req={q}
                           onDone={() => {
