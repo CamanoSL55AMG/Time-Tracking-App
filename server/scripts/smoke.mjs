@@ -278,17 +278,22 @@ try {
   r = await call('GET', '/requests?status=pending', { token: admin })
   check('supervisors see waiting requests', r.status === 200 && r.json?.data?.some((x) => x.id === reqId))
   {
-    // Time fixes are approved by managers and admins only, not payroll (Art, 2026-11-04).
+    // Time fixes are approved by managers, admins and payroll, not crew leads (Art, 2026-11-04).
+    const pw = () => `pw-${randomBytes(9).toString('base64url')}`
+    const leadEmail = `smoke-lead-${stamp}@example.invalid`
+    const leadPw = pw()
+    await call('PUT', `/people/by-email/${encodeURIComponent(leadEmail)}`, { token: admin, body: { name: 'Smoke Lead', role: 'lead', password: leadPw } })
+    const lead = (await call('POST', '/auth/login', { body: { email: leadEmail, password: leadPw } })).json?.token
+    r = await call('POST', `/requests/${reqId}/approve`, { token: lead, body: {} })
+    check('a crew lead cannot approve a time fix', Boolean(lead) && r.status === 403, JSON.stringify(r.json))
     const payEmail = `smoke-payroll-${stamp}@example.invalid`
-    const payPw = `pw-${randomBytes(9).toString('base64url')}`
+    const payPw = pw()
     await call('PUT', `/people/by-email/${encodeURIComponent(payEmail)}`, { token: admin, body: { name: 'Smoke Payroll', role: 'payroll', password: payPw } })
     const pay = (await call('POST', '/auth/login', { body: { email: payEmail, password: payPw } })).json?.token
     r = await call('POST', `/requests/${reqId}/approve`, { token: pay, body: {} })
-    check('payroll cannot approve a time fix', Boolean(pay) && r.status === 403, JSON.stringify(r.json))
-    await call('PUT', `/people/by-email/${encodeURIComponent(payEmail)}`, { token: admin, body: { active: false } })
+    check('payroll approves the change', Boolean(pay) && r.status === 200 && r.json?.request?.status === 'approved', JSON.stringify(r.json))
+    for (const email of [leadEmail, payEmail]) await call('PUT', `/people/by-email/${encodeURIComponent(email)}`, { token: admin, body: { active: false } })
   }
-  r = await call('POST', `/requests/${reqId}/approve`, { token: admin, body: {} })
-  check('approve the change', r.status === 200 && r.json?.request?.status === 'approved', JSON.stringify(r.json))
   r = await call('GET', `/punches/${oldId}`, { token: key })
   const lastEdit = r.json?.punch?.edits?.at(-1)
   check(

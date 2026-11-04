@@ -61,10 +61,10 @@ test('roles', () => {
   assert.ok(!ROLE_SCOPES.tech.includes('punch:read'))
   assert.ok(!ROLE_SCOPES.manager.includes(KEYS_MANAGE))
   assert.ok(ROLE_SCOPES.admin.includes(KEYS_MANAGE))
-  // Time fixes: managers and admins approve them; payroll, crew leads and techs do not.
+  // Time fixes: managers, admins and payroll approve them; crew leads and techs do not.
   assert.ok(ROLE_SCOPES.manager.includes(FIX_APPROVE))
   assert.ok(ROLE_SCOPES.admin.includes(FIX_APPROVE))
-  assert.ok(!ROLE_SCOPES.payroll.includes(FIX_APPROVE))
+  assert.ok(ROLE_SCOPES.payroll.includes(FIX_APPROVE))
   assert.ok(!ROLE_SCOPES.lead.includes(FIX_APPROVE))
   assert.ok(!ROLE_SCOPES.tech.includes(FIX_APPROVE))
   assert.equal(isScope('punch:read'), true)

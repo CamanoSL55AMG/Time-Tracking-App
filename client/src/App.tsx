@@ -72,7 +72,7 @@ export default function App() {
   const [tab, setTab] = useState<Tab>('clock')
   const [menuAt, setMenuAt] = useState<HTMLElement | null>(null)
   const [pwOpen, setPwOpen] = useState(false)
-  // Time fixes waiting for a supervisor: the count on the Review tab for managers and admins.
+  // Time fixes waiting for a supervisor: the count on the Review tab for managers, admins and payroll.
   const [waitingFixes, setWaitingFixes] = useState(0)
   const approver = Boolean(person?.scopes.includes('requests:approve'))
   useEffect(() => {
