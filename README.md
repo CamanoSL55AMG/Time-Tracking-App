@@ -133,6 +133,15 @@ npm run link-ged      # creates GED's key and writes it into GED's server\.env
 Then restart GED's server. GED pushes its active projects as jobs and today's job
 calendar as assignments, and its title-bar clock punches through this app.
 
+AIC Terminal (GED) is where people are enrolled. Its Users page turns Logbook on or off
+for each person and sets their Logbook role (tech, crew lead, manager, payroll or admin);
+its key carries `people:roles` so it can set admins too. An older GED key gets that scope
+without being replaced:
+
+```powershell
+npm run grant-ged-scopes   # adds any missing scope to the GED key in use; GED needs no restart
+```
+
 ## Linking another app
 
 1. In the app: Manage → API keys → Create key. Tick only the scopes that app needs. Copy

@@ -92,6 +92,21 @@ try {
   r = await call('PUT', `/people/by-email/${encodeURIComponent(testEmail)}`, { token: key, body: { role: 'admin' } })
   check('a key cannot make an admin', r.status === 403)
 
+  // AIC Terminal's key carries people:roles: it can make and unmake admins.
+  r = await call('POST', '/api-keys', { token: admin, body: { name: `smoke roles ${stamp}`, scopes: ['people:read', 'people:write', 'people:roles'] } })
+  check('create a key with people:roles', r.status === 201, JSON.stringify(r.json))
+  const rolesKey = r.json?.key
+  const rolesKeyId = r.json?.apiKey?.id
+  r = await call('PUT', `/people/by-email/${encodeURIComponent(testEmail)}`, { token: rolesKey, body: { role: 'admin' } })
+  check('a people:roles key can make an admin', r.status === 200 && r.json?.person?.role === 'admin', JSON.stringify(r.json))
+  r = await call('PUT', `/people/by-email/${encodeURIComponent(testEmail)}`, { token: rolesKey, body: { role: 'payroll' } })
+  check('a people:roles key can take admin away', r.status === 200 && r.json?.person?.role === 'payroll', JSON.stringify(r.json))
+  r = await call('PUT', `/people/by-email/${encodeURIComponent(testEmail)}`, { token: rolesKey, body: { password: 'not-allowed-123' } })
+  check('a people:roles key still cannot set a password', r.status === 403)
+  r = await call('PUT', `/people/by-email/${encodeURIComponent(testEmail)}`, { token: rolesKey, body: { role: 'tech' } })
+  check('a people:roles key sets an ordinary role', r.status === 200 && r.json?.person?.role === 'tech')
+  if (rolesKeyId) await call('DELETE', `/api-keys/${rolesKeyId}`, { token: admin })
+
   const as = { 'X-Act-As': testEmail }
   r = await call('POST', '/punches/in', { token: key, body: { jobId } })
   check('key without X-Act-As gets a clear error', r.status === 400 && r.json?.error?.code === 'no_person', JSON.stringify(r.json))

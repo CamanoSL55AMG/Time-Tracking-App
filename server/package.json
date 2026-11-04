@@ -13,6 +13,7 @@
     "seed": "tsx scripts/seed.ts",
     "smoke": "node scripts/smoke.mjs",
     "link-ged": "tsx scripts/link-ged.ts",
+    "grant-ged-scopes": "tsx scripts/grant-ged-scopes.ts",
     "reset-password": "tsx scripts/reset-password.ts"
   },
   "dependencies": {

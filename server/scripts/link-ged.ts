@@ -11,7 +11,7 @@ import 'dotenv/config'
 import fs from 'node:fs'
 import path from 'node:path'
 import { PrismaClient } from '@prisma/client'
-import { generateKey } from '../src/auth/apiKeys.js'
+import { generateKey, GED_KEY_SCOPES } from '../src/auth/apiKeys.js'
 
 const arg = (name: string, fallback: string) => {
   const i = process.argv.indexOf(`--${name}`)
@@ -21,7 +21,7 @@ const arg = (name: string, fallback: string) => {
 const gedEnv = path.resolve(arg('ged', '../../google-ecosystem-dashboard/server/.env'))
 const apiUrl = arg('api', `http://localhost:${process.env.PORT || 5400}/api/v1`)
 const appUrl = arg('app', 'http://localhost:5195')
-const SCOPES = ['punch:read', 'punch:write:any', 'jobs:read', 'jobs:write', 'people:read', 'people:write', 'reports:read', 'events:read', 'assignments:write']
+const SCOPES = GED_KEY_SCOPES
 
 function setVars(file: string, vars: Record<string, string>) {
   const raw = fs.readFileSync(file, 'utf8')

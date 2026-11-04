@@ -4,7 +4,7 @@ import { prisma } from '../db.js'
 import { bool, route, str } from '../api.js'
 import { badRequest, conflict, forbidden } from '../errors.js'
 import { requireScope } from '../auth/middleware.js'
-import { isRole, KEYS_MANAGE } from '../auth/apiKeys.js'
+import { isRole, KEYS_MANAGE, PEOPLE_ROLES } from '../auth/apiKeys.js'
 import { emit } from '../services/events.js'
 import { publicPerson } from './auth.js'
 
@@ -34,7 +34,7 @@ route(
     body: {
       name: 'Display name',
       initials: 'Initials as written on the job calendar',
-      role: 'tech | lead | manager | payroll | admin',
+      role: 'tech | lead | manager | payroll | admin (admin needs a signed-in admin or a key with people:roles)',
       active: 'false to stop the person signing in or punching',
       password: 'Set an initial password (signed-in admins only)',
     },
@@ -44,6 +44,9 @@ route(
     const email = str(req.params.email, 320).toLowerCase()
     if (!email.includes('@')) throw badRequest('That is not an email address.', { field: 'email' })
     const isAdmin = auth.via === 'session' && auth.scopes.has(KEYS_MANAGE)
+    // A key with people:roles (AIC Terminal's) may set any role, admin included.
+    // Passwords stay with signed-in admins.
+    const mayManageAdmins = isAdmin || (auth.via === 'key' && auth.scopes.has(PEOPLE_ROLES))
 
     const existing = await prisma.person.findUnique({ where: { email } })
     if (existing && existing.companyId !== auth.companyId) throw forbidden('That email belongs to another company.')
@@ -51,11 +54,11 @@ route(
     const role = req.body?.role === undefined ? undefined : String(req.body.role)
     if (role !== undefined && !isRole(role)) throw badRequest('role must be tech, lead, manager, payroll or admin.', { field: 'role' })
     // Only a signed-in admin hands out or takes away the admin role.
-    if (!isAdmin && (role === 'admin' || (existing?.role === 'admin' && role !== undefined))) {
+    if (!mayManageAdmins && (role === 'admin' || (existing?.role === 'admin' && role !== undefined))) {
       throw forbidden('Only a signed-in admin can change who is an admin.')
     }
     const active = bool(req.body?.active)
-    if (!isAdmin && existing?.role === 'admin' && active === false) throw forbidden('Only a signed-in admin can deactivate an admin.')
+    if (!mayManageAdmins && existing?.role === 'admin' && active === false) throw forbidden('Only a signed-in admin can deactivate an admin.')
 
     // Never leave the company without an admin who can sign in.
     if (existing?.role === 'admin' && existing.active && ((role !== undefined && role !== 'admin') || active === false)) {

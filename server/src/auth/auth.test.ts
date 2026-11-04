@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createHmac } from 'node:crypto'
 import { signSsoToken, verifySsoToken, type SsoPayload } from './ssoToken.js'
-import { generateKey, hashKey, isScope, looksLikeKey, ROLE_SCOPES, KEYS_MANAGE, SELF } from './apiKeys.js'
+import { generateKey, hashKey, isScope, looksLikeKey, ROLE_SCOPES, KEYS_MANAGE, SELF, PEOPLE_ROLES, GED_KEY_SCOPES } from './apiKeys.js'
 
 const secret = 'test-secret-test-secret-test-secret'
 const now = 1_800_000_000
@@ -64,4 +64,11 @@ test('roles', () => {
   assert.equal(isScope('punch:read'), true)
   assert.equal(isScope(KEYS_MANAGE), false) // never grantable to a key
   assert.equal(isScope(SELF), false)
+})
+
+test('the AIC Terminal key can set Logbook roles; no signed-in role gets that scope', () => {
+  assert.equal(isScope(PEOPLE_ROLES), true)
+  assert.ok(GED_KEY_SCOPES.includes(PEOPLE_ROLES))
+  assert.ok(GED_KEY_SCOPES.every(isScope))
+  for (const scopes of Object.values(ROLE_SCOPES)) assert.ok(!scopes.includes(PEOPLE_ROLES))
 })
