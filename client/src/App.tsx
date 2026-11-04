@@ -20,7 +20,7 @@ import {
   Toolbar,
   Typography,
 } from '@mui/material'
-import { api, errorText, getToken, setSignedOutHandler, setToken, type Person } from './api'
+import { api, errorText, getToken, setSignedOutHandler, setTermsRequiredHandler, setToken, type Person } from './api'
 import Login from './pages/Login'
 import PasswordField from './PasswordField'
 import PunchPage from './pages/Punch'
@@ -29,6 +29,7 @@ import AdminPage from './pages/Admin'
 import WeekPage from './pages/Week'
 import ReviewPage from './pages/Review'
 import ExpensesPage from './pages/Expenses'
+import TermsGate from './pages/Terms'
 import { writeMode } from './pages/modes'
 
 type Tab = 'clock' | 'week' | 'expenses' | 'board' | 'review' | 'admin'
@@ -71,16 +72,24 @@ export default function App() {
   const [tab, setTab] = useState<Tab>('clock')
   const [menuAt, setMenuAt] = useState<HTMLElement | null>(null)
   const [pwOpen, setPwOpen] = useState(false)
+  // First sign-in terms: checked after every sign-in, and again whenever the server
+  // answers terms_required. The app only shows once this is true.
+  const [termsOk, setTermsOk] = useState(false)
 
   const signOut = useCallback(() => {
     setToken(null)
     setPerson(null)
+    setTermsOk(false)
     setMenuAt(null)
     setTab('clock')
   }, [])
 
   useEffect(() => {
-    setSignedOutHandler(() => setPerson(null))
+    setSignedOutHandler(() => {
+      setPerson(null)
+      setTermsOk(false)
+    })
+    setTermsRequiredHandler(() => setTermsOk(false))
     const boot = async () => {
       // Arriving from GED with a one-click sign-in link: /sso?token=…
       // Back from "Sign in with Dashboard": /sso#session=… (the session itself),
@@ -126,10 +135,13 @@ export default function App() {
         notice={bootError}
         onSignedIn={(p) => {
           writeMode(null)
+          setTermsOk(false)
           setPerson(p)
         }}
       />
     )
+  // Privacy Policy, EULA, then the AIC Platform Terms, each accepted on its own screen.
+  if (!termsOk) return <TermsGate onDone={() => setTermsOk(true)} onSignOut={signOut} />
 
   const can = (scope: string) => person.scopes.includes(scope)
   const showBoard = can('punch:read')

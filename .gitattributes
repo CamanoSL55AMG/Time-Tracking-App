@@ -1,3 +1,6 @@
 *.bat text eol=crlf
 *.cmd text eol=crlf
 *.sh text eol=lf
+# Legal documents are hashed when accepted: keep them byte-identical on every machine.
+legal/*.md text eol=lf
+legal/*.json text eol=lf

@@ -10,6 +10,7 @@ import { assertConfig, config } from './config.js'
 import { prisma } from './db.js'
 import { ApiError } from './errors.js'
 import { authenticate, rateLimit } from './auth/middleware.js'
+import { logTermsAtStart, termsGate } from './auth/termsGate.js'
 import { authRouter } from './routes/auth.js'
 import { peopleRouter } from './routes/people.js'
 import { jobsRouter } from './routes/jobs.js'
@@ -20,8 +21,10 @@ import { assignmentsRouter } from './routes/assignments.js'
 import { expensesRouter } from './routes/expenses.js'
 import { itemsRouter } from './routes/items.js'
 import { payrollRouter } from './routes/payroll.js'
+import { termsRouter } from './routes/terms.js'
 
 assertConfig()
+logTermsAtStart()
 
 const app = express()
 app.set('trust proxy', 1) // behind the Cloudflare tunnel / a reverse proxy
@@ -52,8 +55,12 @@ app.use(express.json({ limit: '1mb' }))
 const v1 = express.Router()
 v1.use(authenticate)
 v1.use(rateLimit)
+// First sign-in terms: a signed-in person who has not accepted every document only
+// reaches sign-in, /auth/me and /terms/* (off unless TERMS_GATE_ENABLED).
+v1.use(termsGate)
 v1.use(systemRouter)
 v1.use(authRouter)
+v1.use(termsRouter)
 v1.use(peopleRouter)
 v1.use(jobsRouter)
 v1.use(punchesRouter)
