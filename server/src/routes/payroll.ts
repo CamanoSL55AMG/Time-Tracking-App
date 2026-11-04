@@ -3,7 +3,9 @@ import { route, str } from '../api.js'
 import { ApiError } from '../errors.js'
 import { requireScope } from '../auth/middleware.js'
 import { config } from '../config.js'
-import { laborCsv, laborExport } from '../services/payroll.js'
+import { laborCsv, laborExport, previousSemimonthlyPeriod, semimonthlyPeriod } from '../services/payroll.js'
+import { prisma } from '../db.js'
+import { localDate } from '../lib/time.js'
 
 export const payrollRouter = Router()
 
@@ -38,5 +40,27 @@ route(
       return
     }
     return result
+  },
+)
+
+route(
+  payrollRouter,
+  {
+    method: 'get',
+    path: '/payroll/periods',
+    tag: 'Payroll',
+    summary: 'The pay periods payroll runs on (the 1st to the 15th, and the 16th to month end): the one today is in, and the one before it.',
+    access: ['payroll:read'],
+  },
+  async (req) => {
+    const auth = requireScope(req, 'payroll:read')
+    const company = await prisma.company.findUniqueOrThrow({ where: { id: auth.companyId } })
+    const today = localDate(new Date(), company.timezone)
+    return {
+      today,
+      exportEnabled: config.payrollExportEnabled,
+      current: semimonthlyPeriod(today),
+      previous: previousSemimonthlyPeriod(today),
+    }
   },
 )

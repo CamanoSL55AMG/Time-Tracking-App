@@ -217,6 +217,26 @@ export async function laborExport(companyId: string, from: string, to: string) {
   }
 }
 
+// ─── Pay periods ────────────────────────────────────────────────────────────
+
+/**
+ * Morgan Sound runs payroll twice a month: the 1st to the 15th, and the 16th to the
+ * last day of the month. Overtime is still counted by the Monday to Sunday week, so a
+ * week that crosses a period end splits: its hours in each period keep the overtime
+ * they earned in the order worked (see splitWorkweek).
+ */
+export function semimonthlyPeriod(date: string): { from: string; to: string } {
+  const [y, m, d] = date.split('-').map(Number)
+  const mm = String(m).padStart(2, '0')
+  if (d <= 15) return { from: `${y}-${mm}-01`, to: `${y}-${mm}-15` }
+  const last = new Date(Date.UTC(y, m, 0)).getUTCDate()
+  return { from: `${y}-${mm}-16`, to: `${y}-${mm}-${String(last).padStart(2, '0')}` }
+}
+
+export function previousSemimonthlyPeriod(date: string): { from: string; to: string } {
+  return semimonthlyPeriod(addDays(semimonthlyPeriod(date).from, -1))
+}
+
 // ─── CSV ────────────────────────────────────────────────────────────────────
 
 export const CSV_COLUMNS = [

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { laborCsv, lineIdOf, splitWorkweek, type LaborLine } from './payroll.js'
+import { laborCsv, lineIdOf, previousSemimonthlyPeriod, semimonthlyPeriod, splitWorkweek, type LaborLine } from './payroll.js'
 
 const seg = (startIso: string, hours: number, jobId = 'job-a', phaseId: string | null = 'install') => ({
   personId: 'p1',
@@ -63,4 +63,23 @@ test('csv has the import columns and quotes what needs quoting', () => {
   const [head, row] = laborCsv([line]).trim().split('\r\n')
   assert.equal(head, 'line_id,employee_email,employee_name,date,week_start,job_code,job_name,job_kind,phase,labor_category,regular_hours,overtime_hours,hours')
   assert.equal(row, 'abc,tech@example.com,"Pat, Tech",2026-11-02,2026-11-02,P-1001,"\'=HYPERLINK(""x"")",project,Install,install,8.00,1.50,9.50')
+})
+
+test('pay periods run the 1st to the 15th and the 16th to month end', () => {
+  assert.deepEqual(semimonthlyPeriod('2026-11-04'), { from: '2026-11-01', to: '2026-11-15' })
+  assert.deepEqual(semimonthlyPeriod('2026-11-16'), { from: '2026-11-16', to: '2026-11-30' })
+  assert.deepEqual(semimonthlyPeriod('2027-02-20'), { from: '2027-02-16', to: '2027-02-28' })
+  assert.deepEqual(previousSemimonthlyPeriod('2026-11-04'), { from: '2026-10-16', to: '2026-10-31' })
+  assert.deepEqual(previousSemimonthlyPeriod('2027-01-10'), { from: '2026-12-16', to: '2026-12-31' })
+})
+
+test('a week that crosses a pay period end: the first period keeps the split it earned, the rest lands in the next', () => {
+  // Mon Dec 14 to Fri Dec 18 2026, 10 h a day; the pay period ends Tue Dec 15.
+  const week = [14, 15, 16, 17, 18].map((d) => seg(`2026-12-${d}T16:00:00Z`, 10))
+  const whole = splitWorkweek(week, 40).map((s) => [hrs(s.regularSeconds), hrs(s.overtimeSeconds)])
+  assert.deepEqual(whole, [[10, 0], [10, 0], [10, 0], [10, 0], [0, 10]])
+  // Worked out on the 16th with only Mon and Tue on the books, the split is the same,
+  // so paying the first period early never has to be taken back.
+  const soFar = splitWorkweek(week.slice(0, 2), 40).map((s) => [hrs(s.regularSeconds), hrs(s.overtimeSeconds)])
+  assert.deepEqual(soFar, whole.slice(0, 2))
 })

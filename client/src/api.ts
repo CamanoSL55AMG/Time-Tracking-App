@@ -410,6 +410,34 @@ const newId = () => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${
 
 type PunchResult = { punch: Punch; state: DayState }
 
+export type PayPeriod = { from: string; to: string }
+export type PayPeriods = { today: string; exportEnabled: boolean; current: PayPeriod; previous: PayPeriod }
+export type LaborLine = {
+  lineId: string
+  personId: string
+  personEmail: string
+  personName: string
+  date: string
+  weekStart: string
+  jobCode: string
+  jobName: string
+  phaseName: string
+  laborCategory: string
+  regularHours: number
+  overtimeHours: number
+  hours: number
+}
+export type LaborNotReady = { personId: string; personName: string; personEmail: string; weekStart: string; status: string; hours: number }
+export type LaborExport = {
+  from: string
+  to: string
+  overtimeWeeklyHours: number
+  generatedAt: string
+  lines: LaborLine[]
+  totals: { personId: string; personEmail: string; personName: string; regularHours: number; overtimeHours: number; hours: number }[]
+  notReady: LaborNotReady[]
+}
+
 export const api = {
   login: (email: string, password: string) => http.post<{ token: string; person: Person }>('/auth/login', { email, password }).then((r) => r.data),
   sso: (token: string) => http.post<{ token: string; person: Person }>('/auth/sso', { token }).then((r) => r.data),
@@ -454,6 +482,18 @@ export const api = {
 
   myWeek: (week?: string) => http.get<PersonWeek>('/me/week', { params: { week } }).then((r) => r.data),
   signWeek: (week: string) => http.post<PersonWeek>('/me/week/sign', { week }).then((r) => r.data),
+  payPeriods: () => http.get<PayPeriods>('/payroll/periods').then((r) => r.data),
+  laborExport: (from: string, to: string) => http.get<LaborExport>('/payroll/labor', { params: { from, to } }).then((r) => r.data),
+  /** The export as Logbook's CSV, saved to the device (the file needs the sign-in header). */
+  downloadLaborCsv: async (from: string, to: string) => {
+    const r = await http.get<Blob>('/payroll/labor', { params: { from, to, format: 'csv' }, responseType: 'blob' })
+    const url = URL.createObjectURL(r.data)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `labor-${from}-to-${to}.csv`
+    a.click()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  },
   weekSheet: (week?: string) => http.get<WeekSheet>('/timesheets', { params: { week } }).then((r) => r.data),
   personWeek: (personId: string, week: string) => http.get<PersonWeek>(`/timesheets/${personId}`, { params: { week } }).then((r) => r.data),
   approve: (personIds: string[], week: string, note?: string) =>

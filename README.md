@@ -66,6 +66,15 @@ server/   Express + TypeScript + Prisma + PostgreSQL — the API at /api/v1     
   **Off** unless `PAYROLL_EXPORT_ENABLED=true` in `server/.env`. Needs the
   `payroll:read` scope (payroll and admin roles, or an API key).
 
+- **Payroll report** (name menu → Payroll report, payroll and admin roles): pick last
+  or this pay period (1st to 15th, 16th to month end) or any dates, run it, and see
+  each person's regular, overtime and total hours by labor category, with totals.
+  Download CSV or print. Anyone whose week isn't approved yet is listed as not ready.
+  `GET /api/v1/payroll/periods` gives this and last period in company time. A week that
+  crosses the 15th or month end can only be approved after its Sunday, so those days
+  stay not ready until then; the overtime split for the days in the period is the
+  same either way.
+
 Not built yet: expense export, pay periods (locking) and leave hours in the payroll
 export, kiosk mode, webhooks. See the phases in the plan.
 

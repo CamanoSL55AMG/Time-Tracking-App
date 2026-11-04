@@ -249,6 +249,14 @@ try {
   } else {
     check('payroll export is off until turned on', r.status === 403 && r.json?.error?.code === 'payroll_export_off', JSON.stringify(r.json))
   }
+  r = await call('GET', '/payroll/periods', { token: admin })
+  check(
+    'pay periods are the 1st to the 15th and the 16th to month end',
+    r.status === 200 && /-(01|16)$/.test(r.json?.current?.from ?? '') && /-(01|16)$/.test(r.json?.previous?.from ?? '') && typeof r.json?.exportEnabled === 'boolean',
+    JSON.stringify(r.json),
+  )
+  r = await call('GET', '/payroll/periods', { token: tech })
+  check('a tech cannot read the pay periods', r.status === 403)
   r = await call('PATCH', `/punches/${oldId}`, { token: key, body: { notes: 'after approval', reason: 'smoke' } })
   check('an approved week refuses corrections', r.status === 409 && r.json?.error?.code === 'week_approved', JSON.stringify(r.json))
   r = await call('POST', '/punches/in', { token: key, headers: asB, body: { jobId, at: new Date(t0.getTime() + 13.5 * 3_600_000).toISOString() } })
