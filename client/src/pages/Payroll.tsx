@@ -143,7 +143,7 @@ export default function PayrollPage() {
               <Box sx={{ fontWeight: 700, mb: 0.5 }}>Not in this report yet ({data.notReady.length})</Box>
               {data.notReady.map((n) => (
                 <div key={`${n.personId}-${n.weekStart}`}>
-                  {n.personName}, week of {fmtDay(n.weekStart, { month: 'short', day: 'numeric' })}: {statusText(n.status)}, {h2(n.hours)} h
+                  {n.personName}, week of {fmtDay(n.weekStart, { month: 'short', day: 'numeric' })}: {n.approvedThrough ? `approved through ${fmtDay(n.approvedThrough, { month: 'short', day: 'numeric' })}, later days not yet` : statusText(n.status)}, {h2(n.hours)} h
                 </div>
               ))}
               <Box sx={{ mt: 0.5 }}>Approve these weeks on Review, then run the report again.</Box>

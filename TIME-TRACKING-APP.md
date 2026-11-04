@@ -350,6 +350,7 @@ Payroll
 | POST | `/pay-periods/{id}/lock` | Freeze a period |
 | GET | `/pay-periods/{id}/export?format=accountedge` | Payroll file. Marks the period exported |
 | GET | `/payroll/labor?from=&to=[&format=csv]` | **Built 2026-11-03.** Approved hours for any date range, per person / day / job / phase, regular and overtime. Read by AIC Accounting. Off unless `PAYROLL_EXPORT_ENABLED=true` |
+| POST | `/timesheets/approve` (`through`) | **2026-11-04.** Approvers can sign off any time: approve a week through any day that is over. Those days lock; later days stay open. Default: the whole week once it is over, otherwise through yesterday |
 | GET | `/payroll/periods` | **Built 2026-11-04.** This and last semimonthly pay period (1st to 15th, 16th to month end) in company time, and whether the export is on. Feeds the Payroll report screen |
 | POST | `/approvals/sign`, `/approvals/approve` | Tech signs, manager approves |
 

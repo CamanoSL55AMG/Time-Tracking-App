@@ -83,3 +83,28 @@ test('a week that crosses a pay period end: the first period keeps the split it 
   const soFar = splitWorkweek(week.slice(0, 2), 40).map((s) => [hrs(s.regularSeconds), hrs(s.overtimeSeconds)])
   assert.deepEqual(soFar, whole.slice(0, 2))
 })
+
+test('approvers can sign off any time: the day to approve through', async () => {
+  const { resolveThrough } = await import('./timesheets.js')
+  const week = '2026-11-09' // Mon Nov 9 to Sun Nov 15
+  // Mid-week with nothing given: through yesterday.
+  assert.deepEqual(resolveThrough(week, '2026-11-12'), { through: '2026-11-11' })
+  // Once the week is over: the whole week.
+  assert.deepEqual(resolveThrough(week, '2026-11-16'), { through: '2026-11-15' })
+  // A chosen day, like the 15th, once it is over.
+  assert.deepEqual(resolveThrough('2026-11-16', '2026-12-01', '2026-11-16'), { through: '2026-11-16' })
+  // A day not over yet, a day outside the week, and a Monday with nothing over.
+  assert.equal((resolveThrough(week, '2026-11-12', '2026-11-12') as { code: string }).code, 'day_not_over')
+  assert.equal((resolveThrough(week, '2026-11-20', '2026-11-16') as { code: string }).code, 'bad_through')
+  assert.equal((resolveThrough(week, '2026-11-09') as { code: string }).code, 'nothing_to_approve')
+})
+
+test('a part-week approval covers only its days', async () => {
+  const { approvalCovers, approvedThroughOf } = await import('./timesheets.js')
+  const part = { status: 'approved', approvedThrough: '2026-11-30', weekStart: '2026-11-30' }
+  assert.equal(approvalCovers(part, '2026-11-30'), true)
+  assert.equal(approvalCovers(part, '2026-12-01'), false)
+  // An approval from before this change has no day: it covers the whole week.
+  assert.equal(approvedThroughOf({ status: 'approved', approvedThrough: null, weekStart: '2026-11-09' }), '2026-11-15')
+  assert.equal(approvedThroughOf({ status: 'signed', approvedThrough: null, weekStart: '2026-11-09' }), null)
+})

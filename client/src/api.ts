@@ -318,6 +318,10 @@ interface SheetState {
   signedAt: string | null
   approvedAt: string | null
   approvedBy: string | null
+  /** Last day the approval covers (YYYY-MM-DD); null when not approved. */
+  approvedThrough: string | null
+  /** Approved through a day before the week's end; the later days are still open. */
+  partlyApproved: boolean
   note: string
 }
 export type RequestStatus = 'pending' | 'approved' | 'rejected' | 'withdrawn'
@@ -376,7 +380,7 @@ export interface WeekSheet {
   rows: WeekSheetRow[]
   quiet: { id: string; name: string }[]
   exceptions: TimeException[]
-  counts: { approved: number; signed: number; open: number; pendingRequests: number }
+  counts: { approved: number; partlyApproved: number; signed: number; open: number; pendingRequests: number }
 }
 export interface CrewResult {
   personId: string
@@ -427,7 +431,7 @@ export type LaborLine = {
   overtimeHours: number
   hours: number
 }
-export type LaborNotReady = { personId: string; personName: string; personEmail: string; weekStart: string; status: string; hours: number }
+export type LaborNotReady = { personId: string; personName: string; personEmail: string; weekStart: string; status: string; hours: number; approvedThrough?: string }
 export type LaborExport = {
   from: string
   to: string
@@ -496,9 +500,9 @@ export const api = {
   },
   weekSheet: (week?: string) => http.get<WeekSheet>('/timesheets', { params: { week } }).then((r) => r.data),
   personWeek: (personId: string, week: string) => http.get<PersonWeek>(`/timesheets/${personId}`, { params: { week } }).then((r) => r.data),
-  approve: (personIds: string[], week: string, note?: string) =>
+  approve: (personIds: string[], week: string, note?: string, through?: string) =>
     http
-      .post<{ results: { personId: string; ok: boolean; code?: string; message?: string }[]; approved: number }>('/timesheets/approve', { personIds, week, note })
+      .post<{ results: { personId: string; ok: boolean; code?: string; message?: string }[]; approved: number }>('/timesheets/approve', { personIds, week, note, through })
       .then((r) => r.data),
   editPunch: (id: string, body: { clockIn?: string; clockOut?: string | null; notes?: string; reason: string }) =>
     http.patch<{ punch: Punch }>(`/punches/${id}`, body).then((r) => r.data.punch),
