@@ -51,6 +51,9 @@ export const config = {
   // Logbook stays ON. TOWER_TOKEN is the aircraft's enrollment token from the Tower.
   towerUrl: (process.env.TOWER_URL ?? '').trim().replace(/\/+$/, ''),
   towerToken: (process.env.TOWER_TOKEN ?? '').trim(),
+  // Cloudflare Access service token for a Tower behind Access (optional).
+  towerAccessId: (process.env.TOWER_ACCESS_ID ?? '').trim(),
+  towerAccessSecret: (process.env.TOWER_ACCESS_SECRET ?? '').trim(),
   towerCheckSeconds: Math.max(15, num(process.env.TOWER_CHECK_SECONDS) ?? 60),
 }
 

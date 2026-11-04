@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { applyCheck, askTower, logbookSwitch, OFF_MESSAGE, readSwitch, resetSwitch, switchState } from './tower.js'
+import { applyCheck, askTower, logbookSwitch, OFF_MESSAGE, readSwitch, resetSwitch, switchState, towerHeaders } from './tower.js'
 
 const settings = { url: 'https://tower.example.com/', token: 'aircraft-token' }
 const answer = (status: number, body: unknown) => async () => ({ ok: status >= 200 && status < 300, status, json: async () => body })
@@ -102,4 +102,27 @@ test('Tower unreachable after an OFF answer: fails open', () => {
   applyCheck({ on: true, reason: 'unreachable', checkedAt: null, detail: 'timeout' }, quiet)
   assert.equal(call('POST', '/auth/login').next, true)
   resetSwitch()
+})
+
+test('sends the Cloudflare Access service token when set', async () => {
+  let headers: Record<string, string> = {}
+  let redirect = ''
+  await askTower({ ...settings, accessId: 'cf-id', accessSecret: 'cf-secret' }, async (_url, init) => {
+    headers = init.headers
+    redirect = init.redirect
+    return { ok: true, status: 200, json: async () => ({ entitlements: { LOGBOOK: ['core'] } }) }
+  })
+  assert.equal(headers['CF-Access-Client-Id'], 'cf-id')
+  assert.equal(headers['CF-Access-Client-Secret'], 'cf-secret')
+  assert.equal(headers.Authorization, 'Bearer aircraft-token')
+  assert.equal(redirect, 'manual', 'never follows a redirect to an Access sign-in page')
+  assert.equal(towerHeaders(settings)['CF-Access-Client-Id'], undefined, 'no Access headers when not set')
+})
+
+test('a redirect from Cloudflare Access fails open and says why', async () => {
+  const bare = await askTower(settings, answer(302, null))
+  assert.deepEqual([bare.on, bare.reason], [true, 'unreachable'])
+  assert.match(bare.detail ?? '', /302.*Cloudflare Access.*set TOWER_ACCESS_ID/)
+  const wrong = await askTower({ ...settings, accessId: 'x', accessSecret: 'y' }, answer(302, null))
+  assert.match(wrong.detail ?? '', /check TOWER_ACCESS_ID/)
 })

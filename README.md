@@ -81,7 +81,8 @@ server/   Express + TypeScript + Prisma + PostgreSQL — the API at /api/v1     
   order worked, so the approved days pay the same as they will once the week ends.
 
 - **On/off from AIC Control Tower**: the Tower's Manifest has a Logbook switch per
-  company. With `TOWER_URL` and `TOWER_TOKEN` set, Logbook checks it every minute; when
+  company. With `TOWER_URL` and `TOWER_TOKEN` set (plus `TOWER_ACCESS_ID` / `TOWER_ACCESS_SECRET`
+  while the Tower sits behind Cloudflare Access), Logbook checks it every minute; when
   it is OFF, sign-in and the API answer 403 `app_off` with a plain message (the sign-in
   page shows it, and punches waiting on a phone stay queued). If the Tower can't be
   reached, Logbook stays ON and logs a warning. `GET /api/v1/health` shows the switch.
