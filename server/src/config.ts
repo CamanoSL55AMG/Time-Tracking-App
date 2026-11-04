@@ -42,6 +42,11 @@ export const config = {
   // PAYROLL_EXPORT_ENABLED=true, so nothing leaves while payroll still runs from
   // Timesheets.com.
   payrollExportEnabled: /^(1|true|yes|on)$/i.test((process.env.PAYROLL_EXPORT_ENABLED ?? '').trim()),
+  // AIC Control Tower on/off switch (services/tower.ts). Both empty = not checked,
+  // Logbook stays ON. TOWER_TOKEN is the aircraft's enrollment token from the Tower.
+  towerUrl: (process.env.TOWER_URL ?? '').trim().replace(/\/+$/, ''),
+  towerToken: (process.env.TOWER_TOKEN ?? '').trim(),
+  towerCheckSeconds: Math.max(15, num(process.env.TOWER_CHECK_SECONDS) ?? 60),
 }
 
 /** Refuse to start with a missing or weak signing secret. */
