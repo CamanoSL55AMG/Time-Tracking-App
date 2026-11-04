@@ -72,9 +72,9 @@ export default function App() {
   const [tab, setTab] = useState<Tab>('clock')
   const [menuAt, setMenuAt] = useState<HTMLElement | null>(null)
   const [pwOpen, setPwOpen] = useState(false)
-  // Time fixes waiting for a supervisor: the count on the Review tab for approvers.
+  // Time fixes waiting for a supervisor: the count on the Review tab for managers and admins.
   const [waitingFixes, setWaitingFixes] = useState(0)
-  const approver = Boolean(person?.scopes.includes('timesheets:approve'))
+  const approver = Boolean(person?.scopes.includes('requests:approve'))
   useEffect(() => {
     if (!approver) {
       setWaitingFixes(0)
@@ -197,7 +197,7 @@ export default function App() {
         {current === 'clock' && <PunchPage canCrew={can('punch:crew')} meId={person.id} meName={person.name} />}
         {current === 'week' && <WeekPage />}
         {current === 'expenses' && <ExpensesPage />}
-        {current === 'review' && <ReviewPage onWaitingChange={setWaitingFixes} canApprove={can('timesheets:approve')} canEdit={can('punch:write:any')} canApproveExpenses={can('expenses:approve')} meId={person.id} />}
+        {current === 'review' && <ReviewPage onWaitingChange={approver ? setWaitingFixes : undefined} canApprove={can('timesheets:approve')} canDecideFixes={can('requests:approve')} canEdit={can('punch:write:any')} canApproveExpenses={can('expenses:approve')} meId={person.id} />}
         {current === 'board' && <BoardPage />}
         {current === 'admin' && <AdminPage me={person} />}
       </Container>

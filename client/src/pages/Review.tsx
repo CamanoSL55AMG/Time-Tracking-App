@@ -39,8 +39,11 @@ export default function ReviewPage({
   canApproveExpenses = false,
   meId,
   onWaitingChange,
+  canDecideFixes = false,
 }: {
   canApprove: boolean
+  /** Approve or turn down time fixes: managers and admins (not payroll or leads). */
+  canDecideFixes?: boolean
   canEdit: boolean
   canApproveExpenses?: boolean
   meId?: string
@@ -131,12 +134,17 @@ export default function ReviewPage({
       {requests.length > 0 && (
         <Stack spacing={1}>
           <Typography variant="subtitle2">Change requests waiting ({requests.length})</Typography>
+          {!canDecideFixes && (
+            <Typography variant="caption" color="text.secondary">
+              A manager or admin approves these.
+            </Typography>
+          )}
           {requests.map((r) => (
             <RequestCard
               key={r.id}
               req={r}
               showName
-              actions={canApprove ? <DecideButtons req={r} onDone={() => void load(sheet.weekStart)} /> : undefined}
+              actions={canDecideFixes ? <DecideButtons req={r} onDone={() => void load(sheet.weekStart)} /> : undefined}
             />
           ))}
         </Stack>
@@ -267,7 +275,7 @@ export default function ReviewPage({
 
       <ServiceBillingPanel from={sheet.weekStart} to={sheet.weekEnd} />
 
-      {open && <PersonDialog row={open} weekStart={sheet.weekStart} canApprove={canApprove} canEdit={canEdit} approvable={approvable(open)} busy={busy} onApprove={() => approve([open.person.id])} onClose={() => setOpen(null)} onChanged={() => void load(sheet.weekStart)} />}
+      {open && <PersonDialog row={open} weekStart={sheet.weekStart} canApprove={canApprove} canDecideFixes={canDecideFixes} canEdit={canEdit} approvable={approvable(open)} busy={busy} onApprove={() => approve([open.person.id])} onClose={() => setOpen(null)} onChanged={() => void load(sheet.weekStart)} />}
     </Stack>
   )
 }
@@ -276,6 +284,7 @@ function PersonDialog({
   row,
   weekStart,
   canApprove,
+  canDecideFixes,
   canEdit,
   approvable,
   busy,
@@ -286,6 +295,7 @@ function PersonDialog({
   row: WeekSheetRow
   weekStart: string
   canApprove: boolean
+  canDecideFixes: boolean
   canEdit: boolean
   approvable: boolean
   busy: boolean
@@ -353,7 +363,7 @@ function PersonDialog({
                     key={q.id}
                     req={q}
                     actions={
-                      canApprove && q.status === 'pending' ? (
+                      canDecideFixes && q.status === 'pending' ? (
                         <DecideButtons
                           req={q}
                           onDone={() => {

@@ -277,6 +277,16 @@ try {
   check('a tech cannot approve a change request', r.status === 403)
   r = await call('GET', '/requests?status=pending', { token: admin })
   check('supervisors see waiting requests', r.status === 200 && r.json?.data?.some((x) => x.id === reqId))
+  {
+    // Time fixes are approved by managers and admins only, not payroll (Art, 2026-11-04).
+    const payEmail = `smoke-payroll-${stamp}@example.invalid`
+    const payPw = `pw-${randomBytes(9).toString('base64url')}`
+    await call('PUT', `/people/by-email/${encodeURIComponent(payEmail)}`, { token: admin, body: { name: 'Smoke Payroll', role: 'payroll', password: payPw } })
+    const pay = (await call('POST', '/auth/login', { body: { email: payEmail, password: payPw } })).json?.token
+    r = await call('POST', `/requests/${reqId}/approve`, { token: pay, body: {} })
+    check('payroll cannot approve a time fix', Boolean(pay) && r.status === 403, JSON.stringify(r.json))
+    await call('PUT', `/people/by-email/${encodeURIComponent(payEmail)}`, { token: admin, body: { active: false } })
+  }
   r = await call('POST', `/requests/${reqId}/approve`, { token: admin, body: {} })
   check('approve the change', r.status === 200 && r.json?.request?.status === 'approved', JSON.stringify(r.json))
   r = await call('GET', `/punches/${oldId}`, { token: key })
