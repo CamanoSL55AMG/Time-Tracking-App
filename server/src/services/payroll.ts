@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { prisma } from '../db.js'
 import { badRequest } from '../errors.js'
 import { addDays, isYmd, localDate, startOfLocalDay } from '../lib/time.js'
-import { weekOf } from './timesheets.js'
+import { approvedThroughOf, weekOf } from './timesheets.js'
 
 // Labor export for payroll. AIC Accounting reads it (GET /payroll/labor) and
 // imports the hours to produce payroll.
@@ -86,6 +86,8 @@ export interface NotReady {
   personEmail: string
   weekStart: string
   status: string // open | signed | approved (approved but someone is still on the clock)
+  /** Set when part of the week is approved: the days after this one aren't yet. */
+  approvedThrough?: string
   hours: number
 }
 
@@ -140,14 +142,24 @@ export async function laborExport(companyId: string, from: string, to: string) {
     const person = segs[0].person
     const inPeriod = segs.filter((s) => inRange(localDate(s.clockIn, tz)))
     if (!inPeriod.length) continue
-    const status = sheetOf.get(key)?.status ?? 'open'
-    const open = segs.some((s) => !s.clockOut)
-    if (status !== 'approved' || open) {
-      const seconds = inPeriod.reduce((t, s) => t + ((s.clockOut ?? now).getTime() - s.clockIn.getTime()) / 1000, 0)
-      notReady.push({ personId, personName: person.name, personEmail: person.email, weekStart, status, hours: hundredths(seconds) })
+    const sheet = sheetOf.get(key)
+    const status = sheet?.status ?? 'open'
+    // Approvers can sign off part of a week (through the 15th or month end). Only the
+    // days the approval covers go out; the rest wait. Overtime is split in the order
+    // worked, so the covered days come out the same as they will once the week is done.
+    const through = approvedThroughOf(sheet)
+    const covered = through ? segs.filter((s) => localDate(s.clockIn, tz) <= through) : []
+    const waiting = inPeriod.filter((s) => !through || localDate(s.clockIn, tz) > through)
+    const open = covered.some((s) => !s.clockOut)
+    const secondsOf = (list: P[]) => list.reduce((t, s) => t + ((s.clockOut ?? now).getTime() - s.clockIn.getTime()) / 1000, 0)
+    if (!through || open) {
+      notReady.push({ personId, personName: person.name, personEmail: person.email, weekStart, status, hours: hundredths(secondsOf(inPeriod)) })
       continue
     }
-    const closed = segs.map((s) => ({ ...s, clockOut: s.clockOut as Date }))
+    if (waiting.length) {
+      notReady.push({ personId, personName: person.name, personEmail: person.email, weekStart, status: 'open', approvedThrough: through, hours: hundredths(secondsOf(waiting)) })
+    }
+    const closed = covered.map((s) => ({ ...s, clockOut: s.clockOut as Date }))
     for (const { segment: s, regularSeconds, overtimeSeconds } of splitWorkweek(closed, company.overtimeWeeklyHours, person.overtimeExempt)) {
       const date = localDate(s.clockIn, tz)
       if (!inRange(date)) continue
@@ -215,6 +227,26 @@ export async function laborExport(companyId: string, from: string, to: string) {
     totals: [...totals.values()].map((t) => ({ ...t, regularHours: r2(t.regularHours), overtimeHours: r2(t.overtimeHours), hours: r2(t.hours) })),
     notReady: notReady.sort((a, b) => a.personName.localeCompare(b.personName) || a.weekStart.localeCompare(b.weekStart)),
   }
+}
+
+// ─── Pay periods ────────────────────────────────────────────────────────────
+
+/**
+ * Morgan Sound runs payroll twice a month: the 1st to the 15th, and the 16th to the
+ * last day of the month. Overtime is still counted by the Monday to Sunday week, so a
+ * week that crosses a period end splits: its hours in each period keep the overtime
+ * they earned in the order worked (see splitWorkweek).
+ */
+export function semimonthlyPeriod(date: string): { from: string; to: string } {
+  const [y, m, d] = date.split('-').map(Number)
+  const mm = String(m).padStart(2, '0')
+  if (d <= 15) return { from: `${y}-${mm}-01`, to: `${y}-${mm}-15` }
+  const last = new Date(Date.UTC(y, m, 0)).getUTCDate()
+  return { from: `${y}-${mm}-16`, to: `${y}-${mm}-${String(last).padStart(2, '0')}` }
+}
+
+export function previousSemimonthlyPeriod(date: string): { from: string; to: string } {
+  return semimonthlyPeriod(addDays(semimonthlyPeriod(date).from, -1))
 }
 
 // ─── CSV ────────────────────────────────────────────────────────────────────

@@ -30,9 +30,10 @@ import AdminPage from './pages/Admin'
 import WeekPage from './pages/Week'
 import ReviewPage from './pages/Review'
 import ExpensesPage from './pages/Expenses'
+import PayrollPage from './pages/Payroll'
 import { writeMode } from './pages/modes'
 
-type Tab = 'clock' | 'week' | 'expenses' | 'board' | 'review' | 'admin'
+type Tab = 'clock' | 'week' | 'expenses' | 'board' | 'review' | 'admin' | 'payroll'
 
 const ClockIcon = () => (
   <SvgIcon>
@@ -160,8 +161,10 @@ export default function App() {
   const showWeek = can('punch:self')
   // Leads look at the week; managers and payroll approve it.
   const showReview = can('punch:read')
+  // Payroll and admin: the pay period report, from the name menu.
+  const showPayroll = can('payroll:read')
   const hidden =
-    (tab === 'board' && !showBoard) || (tab === 'admin' && !showAdmin) || ((tab === 'week' || tab === 'expenses') && !showWeek) || (tab === 'review' && !showReview)
+    (tab === 'board' && !showBoard) || (tab === 'admin' && !showAdmin) || ((tab === 'week' || tab === 'expenses') && !showWeek) || (tab === 'review' && !showReview) || (tab === 'payroll' && !showPayroll)
   const current: Tab = hidden ? 'clock' : tab
 
   return (
@@ -180,6 +183,16 @@ export default function App() {
                 {person.email} · {person.role}
               </Typography>
             </MenuItem>
+            {showPayroll && (
+              <MenuItem
+                onClick={() => {
+                  setMenuAt(null)
+                  setTab('payroll')
+                }}
+              >
+                Payroll report
+              </MenuItem>
+            )}
             <MenuItem
               onClick={() => {
                 setMenuAt(null)
@@ -200,6 +213,7 @@ export default function App() {
         {current === 'review' && <ReviewPage onWaitingChange={approver ? setWaitingFixes : undefined} canApprove={can('timesheets:approve')} canDecideFixes={can('requests:approve')} canEdit={can('punch:write:any')} canApproveExpenses={can('expenses:approve')} meId={person.id} />}
         {current === 'board' && <BoardPage />}
         {current === 'admin' && <AdminPage me={person} />}
+        {current === 'payroll' && <PayrollPage />}
       </Container>
 
       {(showWeek || showBoard || showAdmin) && (

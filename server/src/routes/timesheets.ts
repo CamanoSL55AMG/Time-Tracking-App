@@ -72,9 +72,14 @@ route(
     method: 'post',
     path: '/timesheets/approve',
     tag: 'Timesheets',
-    summary: 'Approve a finished week for one or more people. Approved weeks are locked.',
+    summary: 'Approve a week for one or more people, any time. Approved days are locked.',
     access: [APPROVE],
-    body: { personIds: 'People to approve', ...WEEK, note: 'Optional note kept with the approval' },
+    body: {
+      personIds: 'People to approve',
+      ...WEEK,
+      through: 'Optional last day to approve (YYYY-MM-DD). Default: the whole week once it is over, otherwise through yesterday',
+      note: 'Optional note kept with the approval',
+    },
   },
   async (req) => {
     const auth = requireScope(req, APPROVE)
@@ -82,7 +87,7 @@ route(
     const ids = Array.isArray(req.body?.personIds) ? (req.body.personIds as unknown[]).map((x) => str(x, 80)).filter(Boolean) : []
     if (!ids.length) throw badRequest('personIds must list at least one person.', { field: 'personIds' })
     if (ids.length > 200) throw badRequest('Approve 200 people at most per call.', { field: 'personIds' })
-    const results = await approveWeek(auth.companyId, approver.id, ids, str(req.body?.week, 10) || undefined, str(req.body?.note, 500))
+    const results = await approveWeek(auth.companyId, approver.id, ids, str(req.body?.week, 10) || undefined, str(req.body?.note, 500), str(req.body?.through, 10) || undefined)
     return { results, approved: results.filter((r) => r.ok).length }
   },
 )
