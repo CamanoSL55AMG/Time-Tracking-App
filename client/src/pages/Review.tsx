@@ -33,7 +33,20 @@ import type { ChangeRequest, ServiceBilling } from '../api'
 // Approve the rows that are right; an approved week is locked until reopened.
 // Leads can look; only managers and payroll approve.
 
-export default function ReviewPage({ canApprove, canEdit, canApproveExpenses = false, meId }: { canApprove: boolean; canEdit: boolean; canApproveExpenses?: boolean; meId?: string }) {
+export default function ReviewPage({
+  canApprove,
+  canEdit,
+  canApproveExpenses = false,
+  meId,
+  onWaitingChange,
+}: {
+  canApprove: boolean
+  canEdit: boolean
+  canApproveExpenses?: boolean
+  meId?: string
+  /** How many time fixes are waiting, so the Review tab's count stays right. */
+  onWaitingChange?: (n: number) => void
+}) {
   const [sheet, setSheet] = useState<WeekSheet | null>(null)
   const [at, setAt] = useState<string | undefined>(undefined)
   const [picked, setPicked] = useState<Set<string>>(new Set())
@@ -51,11 +64,12 @@ export default function ReviewPage({ canApprove, canEdit, canApproveExpenses = f
       const [s, reqs] = await Promise.all([api.weekSheet(to), api.pendingRequests()])
       setSheet(s)
       setRequests(reqs)
+      onWaitingChange?.(reqs.length)
       setPicked(new Set())
     } catch (err) {
       setError(errorText(err))
     }
-  }, [])
+  }, [onWaitingChange])
 
   useEffect(() => {
     // Open on last week: that is the one waiting for approval.

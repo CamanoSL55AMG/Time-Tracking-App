@@ -41,6 +41,11 @@ export const config = {
   // Labor export for payroll (GET /payroll/labor), read by AIC Accounting. Off unless
   // PAYROLL_EXPORT_ENABLED=true, so nothing leaves while payroll still runs from
   // Timesheets.com.
+  // How many days back a person may ask for their own time to be changed (a missed
+  // clock-in or clock-out). Today always counts; 0 = no limit. Approved weeks are
+  // refused whatever this says: a supervisor reopens those and corrects them directly.
+  // 21 covers a full semimonthly pay period plus the days until payroll runs.
+  changeRequestDays: Math.max(0, num(process.env.CHANGE_REQUEST_DAYS) ?? 21),
   payrollExportEnabled: /^(1|true|yes|on)$/i.test((process.env.PAYROLL_EXPORT_ENABLED ?? '').trim()),
 }
 

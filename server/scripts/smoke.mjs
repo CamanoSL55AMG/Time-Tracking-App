@@ -306,6 +306,27 @@ try {
   r = await call('GET', `/timesheets/${crewId}?week=${lastWeek}`, { token: admin })
   check('the week adds up after the changes', Math.abs((r.json?.hours ?? 0) - 13) < 0.02 && r.json?.requests?.length === 4, `hours=${r.json?.hours} requests=${r.json?.requests?.length}`)
 
+  // What a person can still ask about: not the future, not older than CHANGE_REQUEST_DAYS,
+  // not an approved week. The clock screen shows fixes waiting for a supervisor.
+  r = await call('POST', '/me/requests', { token: key, headers: asB, body: { punchId: oldId, clockOut: new Date(Date.now() + 3 * H).toISOString(), reason: 'smoke: future' } })
+  check('a change cannot be for time that has not happened', r.status === 400, JSON.stringify(r.json))
+  const reqDays = Number(process.env.CHANGE_REQUEST_DAYS ?? 21)
+  if (reqDays > 0) {
+    const old = new Date(Date.now() - (reqDays + 3) * 86_400_000)
+    r = await call('POST', '/me/requests', { token: key, headers: asB, body: { clockIn: old.toISOString(), clockOut: new Date(old.getTime() + H).toISOString(), jobId, reason: 'smoke: old' } })
+    check('time older than the request window goes to a supervisor', r.status === 409 && r.json?.error?.code === 'too_old', JSON.stringify(r.json))
+  }
+  r = await call('POST', '/me/requests', { token: key, headers: asB, body: { punchId: oldId, notes: 'smoke: waiting', reason: 'smoke: shows on the clock screen' } })
+  const waitId = r.json?.request?.id
+  r = await call('GET', '/me/state', { token: key, headers: asB })
+  check('the clock screen lists fixes waiting for a supervisor', r.status === 200 && r.json?.pendingChanges?.some((c) => c.id === waitId && c.punchId === oldId), JSON.stringify(r.json?.pendingChanges ?? r.json))
+  await call('POST', `/me/requests/${waitId}/withdraw`, { token: key, headers: asB })
+  r = await call('POST', '/timesheets/approve', { token: admin, body: { personIds: [crewId], week: lastWeek } })
+  check('approve the corrected week', r.status === 200 && r.json?.approved === 1, JSON.stringify(r.json))
+  r = await call('POST', '/me/requests', { token: key, headers: asB, body: { punchId: oldId, notes: 'too late', reason: 'smoke: approved week' } })
+  check('no change requests into an approved week', r.status === 409 && r.json?.error?.code === 'week_approved', JSON.stringify(r.json))
+  await call('POST', '/timesheets/reopen', { token: admin, body: { personId: crewId, week: lastWeek, reason: 'smoke: reopen after request checks' } })
+
   // A tech adds a new client in the field (Service Call or Site Visit), then switches onto it.
   {
     const techEmail = `smoke-addclient-${stamp}@example.invalid`
