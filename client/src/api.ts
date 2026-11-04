@@ -166,11 +166,21 @@ export interface DayState {
   overhead?: { job: Job; phase: Phase | null } | null
   /** Off the clock: the last segment today, for "Back to …" after a break. */
   lastSegment?: Punch | null
+  /** Time fixes this person asked for that a supervisor has not decided yet. */
+  pendingChanges?: PendingChange[]
   /** Service tickets and Shop / Office / CAD tasks still open, newest first. */
   openItems?: OpenItem[]
   /** Set while Timesheets.com still runs payroll: each punch is made there too. */
   parallelRun?: { until: string; url: string } | null
   asOf: string
+}
+export interface PendingChange {
+  id: string
+  kind: 'edit' | 'add'
+  punchId: string | null
+  clockIn: string | null
+  clockOut: string | null
+  createdAt: string
 }
 export interface Assignment {
   id: string

@@ -3,7 +3,7 @@ import { prisma } from '../db.js'
 import { optionalDate, requiredStr, route, str } from '../api.js'
 import { ApiError, badRequest } from '../errors.js'
 import { requireAuth, requirePerson, requireScope } from '../auth/middleware.js'
-import { APPROVE, CREW, SELF } from '../auth/apiKeys.js'
+import { APPROVE, CREW, FIX_APPROVE, SELF } from '../auth/apiKeys.js'
 import { parseGeo } from '../lib/geo.js'
 import { addDays, dayBounds, isYmd, startOfLocalDay } from '../lib/time.js'
 import { approveWeek, personWeek, reopenWeek, signWeek, weekSheet } from '../services/timesheets.js'
@@ -191,11 +191,11 @@ for (const decision of ['approve', 'reject'] as const) {
       path: `/requests/:id/${decision}`,
       tag: 'Timesheets',
       summary: decision === 'approve' ? 'Approve a change request; the change is applied as a correction.' : 'Turn down a change request.',
-      access: [APPROVE],
+      access: [FIX_APPROVE],
       body: { note: decision === 'approve' ? 'Optional note' : 'Why it is turned down (required)' },
     },
     async (req) => {
-      const auth = requireScope(req, APPROVE)
+      const auth = requireScope(req, FIX_APPROVE)
       return { request: await decideRequest(requirePerson(auth), req.params.id, decision, str(req.body?.note, 500)) }
     },
   )

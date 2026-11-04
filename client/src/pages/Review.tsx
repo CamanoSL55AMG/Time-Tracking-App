@@ -33,7 +33,23 @@ import type { ChangeRequest, ServiceBilling } from '../api'
 // Approve the rows that are right; an approved week is locked until reopened.
 // Leads can look; only managers and payroll approve.
 
-export default function ReviewPage({ canApprove, canEdit, canApproveExpenses = false, meId }: { canApprove: boolean; canEdit: boolean; canApproveExpenses?: boolean; meId?: string }) {
+export default function ReviewPage({
+  canApprove,
+  canEdit,
+  canApproveExpenses = false,
+  meId,
+  onWaitingChange,
+  canDecideFixes = false,
+}: {
+  canApprove: boolean
+  /** Approve or turn down time fixes: managers and admins (not payroll or leads). */
+  canDecideFixes?: boolean
+  canEdit: boolean
+  canApproveExpenses?: boolean
+  meId?: string
+  /** How many time fixes are waiting, so the Review tab's count stays right. */
+  onWaitingChange?: (n: number) => void
+}) {
   const [sheet, setSheet] = useState<WeekSheet | null>(null)
   const [at, setAt] = useState<string | undefined>(undefined)
   const [picked, setPicked] = useState<Set<string>>(new Set())
@@ -51,11 +67,12 @@ export default function ReviewPage({ canApprove, canEdit, canApproveExpenses = f
       const [s, reqs] = await Promise.all([api.weekSheet(to), api.pendingRequests()])
       setSheet(s)
       setRequests(reqs)
+      onWaitingChange?.(reqs.length)
       setPicked(new Set())
     } catch (err) {
       setError(errorText(err))
     }
-  }, [])
+  }, [onWaitingChange])
 
   useEffect(() => {
     // Open on last week: that is the one waiting for approval.
@@ -117,12 +134,17 @@ export default function ReviewPage({ canApprove, canEdit, canApproveExpenses = f
       {requests.length > 0 && (
         <Stack spacing={1}>
           <Typography variant="subtitle2">Change requests waiting ({requests.length})</Typography>
+          {!canDecideFixes && (
+            <Typography variant="caption" color="text.secondary">
+              A manager or admin approves these.
+            </Typography>
+          )}
           {requests.map((r) => (
             <RequestCard
               key={r.id}
               req={r}
               showName
-              actions={canApprove ? <DecideButtons req={r} onDone={() => void load(sheet.weekStart)} /> : undefined}
+              actions={canDecideFixes ? <DecideButtons req={r} onDone={() => void load(sheet.weekStart)} /> : undefined}
             />
           ))}
         </Stack>
@@ -253,7 +275,7 @@ export default function ReviewPage({ canApprove, canEdit, canApproveExpenses = f
 
       <ServiceBillingPanel from={sheet.weekStart} to={sheet.weekEnd} />
 
-      {open && <PersonDialog row={open} weekStart={sheet.weekStart} canApprove={canApprove} canEdit={canEdit} approvable={approvable(open)} busy={busy} onApprove={() => approve([open.person.id])} onClose={() => setOpen(null)} onChanged={() => void load(sheet.weekStart)} />}
+      {open && <PersonDialog row={open} weekStart={sheet.weekStart} canApprove={canApprove} canDecideFixes={canDecideFixes} canEdit={canEdit} approvable={approvable(open)} busy={busy} onApprove={() => approve([open.person.id])} onClose={() => setOpen(null)} onChanged={() => void load(sheet.weekStart)} />}
     </Stack>
   )
 }
@@ -262,6 +284,7 @@ function PersonDialog({
   row,
   weekStart,
   canApprove,
+  canDecideFixes,
   canEdit,
   approvable,
   busy,
@@ -272,6 +295,7 @@ function PersonDialog({
   row: WeekSheetRow
   weekStart: string
   canApprove: boolean
+  canDecideFixes: boolean
   canEdit: boolean
   approvable: boolean
   busy: boolean
@@ -339,7 +363,7 @@ function PersonDialog({
                     key={q.id}
                     req={q}
                     actions={
-                      canApprove && q.status === 'pending' ? (
+                      canDecideFixes && q.status === 'pending' ? (
                         <DecideButtons
                           req={q}
                           onDone={() => {

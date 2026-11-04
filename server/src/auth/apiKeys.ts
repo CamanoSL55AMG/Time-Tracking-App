@@ -38,13 +38,16 @@ export const KEYS_MANAGE = 'keys:manage'
 export const CREW = 'punch:crew'
 /** Approve and reopen weekly timesheets. */
 export const APPROVE = 'timesheets:approve'
+/** Approve or turn down a person's request to fix their own time (a missed clock-in or
+ *  clock-out). Managers and admins only (Art, 2026-11-04): not payroll, not crew leads. */
+export const FIX_APPROVE = 'requests:approve'
 
 export const ROLES = ['tech', 'lead', 'manager', 'payroll', 'admin'] as const
 export type Role = (typeof ROLES)[number]
 
 const TECH = [SELF, 'jobs:read']
 const LEAD = [...TECH, 'punch:read', 'people:read', CREW]
-const MANAGER = [...LEAD, APPROVE, 'punch:write:any', 'jobs:write', 'people:write', 'reports:read', 'events:read', 'assignments:write', 'expenses:read', 'expenses:approve']
+const MANAGER = [...LEAD, APPROVE, FIX_APPROVE, 'punch:write:any', 'jobs:write', 'people:write', 'reports:read', 'events:read', 'assignments:write', 'expenses:read', 'expenses:approve']
 
 export const ROLE_SCOPES: Record<Role, string[]> = {
   tech: TECH,

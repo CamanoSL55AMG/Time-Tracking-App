@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { Alert, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle, MenuItem, Paper, Stack, TextField, Typography } from '@mui/material'
-import { api, errorText, fmtTime, toLocalInput, type ChangeRequest, type Job, type Phase, type RequestBody, type RequestStatus, type WeekSegment } from '../api'
+import { api, errorText, fmtTime, toLocalInput, type ChangeRequest, type Job, type PendingChange, type Phase, type Punch, type RequestBody, type RequestStatus, type WeekSegment } from '../api'
 
 // Asking for a change to your own time, and showing what was asked. Nothing changes
 // until a supervisor approves; then it is applied as a correction with the reason.
@@ -64,9 +64,25 @@ export function RequestCard({ req, showName, actions }: { req: ChangeRequest; sh
   )
 }
 
-/** Ask for a change to one segment, or (no segment) for missing time on a day of the week. */
-export function RequestDialog({ segment, day, onClose, onSent }: { segment?: WeekSegment | null; day?: string; onClose: () => void; onSent: (r: ChangeRequest) => void }) {
+/**
+ * Ask for a change to one segment, or (no segment) for missing time on a day of the week.
+ * `only` trims it to one time for the clock screen: a late clock-in or a late clock-out.
+ */
+export function RequestDialog({
+  segment,
+  day,
+  only,
+  onClose,
+  onSent,
+}: {
+  segment?: WeekSegment | null
+  day?: string
+  only?: 'start' | 'end'
+  onClose: () => void
+  onSent: (r: ChangeRequest) => void
+}) {
   const adding = !segment
+  const oneTime = Boolean(segment && only)
   const [jobs, setJobs] = useState<Job[]>([])
   const [phases, setPhases] = useState<Phase[]>([])
   const [clockIn, setClockIn] = useState(segment ? toLocalInput(segment.clockIn) : day ? `${day}T07:00` : '')
@@ -114,39 +130,59 @@ export function RequestDialog({ segment, day, onClose, onSent }: { segment?: Wee
     }
   }
 
-  const ready = reason.trim() && (adding ? clockIn && clockOut && jobId : true)
+  const unchanged =
+    oneTime && (only === 'start' ? clockIn === toLocalInput(segment!.clockIn) : !clockOut || clockOut === toLocalInput(segment!.clockOut))
+  const ready = reason.trim() && (adding ? clockIn && clockOut && jobId : !unchanged)
   return (
     <Dialog open onClose={onClose} fullWidth maxWidth="xs">
-      <DialogTitle>{adding ? 'Add missing time' : 'Ask for a change'}</DialogTitle>
+      <DialogTitle>{adding ? 'Add missing time' : only === 'start' ? 'Fix your start time' : only === 'end' ? 'Fix your clock-out time' : 'Ask for a change'}</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ pt: 1 }}>
           <Typography variant="body2" color="text.secondary">
             {adding
               ? 'For time you worked but never punched. Your supervisor approves it before it counts.'
-              : `Now: ${fmtTime(segment!.clockIn)} – ${segment!.clockOut ? fmtTime(segment!.clockOut) : 'still open'} · ${segment!.phase?.name ?? 'no phase'} · ${segment!.job.name}. Change what is wrong; your supervisor approves it before it counts.`}
+              : only === 'start'
+                ? `You clocked in at ${fmtTime(segment!.clockIn)}. Set the time you really started and say why. Your supervisor approves it before it counts; until then your hours use ${fmtTime(segment!.clockIn)}.`
+                : only === 'end'
+                  ? `You clocked out at ${segment!.clockOut ? fmtTime(segment!.clockOut) : '?'}. Set the time you really stopped and say why. Your supervisor approves it before it counts.`
+                  : `Now: ${fmtTime(segment!.clockIn)} – ${segment!.clockOut ? fmtTime(segment!.clockOut) : 'still open'} · ${segment!.phase?.name ?? 'no phase'} · ${segment!.job.name}. Change what is wrong; your supervisor approves it before it counts.`}
           </Typography>
-          <TextField label="Start" type="datetime-local" value={clockIn} onChange={(e) => setClockIn(e.target.value)} InputLabelProps={{ shrink: true }} />
-          <TextField label="End" type="datetime-local" value={clockOut} onChange={(e) => setClockOut(e.target.value)} InputLabelProps={{ shrink: true }} />
-          <TextField select label="Job" value={jobId} onChange={(e) => setJobId(e.target.value)}>
-            {jobs.map((j) => (
-              <MenuItem key={j.id} value={j.id}>
-                {j.kind === 'project' && j.code && !j.name.includes(j.code) ? `${j.code} ${j.name}` : j.name}
-              </MenuItem>
-            ))}
-          </TextField>
-          <TextField select label="Phase" value={phaseId} onChange={(e) => setPhaseId(e.target.value)}>
-            {phases.map((p) => (
-              <MenuItem key={p.id} value={p.id}>
-                {p.name}
-              </MenuItem>
-            ))}
-          </TextField>
-          <TextField label="Note (optional)" value={notes} onChange={(e) => setNotes(e.target.value)} inputProps={{ maxLength: 300 }} />
+          {(!oneTime || only === 'start') && (
+            <TextField label={oneTime ? 'Started at' : 'Start'} type="datetime-local" value={clockIn} onChange={(e) => setClockIn(e.target.value)} InputLabelProps={{ shrink: true }} />
+          )}
+          {(!oneTime || only === 'end') && (
+            <TextField label={oneTime ? 'Stopped at' : 'End'} type="datetime-local" value={clockOut} onChange={(e) => setClockOut(e.target.value)} InputLabelProps={{ shrink: true }} />
+          )}
+          {!oneTime && (
+            <>
+              <TextField select label="Job" value={jobId} onChange={(e) => setJobId(e.target.value)}>
+                {jobs.map((j) => (
+                  <MenuItem key={j.id} value={j.id}>
+                    {j.kind === 'project' && j.code && !j.name.includes(j.code) ? `${j.code} ${j.name}` : j.name}
+                  </MenuItem>
+                ))}
+              </TextField>
+              <TextField select label="Phase" value={phaseId} onChange={(e) => setPhaseId(e.target.value)}>
+                {phases.map((p) => (
+                  <MenuItem key={p.id} value={p.id}>
+                    {p.name}
+                  </MenuItem>
+                ))}
+              </TextField>
+              <TextField label="Note (optional)" value={notes} onChange={(e) => setNotes(e.target.value)} inputProps={{ maxLength: 300 }} />
+            </>
+          )}
           <TextField
             label="What happened? (required)"
             value={reason}
             onChange={(e) => setReason(e.target.value)}
-            placeholder={adding ? 'e.g. Phone died, worked 7 to 3:30 at the site' : 'e.g. Forgot to clock out, left at 3:30'}
+            placeholder={
+              adding
+                ? 'e.g. Phone died, worked 7 to 3:30 at the site'
+                : only === 'start'
+                  ? 'e.g. Got to the site at 7, forgot to clock in until 7:40'
+                  : 'e.g. Forgot to clock out, left at 3:30'
+            }
             inputProps={{ maxLength: 300 }}
           />
           {error && <Alert severity="error">{error}</Alert>}
@@ -212,5 +248,57 @@ export function DecideButtons({ req, onDone }: { req: ChangeRequest; onDone: () 
         </Alert>
       )}
     </Box>
+  )
+}
+
+/** A clock-screen segment in the shape the request dialog takes. */
+const asSegment = (p: Punch): WeekSegment => ({
+  id: p.id,
+  clockIn: p.clockIn,
+  clockOut: p.clockOut,
+  notes: p.notes,
+  source: 'app',
+  job: { id: p.job.id, name: p.job.name, code: p.job.code, kind: p.job.kind },
+  phase: p.phase ? { id: p.phase.id, key: p.phase.key, name: p.phase.name, short: p.phase.short, laborCategory: p.phase.laborCategory } : null,
+  edited: false,
+})
+
+/**
+ * On the clock screen: "Fix the start time" for the segment you are on, or "Fix the
+ * clock-out time" for the one you just closed. Shows that a fix is waiting instead
+ * when one has been sent for that segment.
+ */
+export function FixTimeLine({ punch, side, pending, onSent }: { punch: Punch; side: 'start' | 'end'; pending?: PendingChange[]; onSent: () => void }) {
+  const [open, setOpen] = useState(false)
+  const [sent, setSent] = useState(false)
+  const waiting = sent || (pending ?? []).some((c) => c.punchId === punch.id)
+  if (side === 'end' && !punch.clockOut) return null
+  return (
+    <>
+      {waiting ? (
+        <Typography variant="caption" color="warning.main" sx={{ display: 'block', fontWeight: 600 }}>
+          Time fix sent. Waiting for your supervisor to approve it.
+        </Typography>
+      ) : (
+        <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+          {side === 'start' ? 'Clocked in late? ' : 'Clocked out late or early? '}
+          <Box component="button" type="button" onClick={() => setOpen(true)} sx={{ all: 'unset', color: 'primary.main', fontWeight: 600, cursor: 'pointer' }}>
+            {side === 'start' ? 'Fix the start time' : 'Fix the clock-out time'}
+          </Box>
+        </Typography>
+      )}
+      {open && (
+        <RequestDialog
+          segment={asSegment(punch)}
+          only={side}
+          onClose={() => setOpen(false)}
+          onSent={() => {
+            setOpen(false)
+            setSent(true)
+            onSent()
+          }}
+        />
+      )}
+    </>
   )
 }
