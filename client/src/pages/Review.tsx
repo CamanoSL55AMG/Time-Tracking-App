@@ -42,7 +42,7 @@ export default function ReviewPage({
   canDecideFixes = false,
 }: {
   canApprove: boolean
-  /** Approve or turn down time fixes: managers and admins (not payroll or leads). */
+  /** Approve or turn down time fixes: managers, admins and payroll (not crew leads). */
   canDecideFixes?: boolean
   canEdit: boolean
   canApproveExpenses?: boolean
@@ -150,7 +150,7 @@ export default function ReviewPage({
           <Typography variant="subtitle2">Change requests waiting ({requests.length})</Typography>
           {!canDecideFixes && (
             <Typography variant="caption" color="text.secondary">
-              A manager or admin approves these.
+              A manager, admin or payroll approves these.
             </Typography>
           )}
           {requests.map((r) => (

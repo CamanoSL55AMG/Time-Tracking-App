@@ -550,13 +550,13 @@ payroll (open decision 4).
 Status 2026-11-04: missed punch fixes for techs (Art). The clock screen offers "Fix the
 start time" on the segment a person clocked in on and "Fix the clock-out time" after
 clocking out, each a one-time change request with a required reason (the Week tab still
-handles any segment and missing time). The punched time stands until a manager or admin
-approves (scope `requests:approve`; payroll and crew leads see them but do not decide); the approval is applied as an audited correction, a waiting request
+handles any segment and missing time). The punched time stands until a manager, admin or
+payroll approves (scope `requests:approve`; crew leads see them but do not decide); the approval is applied as an audited correction, a waiting request
 holds up approving the week, and the payroll export takes approved weeks only. A person
 can ask about today and the `CHANGE_REQUEST_DAYS` days before it (default 21, enough for
 a semimonthly period plus the days until payroll runs; 0 = no limit), never about the
 future, and never into an approved week (the supervisor reopens it and corrects it).
-Managers and admins see the number of fixes waiting on the Review tab.
+Managers, admins and payroll see the number of fixes waiting on the Review tab.
 
 Rounding, overtime, break and leave rules are legal requirements, not design choices.
 They must be confirmed with whoever runs payroll, and the leave rules with L&I guidance or
