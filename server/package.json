@@ -13,6 +13,7 @@
     "seed": "tsx scripts/seed.ts",
     "smoke": "node scripts/smoke.mjs",
     "link-ged": "tsx scripts/link-ged.ts",
+    "link-aic-terminal": "tsx scripts/link-ged.ts",
     "reset-password": "tsx scripts/reset-password.ts"
   },
   "dependencies": {
