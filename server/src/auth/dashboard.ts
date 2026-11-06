@@ -4,9 +4,9 @@ import * as oidc from 'openid-client'
 import { config } from '../config.js'
 
 // ─── Sign in with the Dashboard (OpenID Connect client) ─────────────────────
-// The Dashboard (GED) is the sign-in service for every add-on. This side starts
+// The Dashboard (AIC Terminal) is the sign-in service for every add-on. This side starts
 // the sign-in, checks what comes back and says who the person is. The routes that
-// use it are in routes/auth.ts. Plan: GED's DASHBOARD-SIGN-IN.md.
+// use it are in routes/auth.ts. Plan: AIC Terminal's DASHBOARD-SIGN-IN.md.
 
 export const dashboardConfigured = (): boolean => Boolean(config.dashboardIssuer && config.dashboardClientId && config.dashboardClientSecret)
 

@@ -6,15 +6,15 @@
 ## 1. Decision
 
 Time tracking becomes its own app, alongside AV Inventory, Project Report and Accounting.
-GED stops owning punches. GED, Project Report, Accounting and anything else link to this
+AIC Terminal stops owning punches. AIC Terminal, Project Report, Accounting and anything else link to this
 app through one versioned API (§6).
 
 Reasons:
 
-- Sellable on its own to a company that does not run GED.
+- Sellable on its own to a company that does not run AIC Terminal.
 - Techs get a phone-first app with a handful of taps, not the PM dashboard.
 - Hours and GPS stamps live in their own database with their own access and backup.
-- Same pattern Project Report followed when it left GED on 2026-09-28.
+- Same pattern Project Report followed when it left AIC Terminal on 2026-09-28.
 
 ## 2. Goals and non-goals
 
@@ -39,7 +39,7 @@ Non-goals
 ## 3. Timesheets.com as the baseline
 
 Their public feature list (timesheets.com/features, read 2026-10-07) and their Public API
-v1 (documented in GED's `TIME-TRACKING-MODULE.md`) tell us what a complete product in this
+v1 (documented in AIC Terminal's `TIME-TRACKING-MODULE.md`) tell us what a complete product in this
 category covers. We use that as a checklist of *what* to cover. The *how* comes from Morgan
 Sound's own workday.
 
@@ -72,11 +72,11 @@ sold commercially, have counsel look at the name and marketing before launch.
   job. The phase list is configurable per company.
 - **Job pre-filled from the calendar.** Today's entry on the shared Morgan Sound calendar
   (crew initials in the title) selects the job before the tech touches anything.
-- **One-click punch from other apps.** A task card in GED can clock a tech into that job
+- **One-click punch from other apps.** A task card in AIC Terminal can clock a tech into that job
   with one API call.
 - **Tower board.** Live view of every tech: job, phase n of 7, since when, hours today.
 - **Labor budget tie-in.** Hours per job per phase line up against the labor sold in
-  Jetbuilt, through GED.
+  Jetbuilt, through AIC Terminal.
 - **Lead punches the crew.** One action clocks several people onto the same job.
 
 ## 4a. Work modes, master clock and service billing (added 2026-10-21)
@@ -190,7 +190,7 @@ and see their month with totals ("Pay me back" is what they paid themselves).
   `expense.approved`, `expense.rejected`, `expense.deleted`.
 
 Still to do from §8: expense reports as batches, export to payroll / accounts payable, and the
-expenses-per-job view in GED.
+expenses-per-job view in AIC Terminal.
 
 ## 4c. Bench Repair (built 2026-10-29; clock in / clock out only since 2026-11-02)
 
@@ -235,8 +235,8 @@ deploy    Dockerfile + docker-compose, same as the other add-ons
   duplicating (see idempotency, §6.2).
 - **Tenancy.** Every table carries `companyId` from day one. One company per install today;
   a shared cloud install later needs no schema change.
-- **Sign-in.** Three ways: GED one-click (the existing `v1.<payload>.<hmac>` add-on token,
-  audience `time_tracking`), the app's own email + password for companies without GED, and
+- **Sign-in.** Three ways: AIC Terminal one-click (the existing `v1.<payload>.<hmac>` add-on token,
+  audience `time_tracking`), the app's own email + password for companies without AIC Terminal, and
   name + PIN in kiosk mode.
 - **Roles.** `tech`, `lead`, `manager`, `payroll`, `admin`.
 - **GPS.** A position is recorded only at the moment of a punch. No background tracking.
@@ -267,7 +267,7 @@ deploy    Dockerfile + docker-compose, same as the other add-ons
 | Webhook | Outbound subscriptions | url, secret, events, active |
 | Event | Change feed + webhook source | seq, type, payload, at |
 
-`ExternalRef` is what makes linking dependable: a GED project, a Jetbuilt P-number and a
+`ExternalRef` is what makes linking dependable: an AIC Terminal project, a Jetbuilt P-number and a
 Timesheets project id can all point at the same Job without any of them being its key.
 
 ## 6. Linking API
@@ -292,8 +292,8 @@ published document.
 
 | Caller | Credential | Notes |
 | --- | --- | --- |
-| A person in the app | Session cookie / JWT | From password, PIN, or GED one-click token |
-| Another app (GED, Project Report, Accounting) | `Authorization: Bearer tt_live_…` | One key per integration, stored hashed, revocable, with scopes |
+| A person in the app | Session cookie / JWT | From password, PIN, or AIC Terminal one-click token |
+| Another app (AIC Terminal, Project Report, Accounting) | `Authorization: Bearer tt_live_…` | One key per integration, stored hashed, revocable, with scopes |
 | App acting for a person | API key + `X-Act-As: person@company.com` | Needs the `punch:write:any` scope; the audit trail records both the key and the person |
 
 Scopes: `punch:read`, `punch:write:any`, `jobs:read`, `jobs:write`, `people:read`,
@@ -327,7 +327,7 @@ Reference data
 | Method | Path | Purpose |
 | --- | --- | --- |
 | GET | `/jobs` | Jobs, filter by kind / active / search |
-| PUT | `/jobs/by-ref/{system}/{externalId}` | Create or update a job by its id in another system. GED uses this to keep active Jetbuilt projects and service calls selectable |
+| PUT | `/jobs/by-ref/{system}/{externalId}` | Create or update a job by its id in another system. AIC Terminal uses this to keep active Jetbuilt projects and service calls selectable |
 | GET, PUT | `/phases` | The phase list |
 | GET | `/people` | Roster |
 | PUT | `/people/by-email/{email}` | Create or update a person from another app |
@@ -400,14 +400,14 @@ Two ways to receive them, same payloads:
 - **Webhooks**, for apps that accept inbound calls. Each delivery is signed
   (`X-TT-Signature: sha256=…` over the raw body with the subscription secret), carries an
   event id for de-duplication, and is retried with backoff for 24 hours.
-- **Event feed**, for apps that do not. GED has a standing rule that nothing calls into it,
-  so GED polls `/events?after=…` and remembers the last sequence number it processed.
+- **Event feed**, for apps that do not. AIC Terminal has a standing rule that nothing calls into it,
+  so AIC Terminal polls `/events?after=…` and remembers the last sequence number it processed.
 
 ### 6.5 How each app links
 
 | App | Direction | What it does |
 | --- | --- | --- |
-| GED | GED → Time | Pushes jobs (`PUT /jobs/by-ref/ged/…`). Title-bar clock and task buttons call the punch endpoints with `X-Act-As`. Budget-vs-actual pages read `/reports/hours`. Polls `/events` |
+| AIC Terminal | AIC Terminal → Time | Pushes jobs (`PUT /jobs/by-ref/ged/…`). Title-bar clock and task buttons call the punch endpoints with `X-Act-As`. Budget-vs-actual pages read `/reports/hours`. Polls `/events` |
 | Project Report | Report → Time | Reads `/reports/hours` and `/punches` instead of Timesheets.com after cutover |
 | Accounting | Accounting → Time | Reads locked pay periods, leave taken, approved expenses and reimbursements |
 | AIC Control Tower | Tower → Time | Turns the module on per company, issues the first admin and API key |
@@ -497,7 +497,7 @@ existing style ("TB OFF"), so the schedule and the leave record agree.
 - **Mileage:** miles × the rate in force on that date. Rates are a table an admin
   maintains; nothing is hard-coded.
 - **Workflow:** draft → submitted → approved or rejected → exported. Approved lines lock.
-- **Job costing:** every line carries a job, so expenses per job are available to GED next
+- **Job costing:** every line carries a job, so expenses per job are available to AIC Terminal next
   to labor.
 - **Out the door:** reimbursable totals per person go to payroll or accounts payable;
   company-card lines go to accounting with their category's account code.
@@ -522,8 +522,8 @@ existing style ("TB OFF"), so the schedule and the leave record agree.
 
 | Phase | Delivers |
 | --- | --- |
-| 0 — Scaffold | New repo, database, sign-in (GED token + password), API skeleton with keys, scopes, OpenAPI page |
-| 1 — Punch | Phone punch screen, phases, calendar pre-fill, GPS stamp, offline queue, edit with audit, Tower board, events feed. GED clock becomes a thin client |
+| 0 — Scaffold | New repo, database, sign-in (AIC Terminal token + password), API skeleton with keys, scopes, OpenAPI page |
+| 1 — Punch | Phone punch screen, phases, calendar pre-fill, GPS stamp, offline queue, edit with audit, Tower board, events feed. AIC Terminal clock becomes a thin client |
 | 2 — Review | Exceptions report, sign and approve, crew punch, kiosk mode, site geofences, webhooks, reconcile report |
 | 3 — Expenses | Expenses, mileage, receipts, approval, export. Needed before cutover because expenses run through Timesheets.com today |
 | 4 — Payroll | Pay periods, lock, AccountEdge export, rounding / overtime / break rules, state quarterly hours report. **Cutover happens here** |
@@ -534,7 +534,7 @@ Status 2026-10-18: Phase 0 and 1 done. Phase 2 built: weekly sign and approve wi
 approved-week lock, exceptions report, crew punch, segment corrections on the Review
 screen, and change requests (a person asks for a fix or for missing time; a supervisor
 approves or turns it down; nobody approves their own). Kiosk mode, webhooks and the reconcile report inside this app are still to do
-(GED's Time page has a reconcile tab for the parallel run). Weeks run Monday to Sunday
+(AIC Terminal's Time page has a reconcile tab for the parallel run). Weeks run Monday to Sunday
 (`Company.weekStartDay`) until the pay period is settled (open decision 4).
 
 Status 2026-11-03: payroll labor export built (`GET /payroll/labor`, scope `payroll:read`,
@@ -564,27 +564,27 @@ counsel, before Phases 4 and 5 are built.
 
 ## 11. What already exists
 
-Built inside GED on 2026-10-05, uncommitted on `main` in
+Built inside AIC Terminal on 2026-10-05, uncommitted on `main` in
 `C:\Users\art\Source\Repos\google-ecosystem-dashboard`. All of it moves here in Phase 0–1.
 
-| GED file | Becomes |
+| AIC Terminal file | Becomes |
 | --- | --- |
 | `server/prisma/schema.prisma` → `model Punch` | Starting point for `Punch` (add companyId, jobId, phaseId, clientId) |
 | `server/src/services/punch.ts` | Punch in / out / switch / next, phases, shop geofence, board, reconcile |
 | `server/src/routes/punch.ts` | Basis for the `/api/v1/punches` routes |
 | `client/src/features/time/hooks/usePunch.ts` | Client hook, including the geolocation grab |
 | `client/src/features/time/components/PunchBoard.tsx` | Tower board |
-| `client/src/features/time/components/ClockButton.tsx`, `PunchToJobButton.tsx` | Stay in GED, rewired to call this app's API |
+| `client/src/features/time/components/ClockButton.tsx`, `PunchToJobButton.tsx` | Stay in AIC Terminal, rewired to call this app's API |
 
-GED keeps: the calendar-title parsing (`eventsForStaff`, `crewFromTitle`), which is copied
-here; the Jetbuilt labor budget; and the budget-vs-actual pages. GED's `Punch` table is
+AIC Terminal keeps: the calendar-title parsing (`eventsForStaff`, `crewFromTitle`), which is copied
+here; the Jetbuilt labor budget; and the budget-vs-actual pages. AIC Terminal's `Punch` table is
 dropped once the clock points at this app. No real punches exist in it.
 
 ## 12. Open decisions
 
 1. **Name** of the app and its repo folder (working name: `time-tracking`).
 2. **Where it runs first:** the Dell beside the other add-ons, or the cloud Linux host.
-3. **Tech sign-in on phones:** GED accounts for everyone, or this app's own logins.
+3. **Tech sign-in on phones:** AIC Terminal accounts for everyone, or this app's own logins.
 4. **Pay period definition** and the overtime / rounding / break rules.
 5. **Payroll export format:** AccountEdge timesheets or activity slips.
 6. **History:** import past Timesheets.com entries or start clean at cutover.

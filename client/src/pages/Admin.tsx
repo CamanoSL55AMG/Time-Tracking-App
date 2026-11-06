@@ -23,7 +23,7 @@ import {
 import { api, errorText, fmtTime, WORK_MODES, type ApiKey, type BillingRules, type Job, type Person, type Phase, type WorkMode } from '../api'
 import { MODE_INFO } from './modes'
 
-// People, jobs, phases and integration keys. Most jobs arrive from GED through the
+// People, jobs, phases and integration keys. Most jobs arrive from AIC Terminal through the
 // API; this page is for the ones added by hand and for seeing what is there.
 
 type Section = 'people' | 'jobs' | 'phases' | 'expenses' | 'billing' | 'keys'

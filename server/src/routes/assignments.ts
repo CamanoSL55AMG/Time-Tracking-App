@@ -6,7 +6,7 @@ import { badRequest } from '../errors.js'
 import { requireScope } from '../auth/middleware.js'
 import { isYmd } from '../lib/time.js'
 
-// The day's schedule, pushed in by another app (GED reads the shared job calendar).
+// The day's schedule, pushed in by another app (AIC Terminal reads the shared job calendar).
 // Used only to pre-select the job when a tech clocks in; it never creates time.
 
 export const assignmentsRouter = Router()

@@ -24,7 +24,7 @@ test('a good token verifies', () => {
 })
 
 test('matches the format GED issues', () => {
-  // Same construction as GED's signAddonToken.
+  // Same construction as AIC Terminal's signAddonToken.
   const body = Buffer.from(JSON.stringify(payload())).toString('base64url')
   const sig = createHmac('sha256', secret).update(`v1.${body}`).digest('base64url')
   assert.equal(verifySsoToken(`v1.${body}.${sig}`, secret, 'time_tracking', now).ok, true)

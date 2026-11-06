@@ -1,7 +1,7 @@
 # Logbook (Time Tracking)
 
 Logbook, the AIC Terminal time tracking module. Standalone time tracking: a phone-first punch clock that records the job and the phase
-of the day, a live Tower board, and a versioned API that other apps (GED, Project Report,
+of the day, a live Tower board, and a versioned API that other apps (AIC Terminal, Project Report,
 Accounting) link to. Built to replace Timesheets.com at Morgan Sound and to be sold on
 its own. The full plan is in [TIME-TRACKING-APP.md](TIME-TRACKING-APP.md).
 
@@ -12,9 +12,9 @@ server/   Express + TypeScript + Prisma + PostgreSQL — the API at /api/v1     
 
 ## What works today
 
-- Sign-in by email and password, and one-click sign-in from GED (`/sso?token=…`).
-- **Sign in with Dashboard**: GED is the sign-in service for every add-on
-  (`DASHBOARD-SIGN-IN.md` in the GED repo). Set up with GED's `npm run oidc:client`.
+- Sign-in by email and password, and one-click sign-in from AIC Terminal (`/sso?token=…`).
+- **Sign in with Dashboard**: AIC Terminal is the sign-in service for every add-on
+  (`DASHBOARD-SIGN-IN.md` in AIC Terminal repo). Set up with AIC Terminal's `npm run oidc:client`.
 - Clock in, Next phase, Switch job, Clock out. Each punch is stamped with the phone's
   location at that moment.
 - The seven phases of the day, from "Shop — load vans" to "Shop — unload / put away".
@@ -24,7 +24,7 @@ server/   Express + TypeScript + Prisma + PostgreSQL — the API at /api/v1     
 - API: scoped keys, `X-Act-As`, `Idempotency-Key`, change feed, hours report, and a
   reference page at `/api/v1/docs` generated from the code.
 
-- Today's job calendar assignment offered first and pre-selected (pushed in by GED).
+- Today's job calendar assignment offered first and pre-selected (pushed in by AIC Terminal).
 - No signal? Punches are kept on the phone with the time they were tapped and sent, in
   order, when the signal returns.
 - **My week**: each person sees their week by day and signs it. Wrong time or a
@@ -92,7 +92,7 @@ export, kiosk mode, webhooks. See the phases in the plan.
 
 ## First-time setup (Windows)
 
-Needs Node 20 or newer and a PostgreSQL you can reach. The same Postgres that GED uses is
+Needs Node 20 or newer and a PostgreSQL you can reach. The same Postgres that AIC Terminal uses is
 fine; this app keeps its own database (`timetracking`).
 
 ```powershell
@@ -108,12 +108,12 @@ npm install
 
 Or run `setup.cmd` from the repo root after filling in `server\.env`.
 
-To let people arrive signed in from GED, set `ADDON_SSO_SECRET` to the same value GED has.
+To let people arrive signed in from AIC Terminal, set `ADDON_SSO_SECRET` to the same value AIC Terminal has.
 
 ## Ports
 
 API 5400, app 5195 in development. Chosen to stay clear of the other apps on the same PC
-(GED 5000/5173, AV Inventory 3001/5174, Project Report 5200/5180, Control Tower 5300/5190,
+(AIC Terminal 5000/5173, AV Inventory 3001/5174, Project Report 5200/5180, Control Tower 5300/5190,
 Standalone 5500/5175).
 
 ## Running
@@ -144,14 +144,14 @@ npm run smoke   # with the API running: end-to-end checks against your database
 `npm run smoke` creates a throwaway person and job, walks a whole day of punches through
 the API, and deactivates them again when it is done.
 
-## Linking GED
+## Linking AIC Terminal
 
 ```powershell
 cd server
 npm run link-ged      # creates GED's key and writes it into GED's server\.env
 ```
 
-Then restart GED's server. GED pushes its active projects as jobs and today's job
+Then restart AIC Terminal's server. AIC Terminal pushes its active projects as jobs and today's job
 calendar as assignments, and its title-bar clock punches through this app.
 
 ## Linking another app
