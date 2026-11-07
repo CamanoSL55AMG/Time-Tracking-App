@@ -31,9 +31,10 @@ import WeekPage from './pages/Week'
 import ReviewPage from './pages/Review'
 import ExpensesPage from './pages/Expenses'
 import PayrollPage from './pages/Payroll'
+import LeavePage from './pages/Leave'
 import { writeMode } from './pages/modes'
 
-type Tab = 'clock' | 'week' | 'expenses' | 'board' | 'review' | 'admin' | 'payroll'
+type Tab = 'clock' | 'week' | 'expenses' | 'board' | 'review' | 'admin' | 'payroll' | 'leave'
 
 const ClockIcon = () => (
   <SvgIcon>
@@ -76,6 +77,15 @@ export default function App() {
   // Time fixes waiting for a supervisor: the count on the Review tab for managers, admins and payroll.
   const [waitingFixes, setWaitingFixes] = useState(0)
   const approver = Boolean(person?.scopes.includes('requests:approve'))
+  // Time off shows only when the server has leave tracking on (LEAVE_ENABLED).
+  const [leaveOn, setLeaveOn] = useState(false)
+  useEffect(() => {
+    if (!person) return
+    api.authConfig().then(
+      (c) => setLeaveOn(Boolean(c.features?.leave)),
+      () => setLeaveOn(false),
+    )
+  }, [person])
   useEffect(() => {
     if (!approver) {
       setWaitingFixes(0)
@@ -163,8 +173,9 @@ export default function App() {
   const showReview = can('punch:read')
   // Payroll and admin: the pay period report, from the name menu.
   const showPayroll = can('payroll:read')
+  const showLeave = leaveOn && (can('punch:self') || can('leave:read'))
   const hidden =
-    (tab === 'board' && !showBoard) || (tab === 'admin' && !showAdmin) || ((tab === 'week' || tab === 'expenses') && !showWeek) || (tab === 'review' && !showReview) || (tab === 'payroll' && !showPayroll)
+    (tab === 'board' && !showBoard) || (tab === 'admin' && !showAdmin) || ((tab === 'week' || tab === 'expenses') && !showWeek) || (tab === 'review' && !showReview) || (tab === 'payroll' && !showPayroll) || (tab === 'leave' && !showLeave)
   const current: Tab = hidden ? 'clock' : tab
 
   return (
@@ -183,6 +194,16 @@ export default function App() {
                 {person.email} · {person.role}
               </Typography>
             </MenuItem>
+            {showLeave && (
+              <MenuItem
+                onClick={() => {
+                  setMenuAt(null)
+                  setTab('leave')
+                }}
+              >
+                Time off
+              </MenuItem>
+            )}
             {showPayroll && (
               <MenuItem
                 onClick={() => {
@@ -214,6 +235,7 @@ export default function App() {
         {current === 'board' && <BoardPage />}
         {current === 'admin' && <AdminPage me={person} />}
         {current === 'payroll' && <PayrollPage />}
+        {current === 'leave' && <LeavePage me={person} scopes={person.scopes} />}
       </Container>
 
       {(showWeek || showBoard || showAdmin) && (

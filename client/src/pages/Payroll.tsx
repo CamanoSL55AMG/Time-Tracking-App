@@ -3,6 +3,7 @@ import {
   Alert,
   Box,
   Button,
+  Chip,
   CircularProgress,
   MenuItem,
   Paper,
@@ -71,9 +72,11 @@ export default function PayrollPage() {
 
   const people = useMemo(() => {
     if (!data) return []
-    const byPerson = new Map<string, { name: string; email: string; regular: number; overtime: number; cats: Record<string, number> }>()
+    const byPerson = new Map<string, { name: string; email: string; regular: number; overtime: number; cats: Record<string, number>; w2: boolean; c1099: boolean }>()
     for (const l of data.lines) {
-      const p = byPerson.get(l.personId) ?? { name: l.personName, email: l.personEmail, regular: 0, overtime: 0, cats: {} }
+      const p = byPerson.get(l.personId) ?? { name: l.personName, email: l.personEmail, regular: 0, overtime: 0, cats: {}, w2: false, c1099: false }
+      if (l.workerType === 'contractor') p.c1099 = true
+      else p.w2 = true
       p.regular += l.regularHours
       p.overtime += l.overtimeHours
       p.cats[l.laborCategory] = (p.cats[l.laborCategory] ?? 0) + l.hours
@@ -174,6 +177,7 @@ export default function PayrollPage() {
                   <TableRow key={p.email}>
                     <TableCell>
                       {p.name}
+                      {p.c1099 && <Chip size="small" color="warning" label={p.w2 ? 'part 1099' : '1099'} sx={{ ml: 1 }} />}
                       <Typography variant="caption" color="text.secondary" component="div">
                         {p.email}
                       </Typography>
@@ -207,8 +211,42 @@ export default function PayrollPage() {
           <Typography variant="caption" color="text.secondary">
             {data.lines.length} lines, one per person, day, job and task. AIC Accounting imports these same lines.
           </Typography>
+          {data.leaveLines && <LeaveSummary data={data} />}
         </>
       )}
     </Stack>
+  )
+}
+
+/** Approved paid leave in the period (only when leave tracking is on). Not hours worked: never overtime. */
+function LeaveSummary({ data }: { data: LaborExport }) {
+  const lines = data.leaveLines ?? []
+  const byPerson = new Map<string, Map<string, number>>()
+  for (const l of lines) {
+    const m = byPerson.get(l.personName) ?? new Map<string, number>()
+    m.set(l.leaveTypeName, (m.get(l.leaveTypeName) ?? 0) + l.hours)
+    byPerson.set(l.personName, m)
+  }
+  const pending = data.leavePending ?? []
+  return (
+    <Paper sx={{ p: 2 }}>
+      <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
+        Paid leave: {h2(lines.reduce((t, l) => t + l.hours, 0))} h
+      </Typography>
+      {byPerson.size === 0 && <Typography color="text.secondary">No approved paid leave in this pay period.</Typography>}
+      {[...byPerson.entries()].map(([name, m]) => (
+        <Typography key={name} variant="body2">
+          {name}: {[...m.entries()].map(([t, hrs]) => `${t} ${h2(hrs)} h`).join(', ')}
+        </Typography>
+      ))}
+      {pending.length > 0 && (
+        <Alert severity="warning" sx={{ mt: 1 }}>
+          Still waiting for a decision, not in the export: {pending.map((p) => `${p.personName} (${p.leaveType}, ${h2(p.hours)} h)`).join('; ')}
+        </Alert>
+      )}
+      <Typography variant="caption" color="text.secondary" component="div" sx={{ mt: 1 }}>
+        Leave goes to AIC Accounting on its own lines (job kind "leave"), all regular hours.
+      </Typography>
+    </Paper>
   )
 }
