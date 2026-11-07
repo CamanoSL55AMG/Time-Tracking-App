@@ -9,7 +9,7 @@ import { Prisma } from '@prisma/client'
 import { assertConfig, config } from './config.js'
 import { prisma } from './db.js'
 import { ApiError } from './errors.js'
-import { authenticate, rateLimit } from './auth/middleware.js'
+import { authenticate, passwordChangeGate, rateLimit } from './auth/middleware.js'
 import { authRouter } from './routes/auth.js'
 import { peopleRouter } from './routes/people.js'
 import { jobsRouter } from './routes/jobs.js'
@@ -57,6 +57,7 @@ app.use(express.json({ limit: '1mb' }))
 const v1 = express.Router()
 v1.use(logbookSwitch) // AIC Control Tower on/off; fails open (services/tower.ts)
 v1.use(authenticate)
+v1.use(passwordChangeGate) // a password an admin set must be changed first
 v1.use(rateLimit)
 v1.use(systemRouter)
 v1.use(authRouter)

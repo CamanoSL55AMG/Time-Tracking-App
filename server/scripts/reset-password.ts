@@ -7,6 +7,9 @@
 //
 // Options:  --email <address>   skip the email prompt
 //           --activate          also re-activate the person if they were deactivated
+//           --must-change       make them pick a new password at their next sign-in
+//                               (use it when you set a password for someone else;
+//                               without it, any such flag is cleared)
 import 'dotenv/config'
 import readline from 'node:readline'
 import bcrypt from 'bcryptjs'
@@ -51,12 +54,14 @@ async function main() {
   if (again !== next) throw new Error('The two passwords do not match. Nothing was changed.')
 
   const activate = process.argv.includes('--activate')
+  const mustChange = process.argv.includes('--must-change')
   await prisma.person.update({
     where: { id: person.id },
-    data: { passwordHash: await bcrypt.hash(next, 12), ...(activate ? { active: true } : {}) },
+    data: { passwordHash: await bcrypt.hash(next, 12), mustChangePassword: mustChange, ...(activate ? { active: true } : {}) },
   })
 
   console.log(`Password changed for ${person.name} <${person.email}> (role: ${person.role}).`)
+  if (mustChange) console.log('They must pick a new password when they next sign in.')
   if (!person.active && !activate) {
     console.log('Note: this person is deactivated and still cannot sign in. Run again with --activate.')
   }

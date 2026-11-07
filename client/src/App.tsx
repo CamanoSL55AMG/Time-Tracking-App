@@ -21,8 +21,9 @@ import {
   Toolbar,
   Typography,
 } from '@mui/material'
-import { api, errorText, getToken, setSignedOutHandler, setToken, type Person } from './api'
+import { api, errorText, getToken, setPasswordChangeHandler, setSignedOutHandler, setToken, type Person } from './api'
 import Login from './pages/Login'
+import FirstPassword from './pages/FirstPassword'
 import PasswordField from './PasswordField'
 import PunchPage from './pages/Punch'
 import BoardPage from './pages/Board'
@@ -115,6 +116,7 @@ export default function App() {
 
   useEffect(() => {
     setSignedOutHandler(() => setPerson(null))
+    setPasswordChangeHandler(() => setPerson((p) => (p ? { ...p, mustChangePassword: true } : p)))
     const boot = async () => {
       // Arriving from GED with a one-click sign-in link: /sso?token=…
       // Back from "Sign in with Dashboard": /sso#session=… (the session itself),
@@ -164,6 +166,9 @@ export default function App() {
         }}
       />
     )
+
+  // A password an admin set: nothing else until they pick their own.
+  if (person.mustChangePassword) return <FirstPassword person={person} onDone={setPerson} onSignOut={signOut} />
 
   const can = (scope: string) => person.scopes.includes(scope)
   const showBoard = can('punch:read')

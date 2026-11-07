@@ -5,6 +5,7 @@ import { config } from '../config.js'
 import { forbidden, unauthorized, ApiError } from '../errors.js'
 import { hashKey, isRole, looksLikeKey, ROLE_SCOPES, SELF } from './apiKeys.js'
 import { verifySession } from './session.js'
+import { passwordChangeBlocks } from './passwordChange.js'
 
 // Who is calling. A request is either a signed-in person (session token) or an
 // integration (API key), optionally acting for a person via X-Act-As.
@@ -74,6 +75,19 @@ export function authenticate(req: Request, _res: Response, next: NextFunction): 
       next()
     })
     .catch(next)
+}
+
+// ─── First sign-in password change ──────────────────────────────────────────
+// A person whose password an admin set (Person.mustChangePassword) can only see
+// who they are and change their password until they do. API keys are not held
+// back: an integration acting for the person never knows their password.
+
+export function passwordChangeGate(req: Request, _res: Response, next: NextFunction): void {
+  if (passwordChangeBlocks(req.auth, req.path)) {
+    next(new ApiError(403, 'password_change_required', 'Set a new password before you go on.'))
+    return
+  }
+  next()
 }
 
 /** The caller, or 401. */
