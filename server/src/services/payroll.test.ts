@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { laborCsv, lineIdOf, previousSemimonthlyPeriod, semimonthlyPeriod, splitWorkweek, type LaborLine } from './payroll.js'
+import { laborCsv, lineIdOf, previousSemimonthlyPeriod, semimonthlyPeriod, splitMixedWeek, splitWorkweek, type LaborLine } from './payroll.js'
 
 const seg = (startIso: string, hours: number, jobId = 'job-a', phaseId: string | null = 'install') => ({
   personId: 'p1',
@@ -107,4 +107,44 @@ test('a part-week approval covers only its days', async () => {
   // An approval from before this change has no day: it covers the whole week.
   assert.equal(approvedThroughOf({ status: 'approved', approvedThrough: null, weekStart: '2026-11-09' }), '2026-11-15')
   assert.equal(approvedThroughOf({ status: 'signed', approvedThrough: null, weekStart: '2026-11-09' }), null)
+})
+
+// ─── 1099 contractors ───────────────────────────────────────────────────────
+
+test('contractor hours are all regular and do not push an employee week into overtime', () => {
+  // Mon to Thu as an employee, 10 h a day (40 h), then Fri as a contractor, 10 h.
+  const week = [2, 3, 4, 5, 6].map((d) => seg(`2026-11-0${d}T15:00:00Z`, 10))
+  const typeOf = (s: { clockIn: Date }) => (s.clockIn.getUTCDate() === 6 ? ('contractor' as const) : ('employee' as const))
+  const out = splitMixedWeek(week, typeOf, 40)
+  assert.deepEqual(
+    out.map((s) => [s.workerType, hrs(s.regularSeconds), hrs(s.overtimeSeconds)]),
+    [['employee', 10, 0], ['employee', 10, 0], ['employee', 10, 0], ['employee', 10, 0], ['contractor', 10, 0]],
+  )
+})
+
+test('a contractor working 50 hours gets no overtime', () => {
+  const week = [2, 3, 4, 5, 6].map((d) => seg(`2026-11-0${d}T15:00:00Z`, 10))
+  const out = splitMixedWeek(week, () => 'contractor', 40)
+  assert.equal(out.reduce((t, s) => t + s.overtimeSeconds, 0), 0)
+  assert.equal(out.reduce((t, s) => t + hrs(s.regularSeconds), 0), 50)
+})
+
+test('all-employee weeks split exactly as before', () => {
+  const week = [0, 1, 2, 3, 4].map((d) => seg(`2026-11-0${2 + d}T15:00:00Z`, 9))
+  const before = splitWorkweek(week, 40).map((s) => [s.regularSeconds, s.overtimeSeconds])
+  const after = splitMixedWeek(week, () => 'employee', 40).map((s) => [s.regularSeconds, s.overtimeSeconds])
+  assert.deepEqual(after, before)
+})
+
+test('csv adds worker_type last only when contractors are on', () => {
+  const line: LaborLine = {
+    lineId: 'abc', personId: 'p1', personEmail: 'sub@example.com', personName: 'Sam Sub', overtimeExempt: false,
+    date: '2026-11-02', weekStart: '2026-11-02', jobId: 'j1', jobCode: 'P-1001', jobName: 'Job', jobKind: 'project',
+    phaseKey: 'install', phaseName: 'Install', laborCategory: 'install', regularHours: 8, overtimeHours: 0, hours: 8, segments: 1,
+    workerType: 'contractor',
+  }
+  assert.ok(!laborCsv([line]).includes('worker_type'))
+  const [head, row] = laborCsv([line], { contractors: true }).trim().split('\r\n')
+  assert.ok(head.endsWith(',hours,worker_type'))
+  assert.ok(row.endsWith(',8.00,contractor'))
 })

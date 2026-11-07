@@ -272,6 +272,20 @@ try {
   )
   r = await call('GET', '/payroll/periods', { token: tech })
   check('a tech cannot read the pay periods', r.status === 403)
+  // 1099 contractors: off unless CONTRACTORS_ENABLED=true.
+  {
+    const subEmail = `smoke-1099-${Date.now()}@example.invalid`
+    r = await call('PUT', `/people/by-email/${encodeURIComponent(subEmail)}`, { token: admin, body: { name: 'Smoke Contractor', workerType: 'contractor' } })
+    if (/^(1|true|yes|on)$/i.test(process.env.CONTRACTORS_ENABLED ?? '')) {
+      check('a person can be added as a 1099 contractor', r.status === 200 && r.json?.person?.workerType === 'contractor', JSON.stringify(r.json))
+      r = await call('PUT', `/people/by-email/${encodeURIComponent(subEmail)}`, { token: admin, body: { workerType: 'employee', workerTypeFrom: lastWeek } })
+      check('a contractor can become an employee from a day', r.status === 200 && r.json?.person?.workerType === 'employee' && r.json?.person?.workerTypeFrom === lastWeek, JSON.stringify(r.json))
+      r = await call('PUT', `/people/by-email/${encodeURIComponent(subEmail)}`, { token: admin, body: { workerType: 'w2' } })
+      check('only employee or contractor is a worker type', r.status === 400, JSON.stringify(r.json))
+    } else {
+      check('the worker type cannot be set while contractors are off', r.status === 403 && r.json?.error?.code === 'contractors_off', JSON.stringify(r.json))
+    }
+  }
   r = await call('PATCH', `/punches/${oldId}`, { token: key, body: { notes: 'after approval', reason: 'smoke' } })
   check('an approved week refuses corrections', r.status === 409 && r.json?.error?.code === 'week_approved', JSON.stringify(r.json))
   r = await call('POST', '/punches/in', { token: key, headers: asB, body: { jobId, at: new Date(t0.getTime() + 13.5 * 3_600_000).toISOString() } })

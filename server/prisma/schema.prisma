@@ -64,6 +64,13 @@ model Person {
   active       Boolean  @default(true)
   // Salaried / exempt: the payroll export sends all of their hours as regular.
   overtimeExempt Boolean @default(false)
+  // How the person is paid (CONTRACTORS_ENABLED): employee = W-2 (payroll, overtime,
+  // leave); contractor = 1099 (paid as a vendor in AIC Accounting: no withholding, no
+  // overtime split, no leave accrual). workerTypeFrom (YYYY-MM-DD, company time) is the
+  // day the current type started; days before it count as priorWorkerType. Null = always.
+  workerType      String  @default("employee") // employee | contractor
+  workerTypeFrom  String?
+  priorWorkerType String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 

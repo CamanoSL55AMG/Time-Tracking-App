@@ -46,6 +46,9 @@ export const config = {
   // refused whatever this says: a supervisor reopens those and corrects them directly.
   // 21 covers a full semimonthly pay period plus the days until payroll runs.
   changeRequestDays: Math.max(0, num(process.env.CHANGE_REQUEST_DAYS) ?? 21),
+  // W-2 employees and 1099 contractors (services/workerType.ts). Off = everyone is an
+  // employee, the worker type can't be set, and the payroll export is unchanged.
+  contractorsEnabled: /^(1|true|yes|on)$/i.test((process.env.CONTRACTORS_ENABLED ?? '').trim()),
   payrollExportEnabled: /^(1|true|yes|on)$/i.test((process.env.PAYROLL_EXPORT_ENABLED ?? '').trim()),
   // AIC Control Tower on/off switch (services/tower.ts). Both empty = not checked,
   // Logbook stays ON. TOWER_TOKEN is the aircraft's enrollment token from the Tower.
