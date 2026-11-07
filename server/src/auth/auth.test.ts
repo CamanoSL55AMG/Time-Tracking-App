@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createHmac } from 'node:crypto'
 import { signSsoToken, verifySsoToken, type SsoPayload } from './ssoToken.js'
-import { generateKey, hashKey, isScope, looksLikeKey, ROLE_SCOPES, KEYS_MANAGE, SELF } from './apiKeys.js'
+import { generateKey, hashKey, isScope, looksLikeKey, ROLE_SCOPES, FIX_APPROVE, KEYS_MANAGE, SELF } from './apiKeys.js'
 
 const secret = 'test-secret-test-secret-test-secret'
 const now = 1_800_000_000
@@ -61,6 +61,12 @@ test('roles', () => {
   assert.ok(!ROLE_SCOPES.tech.includes('punch:read'))
   assert.ok(!ROLE_SCOPES.manager.includes(KEYS_MANAGE))
   assert.ok(ROLE_SCOPES.admin.includes(KEYS_MANAGE))
+  // Time fixes: managers, admins and payroll approve them; crew leads and techs do not.
+  assert.ok(ROLE_SCOPES.manager.includes(FIX_APPROVE))
+  assert.ok(ROLE_SCOPES.admin.includes(FIX_APPROVE))
+  assert.ok(ROLE_SCOPES.payroll.includes(FIX_APPROVE))
+  assert.ok(!ROLE_SCOPES.lead.includes(FIX_APPROVE))
+  assert.ok(!ROLE_SCOPES.tech.includes(FIX_APPROVE))
   assert.equal(isScope('punch:read'), true)
   assert.equal(isScope(KEYS_MANAGE), false) // never grantable to a key
   assert.equal(isScope(SELF), false)

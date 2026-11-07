@@ -6,6 +6,8 @@ import { badRequest, forbidden, notFound } from '../errors.js'
 import { requireAuth, requirePerson, requireScope, type Auth } from '../auth/middleware.js'
 import { SELF } from '../auth/apiKeys.js'
 import { parseGeo } from '../lib/geo.js'
+import { config } from '../config.js'
+import { boardWithLeave } from '../services/leave.js'
 import { board, editPunch, personState, punchIn, punchInclude, punchNext, punchOut, type Actor, type PunchInput } from '../services/punch.js'
 
 export const punchesRouter = Router()
@@ -203,7 +205,35 @@ route(
 
 route(
   punchesRouter,
-  { method: 'get', path: '/board', tag: 'Views', summary: "Tower board: everyone's current job and phase today.", access: ['punch:read'] },
-  async (req) => board(requireScope(req, 'punch:read').companyId),
+  {
+    method: 'get',
+    path: '/board',
+    tag: 'Views',
+    summary: "Tower board: everyone's current job and phase today. With LEAVE_ENABLED, people on approved leave today are marked off (and listed even if they never punched).",
+    access: ['punch:read'],
+  },
+  async (req) => {
+    const companyId = requireScope(req, 'punch:read').companyId
+    const b = await board(companyId)
+    if (!config.leaveEnabled) return b
+    return boardWithLeave(companyId, b, (p) => ({
+      personId: p.id,
+      name: p.name,
+      email: p.email,
+      onClock: false,
+      jobId: null,
+      jobName: '',
+      phaseKey: null,
+      phaseName: '',
+      phaseIndex: null,
+      phaseSteps: null,
+      mode: null,
+      since: null,
+      lastOut: null,
+      hoursToday: 0,
+      atShop: null,
+      atSite: null,
+    }))
+  },
 )
 
