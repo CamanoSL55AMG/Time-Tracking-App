@@ -171,6 +171,10 @@ The job a person is clocked into is their **current flight**. The clock screen h
 added from. The **Expenses** tab lets anyone add a line on their own, against any job or no job,
 and see their month with totals ("Pay me back" is what they paid themselves).
 
+The job box on an expense is search only (2026-11-03): nothing is listed until you type, then
+the best matches by job number or name (or client) show under the box, and a pick shows as a
+fixed line with **Change**. It replaced a dropdown that would not keep a pick on iPhone.
+
 - A line has a category, amount (or miles for a mileage category, priced at the company
   mileage rate, $0.725 for 2026, copied onto the line), date, who paid (my money / company
   card), vendor, a note and a receipt photo or PDF. Phone photos are shrunk to 1600 px before
