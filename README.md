@@ -13,6 +13,9 @@ server/   Express + TypeScript + Prisma + PostgreSQL — the API at /api/v1     
 ## What works today
 
 - Sign-in by email and password, and one-click sign-in from GED (`/sso?token=…`).
+- Admins set or replace anyone's password from Manage → People (Password button), with a
+  built-in generator like Bitwarden's: length, A-Z / a-z / 0-9 / special toggles, avoid
+  ambiguous characters, Copy.
 - **Sign in with Dashboard**: GED is the sign-in service for every add-on
   (`DASHBOARD-SIGN-IN.md` in the GED repo). Set up with GED's `npm run oidc:client`.
 - Clock in, Next phase, Switch job, Clock out. Each punch is stamped with the phone's

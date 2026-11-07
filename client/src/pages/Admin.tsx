@@ -95,6 +95,22 @@ function People({ isAdmin }: { isAdmin: boolean }) {
   const [form, setForm] = useState({ email: '', name: '', initials: '', role: 'tech', password: '', workerType: 'employee' as WorkerType })
   const [busy, setBusy] = useState(false)
   const [payAs, setPayAs] = useState<{ person: Person; workerType: WorkerType; from: string } | null>(null)
+  const [pwFor, setPwFor] = useState<{ person: Person; password: string; saved: boolean; error: string } | null>(null)
+
+  // Set or replace someone's password (signed-in admins only). Sends only the
+  // password, so name, initials and role stay as they are.
+  const savePassword = async () => {
+    if (!pwFor) return
+    setBusy(true)
+    try {
+      await api.savePerson(pwFor.person.email, { password: pwFor.password })
+      setPwFor({ ...pwFor, saved: true, error: '' })
+    } catch (err) {
+      setPwFor({ ...pwFor, error: errorText(err) })
+    } finally {
+      setBusy(false)
+    }
+  }
 
   const savePayAs = async () => {
     if (!payAs) return
@@ -167,6 +183,11 @@ function People({ isAdmin }: { isAdmin: boolean }) {
             />
           )}
           <Chip size="small" label={p.role} />
+          {isAdmin && (
+            <Button size="small" onClick={() => setPwFor({ person: p, password: '', saved: false, error: '' })} aria-label={`Set a password for ${p.name}`}>
+              Password
+            </Button>
+          )}
           <Switch checked={p.active} onChange={() => void toggle(p)} inputProps={{ 'aria-label': `${p.name} active` }} />
         </Row>
       ))}
@@ -200,6 +221,7 @@ function People({ isAdmin }: { isAdmin: boolean }) {
                 autoComplete="new-password"
                 value={form.password}
                 onChange={(e) => setForm({ ...form, password: e.target.value })}
+                onGenerate={(password) => setForm({ ...form, password })}
                 helperText="At least 10 characters. Leave blank if they sign in from GED"
               />
             )}
@@ -210,6 +232,35 @@ function People({ isAdmin }: { isAdmin: boolean }) {
           <Button variant="contained" onClick={save} disabled={busy || !form.email.includes('@') || !form.name.trim() || (form.password.length > 0 && form.password.length < 10)}>
             Add
           </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={Boolean(pwFor)} onClose={() => setPwFor(null)} fullWidth maxWidth="xs">
+        <DialogTitle>Password for {pwFor?.person.name}</DialogTitle>
+        <DialogContent>
+          <Stack spacing={2} sx={{ pt: 1 }}>
+            <Typography variant="body2" color="text.secondary">
+              {pwFor?.person.email}. This replaces any password they have now. They can change it after signing in, from the menu, Change password.
+            </Typography>
+            <PasswordField
+              label="New password"
+              autoComplete="new-password"
+              value={pwFor?.password ?? ''}
+              onChange={(e) => pwFor && setPwFor({ ...pwFor, password: e.target.value, saved: false })}
+              onGenerate={(password) => pwFor && setPwFor({ ...pwFor, password, saved: false, error: '' })}
+              helperText="At least 10 characters"
+            />
+            {pwFor?.saved && <Alert severity="success">Saved. Copy it now to give to {pwFor.person.name}; it is not shown again after you close this.</Alert>}
+            {pwFor?.error && <Alert severity="error">{pwFor.error}</Alert>}
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setPwFor(null)}>{pwFor?.saved ? 'Done' : 'Cancel'}</Button>
+          {!pwFor?.saved && (
+            <Button variant="contained" onClick={savePassword} disabled={busy || (pwFor?.password.length ?? 0) < 10}>
+              Save password
+            </Button>
+          )}
         </DialogActions>
       </Dialog>
 
