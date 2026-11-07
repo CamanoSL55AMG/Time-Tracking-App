@@ -55,6 +55,10 @@ export const config = {
   towerAccessId: (process.env.TOWER_ACCESS_ID ?? '').trim(),
   towerAccessSecret: (process.env.TOWER_ACCESS_SECRET ?? '').trim(),
   towerCheckSeconds: Math.max(15, num(process.env.TOWER_CHECK_SECONDS) ?? 60),
+  // Monthly repeating expenses (services/recurringExpenses.ts): how often the server
+  // looks for a repeat whose day has come. 0 = never on its own (the office can still
+  // run it from POST /recurring-expenses/run).
+  recurringCheckMinutes: Math.max(0, num(process.env.RECURRING_EXPENSES_CHECK_MINUTES) ?? 60),
 }
 
 /** Refuse to start with a missing or weak signing secret. */

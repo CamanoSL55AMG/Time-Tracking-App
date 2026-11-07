@@ -21,6 +21,7 @@ import { expensesRouter } from './routes/expenses.js'
 import { itemsRouter } from './routes/items.js'
 import { payrollRouter } from './routes/payroll.js'
 import { logbookSwitch, startTowerSwitch } from './services/tower.js'
+import { startRecurringExpenses } from './services/recurringExpenses.js'
 
 assertConfig()
 
@@ -116,6 +117,7 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
 const server = app.listen(config.port, () => {
   console.log(`Time Tracking API on http://localhost:${config.port}  (docs: /api/v1/docs)`)
   startTowerSwitch()
+  startRecurringExpenses(config.recurringCheckMinutes)
 })
 
 const shutdown = () => {

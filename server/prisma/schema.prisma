@@ -51,6 +51,7 @@ model Company {
   timesheets        Timesheet[]
   expenses          Expense[]
   expenseCategories ExpenseCategory[]
+  recurringExpenses RecurringExpense[]
 }
 
 model Person {
@@ -72,6 +73,7 @@ model Person {
   assignments Assignment[]
   timesheets  Timesheet[]
   expenses    Expense[]
+  recurringExpenses RecurringExpense[]
   workItems   WorkItem[]
   jobsAdded   Job[]        @relation("JobAddedBy")
 
@@ -105,6 +107,7 @@ model Job {
   punches     Punch[]
   assignments Assignment[]
   expenses    Expense[]
+  recurringExpenses RecurringExpense[]
   workItems   WorkItem[]
   addedBy     Person?      @relation("JobAddedBy", fields: [addedById], references: [id])
 
@@ -384,8 +387,9 @@ model ExpenseCategory {
   sortOrder   Int     @default(0)
   active      Boolean @default(true)
 
-  company  Company   @relation(fields: [companyId], references: [id])
-  expenses Expense[]
+  company   Company            @relation(fields: [companyId], references: [id])
+  expenses  Expense[]
+  recurring RecurringExpense[]
 
   @@unique([companyId, name])
 }
@@ -415,16 +419,66 @@ model Expense {
   decidedAt    DateTime?
   decisionNote String    @default("")
   clientId     String? // generated on the phone; a re-send does not add it twice
+  // Made by a monthly repeat (RecurringExpense). RecurringExpenseRun keeps which
+  // month it was for, so a restart or a second run never adds a month twice.
+  recurringExpenseId String?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
-  company  Company         @relation(fields: [companyId], references: [id])
-  person   Person          @relation(fields: [personId], references: [id])
-  job      Job?            @relation(fields: [jobId], references: [id])
-  category ExpenseCategory @relation(fields: [categoryId], references: [id])
+  company   Company           @relation(fields: [companyId], references: [id])
+  person    Person            @relation(fields: [personId], references: [id])
+  job       Job?              @relation(fields: [jobId], references: [id])
+  category  ExpenseCategory   @relation(fields: [categoryId], references: [id])
+  recurring RecurringExpense? @relation(fields: [recurringExpenseId], references: [id], onDelete: SetNull)
 
   @@unique([companyId, clientId])
   @@index([companyId, status])
   @@index([personId, date])
   @@index([jobId])
+}
+
+// A monthly repeat: a bill a person pays every month (a phone plan, say). Once a
+// month, on its day, it adds a normal submitted Expense line that goes through the
+// usual approval. Pausing skips the months it is paused; stopping is for good.
+model RecurringExpense {
+  id          String   @id @default(uuid())
+  companyId   String
+  personId    String
+  categoryId  String
+  jobId       String?
+  amountCents Int
+  paidBy      String   @default("employee") // employee (reimburse) | company_card
+  vendor      String   @default("")
+  notes       String   @default("")
+  dayOfMonth  Int // 1-31; a short month uses its last day
+  startMonth  String // YYYY-MM, the first month a line can be made (moved up on resume)
+  endMonth    String? // YYYY-MM, the last month; null = until stopped
+  status      String   @default("active") // active | paused | stopped
+  lastMonth   String? // YYYY-MM of the last line made (for show; the runs table is the record)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  company  Company         @relation(fields: [companyId], references: [id])
+  person   Person          @relation(fields: [personId], references: [id])
+  job      Job?            @relation(fields: [jobId], references: [id])
+  category ExpenseCategory @relation(fields: [categoryId], references: [id])
+  expenses Expense[]
+  runs     RecurringExpenseRun[]
+
+  @@index([companyId, status])
+  @@index([personId])
+}
+
+// One row per repeat per month that has been made. Its key is what makes the monthly
+// run safe to repeat: a second insert for the same month fails, and the month is
+// never made again, even if its line was later removed.
+model RecurringExpenseRun {
+  recurringExpenseId String
+  month              String // YYYY-MM
+  expenseId          String? // the line it made (it may since have been removed)
+  createdAt          DateTime @default(now())
+
+  recurring RecurringExpense @relation(fields: [recurringExpenseId], references: [id], onDelete: Cascade)
+
+  @@id([recurringExpenseId, month])
 }

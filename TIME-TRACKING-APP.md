@@ -192,6 +192,23 @@ and see their month with totals ("Pay me back" is what they paid themselves).
 Still to do from §8: expense reports as batches, export to payroll / accounts payable, and the
 expenses-per-job view in GED.
 
+**Monthly repeats (built 2026-11-07).** A bill paid every month (a phone plan) is set up once
+under My expenses → Monthly repeats: category (not mileage), amount, own money or company card,
+paid to, what for, job or none, day of the month (a short month uses its last day), first and
+optional last month. On its day each month the server adds a normal `submitted` Expense line
+(`recurringExpenseId` set), so it goes through the usual approval and nobody approves their own.
+The line needs no receipt and says "Monthly repeat". If the day has already come when it is set
+up, this month's line is added at once. Pause skips the months it is paused; resume starts from
+the current month; stop is for good. The server checks every `RECURRING_EXPENSES_CHECK_MINUTES`
+(default 60, 0 = off) and catches up on missed months (12 at most) after downtime.
+`RecurringExpenseRun` (repeat, month) is the key that makes it safe to repeat: a restart, two
+runs at once, or a line removed by hand never adds a month twice. API: `GET/POST
+/me/recurring-expenses`, `PATCH /me/recurring-expenses/{id}`, `POST
+/me/recurring-expenses/{id}/pause|resume|stop`, `GET /recurring-expenses` (`expenses:read`),
+`POST /recurring-expenses/run` (`jobs:write`). From the server's shell:
+`npm run recurring:add -- --email … --amount 40 --vendor "T-Mobile" --day 1` (dry run; add
+`--apply`).
+
 ## 4c. Bench Repair (built 2026-10-29; clock in / clock out only since 2026-11-02)
 
 **Current setting (Zach, 2026-11-02): his team just clocks in and out.** With

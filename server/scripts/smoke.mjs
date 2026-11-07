@@ -669,6 +669,47 @@ try {
   await call('DELETE', `/me/expenses/${own?.id}`, { token: admin })
   r = await call('DELETE', `/me/expenses/${exp2?.id}`, { token: key, headers: expAs })
   check('remove an expense that is not approved', r.status === 200)
+
+  // Monthly repeats: set up on day 1 (always come), this month's line is added once,
+  // a re-run adds nothing, it waits for approval like any line, pause / resume / stop.
+  r = await call('POST', '/me/recurring-expenses', { token: key, headers: expAs, body: { categoryId: mileCat?.id, amount: 40, dayOfMonth: 1 } })
+  check('mileage cannot repeat monthly', r.status === 400, JSON.stringify(r.json))
+  r = await call('POST', '/me/recurring-expenses', { token: key, headers: expAs, body: { categoryId: amountCat?.id, amount: 40, dayOfMonth: 1, startMonth: '2020-01' } })
+  check('a repeat cannot start in an earlier month', r.status === 400, JSON.stringify(r.json))
+  r = await call('POST', '/me/recurring-expenses', { token: key, headers: expAs, body: { categoryId: amountCat?.id, amount: 40, dayOfMonth: 1, vendor: 'Smoke phone', notes: 'Cell phone' } })
+  const rep = r.json?.recurring
+  const repLine = r.json?.added?.[0]
+  check(
+    'set up a monthly repeat; this month is added now',
+    r.status === 201 && rep?.status === 'active' && r.json?.added?.length === 1 && repLine?.amount === 40 && repLine?.status === 'submitted' && repLine?.recurringExpenseId === rep?.id && repLine?.date?.endsWith('-01') && repLine?.hasReceipt === false,
+    JSON.stringify(r.json),
+  )
+  r = await call('POST', '/recurring-expenses/run', { token: admin })
+  const runAgain = await call('POST', '/recurring-expenses/run', { token: admin })
+  r = await call('GET', '/me/expenses', { token: key, headers: expAs })
+  check(
+    'running the repeats again never adds a month twice',
+    runAgain.status === 200 && (r.json?.data ?? []).filter((e) => e.recurringExpenseId === rep?.id).length === 1,
+    JSON.stringify((r.json?.data ?? []).filter((e) => e.recurringExpenseId === rep?.id)),
+  )
+  r = await call('GET', '/expenses?status=submitted', { token: admin })
+  check('a repeat line waits for the office like any line', r.json?.data?.some((e) => e.id === repLine?.id))
+  r = await call('PATCH', `/me/recurring-expenses/${rep?.id}`, { token: key, headers: expAs, body: { amount: 45 } })
+  check('change a repeat for the months to come', r.status === 200 && r.json?.recurring?.amount === 45 && r.json?.added?.length === 0, JSON.stringify(r.json))
+  r = await call('POST', `/me/recurring-expenses/${rep?.id}/pause`, { token: key, headers: expAs })
+  check('pause a repeat', r.status === 200 && r.json?.recurring?.status === 'paused')
+  r = await call('POST', `/me/recurring-expenses/${rep?.id}/resume`, { token: key, headers: expAs })
+  check('resume a repeat without adding this month again', r.status === 200 && r.json?.recurring?.status === 'active' && r.json?.added?.length === 0, JSON.stringify(r.json))
+  r = await call('DELETE', `/me/expenses/${repLine?.id}`, { token: key, headers: expAs })
+  await call('POST', '/recurring-expenses/run', { token: admin })
+  r = await call('GET', '/me/expenses', { token: key, headers: expAs })
+  check('a removed repeat line does not come back', !(r.json?.data ?? []).some((e) => e.recurringExpenseId === rep?.id))
+  r = await call('PATCH', `/me/recurring-expenses/${rep?.id}`, { token: admin, body: { amount: 1 } })
+  check('nobody changes someone else\'s repeat', r.status === 403 || r.status === 404, JSON.stringify(r.json))
+  r = await call('POST', `/me/recurring-expenses/${rep?.id}/stop`, { token: key, headers: expAs })
+  check('stop a repeat', r.status === 200 && r.json?.recurring?.status === 'stopped')
+  r = await call('GET', '/me/recurring-expenses', { token: key, headers: expAs })
+  check('a stopped repeat drops off the list', r.status === 200 && !(r.json?.data ?? []).some((x) => x.id === rep?.id))
   await call('POST', '/punches/out', { token: key, headers: expAs, body: {} })
   await call('PUT', `/people/by-email/${encodeURIComponent(expEmail)}`, { token: key, body: { active: false } })
 

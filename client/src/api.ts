@@ -270,6 +270,40 @@ export interface Expense {
   decisionNote: string
   decidedAt: string | null
   createdAt: string
+  /** Set when a monthly repeat added this line. */
+  recurringExpenseId: string | null
+}
+export type RecurringStatus = 'active' | 'paused' | 'stopped'
+export interface RecurringExpense {
+  id: string
+  personId: string
+  person: { id: string; name: string; email: string }
+  categoryId: string
+  category: { id: string; name: string; kind: 'expense' | 'mileage'; accountCode: string }
+  jobId: string | null
+  job: { id: string; name: string; code: string; kind: string } | null
+  amount: number
+  paidBy: 'employee' | 'company_card'
+  vendor: string
+  notes: string
+  dayOfMonth: number
+  startMonth: string
+  endMonth: string | null
+  status: RecurringStatus
+  lastMonth: string | null
+  /** e.g. "On the 1st of each month" */
+  schedule: string
+}
+export interface RecurringBody {
+  categoryId?: string
+  amount?: number
+  paidBy?: 'employee' | 'company_card'
+  vendor?: string
+  notes?: string
+  jobId?: string | null
+  dayOfMonth?: number
+  startMonth?: string
+  endMonth?: string | null
 }
 export interface ExpenseTotals {
   count: number
@@ -553,6 +587,13 @@ export const api = {
     http.get<{ data: Expense[]; totals: ExpenseTotals }>('/expenses', { params }).then((r) => r.data),
   decideExpense: (id: string, decision: 'approve' | 'reject', note: string) =>
     http.post<{ expense: Expense }>(`/expenses/${id}/${decision}`, { note }).then((r) => r.data.expense),
+  myRecurring: () => http.get<{ data: RecurringExpense[] }>('/me/recurring-expenses').then((r) => r.data.data),
+  addRecurring: (body: RecurringBody) =>
+    http.post<{ recurring: RecurringExpense; added: Expense[] }>('/me/recurring-expenses', body).then((r) => r.data),
+  changeRecurring: (id: string, body: RecurringBody) =>
+    http.patch<{ recurring: RecurringExpense; added: Expense[] }>(`/me/recurring-expenses/${id}`, body).then((r) => r.data),
+  setRecurringStatus: (id: string, action: 'pause' | 'resume' | 'stop') =>
+    http.post<{ recurring: RecurringExpense; added: Expense[] }>(`/me/recurring-expenses/${id}/${action}`).then((r) => r.data),
 
   people: () => http.get<{ data: Person[] }>('/people').then((r) => r.data.data),
   savePerson: (email: string, body: { name?: string; initials?: string; role?: string; active?: boolean; password?: string }) =>
