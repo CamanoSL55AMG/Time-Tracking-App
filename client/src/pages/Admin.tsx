@@ -95,15 +95,17 @@ function People({ isAdmin }: { isAdmin: boolean }) {
   const [form, setForm] = useState({ email: '', name: '', initials: '', role: 'tech', password: '', workerType: 'employee' as WorkerType })
   const [busy, setBusy] = useState(false)
   const [payAs, setPayAs] = useState<{ person: Person; workerType: WorkerType; from: string } | null>(null)
-  const [pwFor, setPwFor] = useState<{ person: Person; password: string; saved: boolean; error: string } | null>(null)
+  const [pwFor, setPwFor] = useState<{ person: Person; password: string; mustChange: boolean; saved: boolean; error: string } | null>(null)
 
   // Set or replace someone's password (signed-in admins only). Sends only the
-  // password, so name, initials and role stay as they are.
+  // password, so name, initials and role stay as they are. By default they must
+  // pick their own at their next sign-in.
   const savePassword = async () => {
     if (!pwFor) return
     setBusy(true)
     try {
-      await api.savePerson(pwFor.person.email, { password: pwFor.password })
+      await api.savePerson(pwFor.person.email, { password: pwFor.password, mustChangePassword: pwFor.mustChange })
+      void load()
       setPwFor({ ...pwFor, saved: true, error: '' })
     } catch (err) {
       setPwFor({ ...pwFor, error: errorText(err) })
@@ -182,9 +184,10 @@ function People({ isAdmin }: { isAdmin: boolean }) {
               aria-label={`${p.name} is paid as ${WORKER_TEXT[p.workerType ?? 'employee']}. Change`}
             />
           )}
+          {p.mustChangePassword && <Chip size="small" color="info" variant="outlined" label="New password due" title="They must pick their own password at their next sign-in" />}
           <Chip size="small" label={p.role} />
           {isAdmin && (
-            <Button size="small" onClick={() => setPwFor({ person: p, password: '', saved: false, error: '' })} aria-label={`Set a password for ${p.name}`}>
+            <Button size="small" onClick={() => setPwFor({ person: p, password: '', mustChange: true, saved: false, error: '' })} aria-label={`Set a password for ${p.name}`}>
               Password
             </Button>
           )}
@@ -222,7 +225,7 @@ function People({ isAdmin }: { isAdmin: boolean }) {
                 value={form.password}
                 onChange={(e) => setForm({ ...form, password: e.target.value })}
                 onGenerate={(password) => setForm({ ...form, password })}
-                helperText="At least 10 characters. Leave blank if they sign in from GED"
+                helperText="At least 10 characters. They pick their own at first sign-in. Leave blank if they sign in from GED"
               />
             )}
           </Stack>
@@ -240,7 +243,7 @@ function People({ isAdmin }: { isAdmin: boolean }) {
         <DialogContent>
           <Stack spacing={2} sx={{ pt: 1 }}>
             <Typography variant="body2" color="text.secondary">
-              {pwFor?.person.email}. This replaces any password they have now. They can change it after signing in, from the menu, Change password.
+              {pwFor?.person.email}. This replaces any password they have now.
             </Typography>
             <PasswordField
               label="New password"
@@ -249,6 +252,10 @@ function People({ isAdmin }: { isAdmin: boolean }) {
               onChange={(e) => pwFor && setPwFor({ ...pwFor, password: e.target.value, saved: false })}
               onGenerate={(password) => pwFor && setPwFor({ ...pwFor, password, saved: false, error: '' })}
               helperText="At least 10 characters"
+            />
+            <FormControlLabel
+              control={<Checkbox checked={pwFor?.mustChange ?? true} disabled={pwFor?.saved} onChange={(e) => pwFor && setPwFor({ ...pwFor, mustChange: e.target.checked })} />}
+              label={<Typography variant="body2">They must pick their own password at their next sign-in</Typography>}
             />
             {pwFor?.saved && <Alert severity="success">Saved. Copy it now to give to {pwFor.person.name}; it is not shown again after you close this.</Alert>}
             {pwFor?.error && <Alert severity="error">{pwFor.error}</Alert>}

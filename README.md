@@ -16,6 +16,13 @@ server/   Express + TypeScript + Prisma + PostgreSQL — the API at /api/v1     
 - Admins set or replace anyone's password from Manage → People (Password button), with a
   built-in generator like Bitwarden's: length, A-Z / a-z / 0-9 / special toggles, avoid
   ambiguous characters, Copy.
+- A password an admin sets must be changed at the person's next sign-in: until they pick
+  their own (different from the one they were given), the app shows only a "Set your own
+  password" screen and the API answers `403 password_change_required` to everything but
+  `/auth/*`. The admin can untick this in the Password dialog. People who were already
+  set up are not flagged; to flag one, set them a new password with the box ticked
+  (or send `mustChangePassword: true` to `PUT /people/by-email/:email` as a signed-in admin).
+  From the server console: `npm run reset-password -- --email <address> --must-change`.
 - **Sign in with Dashboard**: GED is the sign-in service for every add-on
   (`DASHBOARD-SIGN-IN.md` in the GED repo). Set up with GED's `npm run oidc:client`.
 - Clock in, Next phase, Switch job, Clock out. Each punch is stamped with the phone's

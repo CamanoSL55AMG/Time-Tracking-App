@@ -62,6 +62,10 @@ model Person {
   initials     String   @default("")
   role         String   @default("tech") // tech | lead | manager | payroll | admin
   passwordHash String?
+  // Set when an admin creates the person with a password or sets a new one for them.
+  // While true, a signed-in session can only read /auth/me and change its own
+  // password (auth/middleware.ts passwordChangeGate). Cleared by that change.
+  mustChangePassword Boolean @default(false)
   active       Boolean  @default(true)
   // Salaried / exempt: the payroll export sends all of their hours as regular.
   overtimeExempt Boolean @default(false)

@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createHmac } from 'node:crypto'
 import { signSsoToken, verifySsoToken, type SsoPayload } from './ssoToken.js'
+import { passwordChangeBlocks } from './passwordChange.js'
 import { generateKey, hashKey, isScope, looksLikeKey, ROLE_SCOPES, FIX_APPROVE, KEYS_MANAGE, SELF, PEOPLE_ROLES, GED_KEY_SCOPES } from './apiKeys.js'
 
 const secret = 'test-secret-test-secret-test-secret'
@@ -77,4 +78,16 @@ test('the AIC Terminal key can set Logbook roles; no signed-in role gets that sc
   assert.ok(GED_KEY_SCOPES.includes(PEOPLE_ROLES))
   assert.ok(GED_KEY_SCOPES.every(isScope))
   for (const scopes of Object.values(ROLE_SCOPES)) assert.ok(!scopes.includes(PEOPLE_ROLES))
+})
+
+test('a person told to change their password reaches only the sign-in endpoints', () => {
+  const flagged = { via: 'session' as const, person: { mustChangePassword: true } }
+  for (const p of ['/auth/me', '/auth/password', '/auth/config', '/auth/login', '/health']) assert.equal(passwordChangeBlocks(flagged, p), false, p)
+  for (const p of ['/me/state', '/punches/in', '/board', '/people', '/people/by-email/x@y.z', '/payroll/report', '/', '/authx', '/Auth/me']) {
+    assert.equal(passwordChangeBlocks(flagged, p), true, p)
+  }
+  assert.equal(passwordChangeBlocks({ via: 'session', person: { mustChangePassword: false } }, '/board'), false)
+  // An integration key acting for the person is not held back.
+  assert.equal(passwordChangeBlocks({ via: 'key', person: { mustChangePassword: true } }, '/punches/in'), false)
+  assert.equal(passwordChangeBlocks(undefined, '/board'), false)
 })

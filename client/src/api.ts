@@ -18,6 +18,11 @@ let onSignedOut: (() => void) | null = null
 export const setSignedOutHandler = (fn: () => void) => {
   onSignedOut = fn
 }
+// The server holds everything back until a password an admin set is changed.
+let onPasswordChangeRequired: (() => void) | null = null
+export const setPasswordChangeHandler = (fn: () => void) => {
+  onPasswordChangeRequired = fn
+}
 http.interceptors.response.use(
   (r) => r,
   (err: AxiosError) => {
@@ -25,6 +30,8 @@ http.interceptors.response.use(
       setToken(null)
       onSignedOut?.()
     }
+    const code = (err.response?.data as { error?: { code?: string } } | undefined)?.error?.code
+    if (err.response?.status === 403 && code === 'password_change_required') onPasswordChangeRequired?.()
     return Promise.reject(err)
   },
 )
@@ -49,6 +56,8 @@ export interface Person {
   initials: string
   role: 'tech' | 'lead' | 'manager' | 'payroll' | 'admin'
   active: boolean
+  /** An admin set their password: they must pick their own before anything else. */
+  mustChangePassword?: boolean
   /** employee = W-2, contractor = 1099 (only used when the server has CONTRACTORS_ENABLED). */
   workerType?: WorkerType
   /** YYYY-MM-DD the current worker type started; null = always. */
@@ -742,7 +751,7 @@ export const api = {
   roster: () => http.get<{ data: Person[]; contractorsEnabled?: boolean }>('/people').then((r) => ({ people: r.data.data, contractorsEnabled: Boolean(r.data.contractorsEnabled) })),
   savePerson: (
     email: string,
-    body: { name?: string; initials?: string; role?: string; active?: boolean; password?: string; workerType?: WorkerType; workerTypeFrom?: string | null },
+    body: { name?: string; initials?: string; role?: string; active?: boolean; password?: string; mustChangePassword?: boolean; workerType?: WorkerType; workerTypeFrom?: string | null },
   ) =>
     http.put<{ created: boolean; person: Person }>(`/people/by-email/${encodeURIComponent(email)}`, body).then((r) => r.data),
 

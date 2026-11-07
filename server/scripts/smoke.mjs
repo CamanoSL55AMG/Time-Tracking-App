@@ -188,10 +188,24 @@ try {
   r = await call('PUT', `/people/by-email/${encodeURIComponent(testEmail)}`, { token: key, body: { password: techPw } })
   check('a key cannot set a password', r.status === 403)
   r = await call('PUT', `/people/by-email/${encodeURIComponent(testEmail)}`, { token: admin, body: { password: techPw } })
-  check('an admin sets a password', r.status === 200)
+  check('an admin sets a password, and they must change it', r.status === 200 && r.json?.person?.mustChangePassword === true)
   r = await call('POST', '/auth/login', { body: { email: testEmail, password: techPw } })
   const tech = r.json?.token
-  check('the tech signs in', r.status === 200 && r.json?.person?.role === 'tech')
+  check('the tech signs in', r.status === 200 && r.json?.person?.role === 'tech' && r.json?.person?.mustChangePassword === true)
+  // First sign-in: nothing but "who am I" and "change password" until they pick their own.
+  r = await call('GET', '/me/state', { token: tech })
+  check('a password change is required before anything else', r.status === 403 && r.json?.error?.code === 'password_change_required', JSON.stringify(r.json))
+  r = await call('GET', '/auth/me', { token: tech })
+  check('who-am-I still answers while the change is due', r.status === 200 && r.json?.person?.mustChangePassword === true)
+  r = await call('POST', '/auth/password', { token: tech, body: { current: techPw, next: techPw } })
+  check('the new password must differ from the one the admin set', r.status === 400)
+  const techPw2 = `pw-${randomBytes(9).toString('base64url')}`
+  r = await call('POST', '/auth/password', { token: tech, body: { current: techPw, next: techPw2 } })
+  check('the tech picks their own password', r.status === 200)
+  r = await call('GET', '/auth/me', { token: tech })
+  check('the change clears the flag', r.status === 200 && r.json?.person?.mustChangePassword === false)
+  r = await call('PUT', `/people/by-email/${encodeURIComponent(testEmail)}`, { token: key, body: { mustChangePassword: true } })
+  check('a key cannot flag someone to change their password', r.status === 403)
   r = await call('GET', '/board', { token: tech })
   check('a tech cannot open the board', r.status === 403)
   r = await call('GET', '/people', { token: tech })
@@ -334,13 +348,13 @@ try {
     const pw = () => `pw-${randomBytes(9).toString('base64url')}`
     const leadEmail = `smoke-lead-${stamp}@example.invalid`
     const leadPw = pw()
-    await call('PUT', `/people/by-email/${encodeURIComponent(leadEmail)}`, { token: admin, body: { name: 'Smoke Lead', role: 'lead', password: leadPw } })
+    await call('PUT', `/people/by-email/${encodeURIComponent(leadEmail)}`, { token: admin, body: { name: 'Smoke Lead', role: 'lead', password: leadPw, mustChangePassword: false } })
     const lead = (await call('POST', '/auth/login', { body: { email: leadEmail, password: leadPw } })).json?.token
     r = await call('POST', `/requests/${reqId}/approve`, { token: lead, body: {} })
     check('a crew lead cannot approve a time fix', Boolean(lead) && r.status === 403, JSON.stringify(r.json))
     const payEmail = `smoke-payroll-${stamp}@example.invalid`
     const payPw = pw()
-    await call('PUT', `/people/by-email/${encodeURIComponent(payEmail)}`, { token: admin, body: { name: 'Smoke Payroll', role: 'payroll', password: payPw } })
+    await call('PUT', `/people/by-email/${encodeURIComponent(payEmail)}`, { token: admin, body: { name: 'Smoke Payroll', role: 'payroll', password: payPw, mustChangePassword: false } })
     const pay = (await call('POST', '/auth/login', { body: { email: payEmail, password: payPw } })).json?.token
     r = await call('POST', `/requests/${reqId}/approve`, { token: pay, body: {} })
     check('payroll approves the change', Boolean(pay) && r.status === 200 && r.json?.request?.status === 'approved', JSON.stringify(r.json))
@@ -755,12 +769,12 @@ try {
     const pw = () => `pw-${randomBytes(9).toString('base64url')}`
     const lvEmail = `smoke-leave-${stamp}@example.invalid`
     const lvPw = pw()
-    r = await call('PUT', `/people/by-email/${encodeURIComponent(lvEmail)}`, { token: admin, body: { name: 'Smoke Leave', password: lvPw } })
+    r = await call('PUT', `/people/by-email/${encodeURIComponent(lvEmail)}`, { token: admin, body: { name: 'Smoke Leave', password: lvPw, mustChangePassword: false } })
     const lvId = r.json?.person?.id
     const lv = (await call('POST', '/auth/login', { body: { email: lvEmail, password: lvPw } })).json?.token
     const leadEmail = `smoke-leave-lead-${stamp}@example.invalid`
     const leadPw = pw()
-    await call('PUT', `/people/by-email/${encodeURIComponent(leadEmail)}`, { token: admin, body: { name: 'Smoke Leave Lead', role: 'lead', password: leadPw } })
+    await call('PUT', `/people/by-email/${encodeURIComponent(leadEmail)}`, { token: admin, body: { name: 'Smoke Leave Lead', role: 'lead', password: leadPw, mustChangePassword: false } })
     const lead = (await call('POST', '/auth/login', { body: { email: leadEmail, password: leadPw } })).json?.token
 
     r = await call('GET', '/me/leave', { token: lv })
