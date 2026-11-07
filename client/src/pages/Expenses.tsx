@@ -21,6 +21,7 @@ import {
 } from '@mui/material'
 import { api, errorText, fmtDay, fmtMoney, type Expense, type ExpenseBody, type ExpenseCategory, type ExpenseStatus, type ExpenseTotals, type Job } from '../api'
 import { JobSearch, jobLabel } from '../components/JobSearch'
+import { RecurringSection } from './RecurringExpenses'
 
 // Expenses and mileage. Added from the clock screen onto the current flight (the
 // job you are clocked into), or here on their own against any job or none. Each line
@@ -325,6 +326,11 @@ export function ExpenseLine({ e, showPerson = false, onOpen, actions }: { e: Exp
             {e.paidBy === 'company_card' ? ' · company card' : ''}
             {e.notes ? ` · ${e.notes}` : ''}
           </Typography>
+          {e.recurringExpenseId && (
+            <Typography variant="caption" color="primary.main" component="div">
+              Monthly repeat{e.hasReceipt ? '' : ' · no receipt needed'}
+            </Typography>
+          )}
           {e.status === 'rejected' && e.decisionNote && (
             <Typography variant="caption" color="error.main" component="div">
               {e.decisionNote}
@@ -403,6 +409,8 @@ export default function ExpensesPage() {
           Add expense
         </Button>
       </Stack>
+
+      <RecurringSection onLinesAdded={() => void load()} />
 
       <Stack direction="row" alignItems="center" spacing={1}>
         <Button size="small" onClick={() => setBack(back + 1)}>

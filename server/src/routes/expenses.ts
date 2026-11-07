@@ -18,6 +18,7 @@ import {
   totals,
   type ExpenseInput,
 } from '../services/expenses.js'
+import { addRecurring, changeRecurring, listRecurring, runRecurring, setRecurringStatus, shapeRecurring, type RecurringInput } from '../services/recurringExpenses.js'
 
 export const expensesRouter = Router()
 
@@ -302,3 +303,119 @@ for (const decision of ['approve', 'reject'] as const) {
     },
   )
 }
+
+// ─── Monthly repeats ────────────────────────────────────────────────────────
+
+function recurringInputOf(req: Request): RecurringInput {
+  const b = (req.body ?? {}) as Record<string, unknown>
+  const day = b.dayOfMonth === undefined || b.dayOfMonth === null || b.dayOfMonth === '' ? undefined : Number(b.dayOfMonth)
+  return {
+    categoryId: str(b.categoryId, 80) || undefined,
+    amount: money(b.amount, 'amount'),
+    paidBy: b.paidBy === undefined ? undefined : str(b.paidBy, 20),
+    vendor: b.vendor === undefined ? undefined : str(b.vendor, 200),
+    notes: b.notes === undefined ? undefined : str(b.notes, 1000),
+    jobId: b.jobId === null ? null : b.jobId === undefined ? undefined : str(b.jobId, 80),
+    dayOfMonth: day,
+    startMonth: b.startMonth === undefined ? undefined : str(b.startMonth, 7),
+    endMonth: b.endMonth === null ? null : b.endMonth === undefined ? undefined : str(b.endMonth, 7),
+  }
+}
+
+const RECURRING_BODY = {
+  categoryId: 'Category (an amount category; mileage cannot repeat)',
+  amount: 'Dollars each month',
+  paidBy: 'employee (to be reimbursed, default) or company_card',
+  vendor: 'Who it is paid to, e.g. T-Mobile',
+  notes: 'What it is for',
+  jobId: 'Job to charge each line to, or null for no job',
+  dayOfMonth: '1-31: the day each month the line is added (a short month uses its last day)',
+  endMonth: 'YYYY-MM, the last month; null or empty for no end',
+}
+const made = (lines: Awaited<ReturnType<typeof runRecurring>>) => lines.map(shape)
+
+route(
+  expensesRouter,
+  { method: 'get', path: '/me/recurring-expenses', tag: 'Expenses', summary: 'Your monthly repeats (stopped ones only with all=true).', access: [SELF], query: { all: 'true to include stopped ones' } },
+  async (req) => {
+    const person = requirePerson(requireScope(req, SELF))
+    const rows = await listRecurring(person.companyId, person.id, req.query.all === 'true')
+    return { data: rows.map(shapeRecurring) }
+  },
+)
+
+route(
+  expensesRouter,
+  {
+    method: 'post',
+    path: '/me/recurring-expenses',
+    tag: 'Expenses',
+    summary: 'Set up a monthly repeat. On its day each month it adds a submitted expense line for approval. If this month’s day has come, this month’s line is added now.',
+    access: [SELF],
+    status: 201,
+    body: { ...RECURRING_BODY, startMonth: 'YYYY-MM, this month (default) or later' },
+  },
+  async (req) => {
+    const person = requirePerson(requireScope(req, SELF))
+    const r = await addRecurring(person, recurringInputOf(req))
+    return { recurring: shapeRecurring(r.recurring), added: made(r.made) }
+  },
+)
+
+route(
+  expensesRouter,
+  { method: 'patch', path: '/me/recurring-expenses/:id', tag: 'Expenses', summary: 'Change a monthly repeat for the months to come. Lines already added stay as they are.', access: [SELF], body: RECURRING_BODY },
+  async (req) => {
+    const person = requirePerson(requireScope(req, SELF))
+    const r = await changeRecurring(person, req.params.id, recurringInputOf(req))
+    return { recurring: shapeRecurring(r.recurring), added: made(r.made) }
+  },
+)
+
+for (const action of ['pause', 'resume', 'stop'] as const) {
+  route(
+    expensesRouter,
+    {
+      method: 'post',
+      path: `/me/recurring-expenses/:id/${action}`,
+      tag: 'Expenses',
+      summary: {
+        pause: 'Pause a monthly repeat. No lines are added while it is paused, and those months are skipped.',
+        resume: 'Start a paused repeat again, from this month on.',
+        stop: 'Stop a monthly repeat for good. Lines already added stay.',
+      }[action],
+      access: [SELF],
+    },
+    async (req) => {
+      const person = requirePerson(requireScope(req, SELF))
+      const r = await setRecurringStatus(person, req.params.id, action)
+      return { recurring: shapeRecurring(r.recurring), added: made(r.made) }
+    },
+  )
+}
+
+route(
+  expensesRouter,
+  { method: 'get', path: '/recurring-expenses', tag: 'Expenses', summary: 'Everyone’s monthly repeats.', access: ['expenses:read'], query: { personId: 'Only this person', all: 'true to include stopped ones' } },
+  async (req) => {
+    const auth = requireScope(req, 'expenses:read')
+    const rows = await listRecurring(auth.companyId, str(req.query.personId, 80) || undefined, req.query.all === 'true')
+    return { data: rows.map(shapeRecurring) }
+  },
+)
+
+route(
+  expensesRouter,
+  {
+    method: 'post',
+    path: '/recurring-expenses/run',
+    tag: 'Expenses',
+    summary: 'Add any monthly repeat lines that are due now. The server does this on its own every hour; running it again never adds a month twice.',
+    access: ['jobs:write'],
+  },
+  async (req) => {
+    const auth = requireScope(req, 'jobs:write')
+    const lines = await runRecurring({ companyId: auth.companyId })
+    return { added: made(lines) }
+  },
+)
