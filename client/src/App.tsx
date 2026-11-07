@@ -303,7 +303,7 @@ function PasswordDialog({ open, onClose }: { open: boolean; onClose: () => void 
           ) : (
             <>
               <PasswordField label="Current password" autoComplete="current-password" value={current} onChange={(e) => setCurrent(e.target.value)} helperText="Leave blank if you have never set one" />
-              <PasswordField label="New password" autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} helperText="At least 10 characters" />
+              <PasswordField label="New password" autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} onGenerate={setNext} helperText="At least 10 characters. Save a generated one in your password manager first" />
               {error && <Alert severity="error">{error}</Alert>}
             </>
           )}
