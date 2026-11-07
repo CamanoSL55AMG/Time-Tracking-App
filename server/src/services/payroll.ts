@@ -3,6 +3,7 @@ import { prisma } from '../db.js'
 import { badRequest } from '../errors.js'
 import { addDays, isYmd, localDate, startOfLocalDay } from '../lib/time.js'
 import { approvedThroughOf, weekOf } from './timesheets.js'
+import { earnsOvertime, workerTypeOn, type WorkerType } from './workerType.js'
 
 // Labor export for payroll. AIC Accounting reads it (GET /payroll/labor) and
 // imports the hours to produce payroll.
@@ -14,6 +15,9 @@ import { approvedThroughOf, weekOf } from './timesheets.js'
 // - Overtime is worked out per workweek (Company.weekStartDay): hours past
 //   Company.overtimeWeeklyHours, in the order they were worked, are overtime.
 //   Washington has no daily overtime. 0 = no split. Exempt people get none.
+// - With CONTRACTORS_ENABLED, each line carries the person's worker type on that day
+//   (employee = W-2, contractor = 1099; services/workerType.ts). Contractor hours are
+//   all regular and don't count toward an employee week's overtime.
 // - Hours are the real punched time to the hundredth of an hour. No rounding rule
 //   is applied here.
 // - A segment that runs past midnight counts on the day it started, like every
@@ -53,6 +57,25 @@ export function splitWorkweek<S extends WorkSegment>(segments: S[], thresholdHou
   })
 }
 
+/**
+ * One person's workweek when some of it may be 1099 contractor time: the employee
+ * segments are split as usual (splitWorkweek), contractor segments are all regular
+ * and don't count toward the employee's overtime threshold.
+ */
+export function splitMixedWeek<S extends WorkSegment>(
+  segments: S[],
+  typeOf: (s: S) => WorkerType,
+  thresholdHours: number,
+  exempt = false,
+): (SplitSegment<S> & { workerType: WorkerType })[] {
+  const employee = segments.filter((s) => earnsOvertime(typeOf(s)))
+  const contractor = segments.filter((s) => !earnsOvertime(typeOf(s)))
+  return [
+    ...splitWorkweek(employee, thresholdHours, exempt).map((x) => ({ ...x, workerType: 'employee' as const })),
+    ...splitWorkweek(contractor, 0).map((x) => ({ ...x, workerType: 'contractor' as const })),
+  ].sort((a, b) => a.segment.clockIn.getTime() - b.segment.clockIn.getTime())
+}
+
 const hundredths = (seconds: number) => Math.round((seconds / 3600) * 100) / 100
 
 /** Stable id for a line, so a re-export of the same period carries the same ids. */
@@ -78,6 +101,8 @@ export interface LaborLine {
   overtimeHours: number
   hours: number
   segments: number
+  /** Only with CONTRACTORS_ENABLED: employee (W-2) or contractor (1099) on that day. */
+  workerType?: WorkerType
 }
 
 export interface NotReady {
@@ -91,7 +116,7 @@ export interface NotReady {
   hours: number
 }
 
-export async function laborExport(companyId: string, from: string, to: string) {
+export async function laborExport(companyId: string, from: string, to: string, opts: { contractors?: boolean } = {}) {
   if (!isYmd(from) || !isYmd(to)) throw badRequest('from and to must be dates, YYYY-MM-DD.', { fields: ['from', 'to'] })
   if (to < from) throw badRequest('to must be on or after from.')
   const days = (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000 + 1
@@ -110,7 +135,7 @@ export async function laborExport(companyId: string, from: string, to: string) {
     prisma.punch.findMany({
       where: { companyId, clockIn: { gte: startOfLocalDay(firstWeek, tz), lt: startOfLocalDay(addDays(lastWeek, 7), tz) } },
       include: {
-        person: { select: { id: true, name: true, email: true, overtimeExempt: true } },
+        person: { select: { id: true, name: true, email: true, overtimeExempt: true, workerType: true, workerTypeFrom: true, priorWorkerType: true } },
         job: { select: { id: true, name: true, code: true, kind: true } },
         phase: { select: { id: true, key: true, name: true, laborCategory: true } },
       },
@@ -160,7 +185,8 @@ export async function laborExport(companyId: string, from: string, to: string) {
       notReady.push({ personId, personName: person.name, personEmail: person.email, weekStart, status: 'open', approvedThrough: through, hours: hundredths(secondsOf(waiting)) })
     }
     const closed = covered.map((s) => ({ ...s, clockOut: s.clockOut as Date }))
-    for (const { segment: s, regularSeconds, overtimeSeconds } of splitWorkweek(closed, company.overtimeWeeklyHours, person.overtimeExempt)) {
+    const typeOf = (s: { clockIn: Date }): WorkerType => (opts.contractors ? workerTypeOn(person, localDate(s.clockIn, tz)) : 'employee')
+    for (const { segment: s, regularSeconds, overtimeSeconds, workerType } of splitMixedWeek(closed, typeOf, company.overtimeWeeklyHours, person.overtimeExempt)) {
       const date = localDate(s.clockIn, tz)
       if (!inRange(date)) continue
       const lineId = lineIdOf(personId, date, s.jobId, s.phaseId)
@@ -188,6 +214,7 @@ export async function laborExport(companyId: string, from: string, to: string) {
           segments: 0,
           regularSeconds: 0,
           overtimeSeconds: 0,
+          ...(opts.contractors ? { workerType } : {}),
         }
         lines.set(lineId, line)
       }
@@ -222,6 +249,7 @@ export async function laborExport(companyId: string, from: string, to: string) {
     timezone: tz,
     weekStartDay: company.weekStartDay,
     overtimeWeeklyHours: company.overtimeWeeklyHours,
+    ...(opts.contractors ? { contractorsEnabled: true } : {}),
     generatedAt: now.toISOString(),
     lines: out,
     totals: [...totals.values()].map((t) => ({ ...t, regularHours: r2(t.regularHours), overtimeHours: r2(t.overtimeHours), hours: r2(t.hours) })),
@@ -274,12 +302,16 @@ const cell = (v: string | number): string => {
   return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
 }
 
-/** The export as a CSV file, one line per row of `lines`, same columns AIC Accounting imports. */
-export function laborCsv(lines: LaborLine[]): string {
+/**
+ * The export as a CSV file, one line per row of `lines`, same columns AIC Accounting
+ * imports. With contractors on, a last column worker_type (employee | contractor).
+ */
+export function laborCsv(lines: LaborLine[], opts: { contractors?: boolean } = {}): string {
+  const head: string[] = [...CSV_COLUMNS, ...(opts.contractors ? ['worker_type'] : [])]
   const rows = lines.map((l) =>
-    [l.lineId, l.personEmail, l.personName, l.date, l.weekStart, l.jobCode, l.jobName, l.jobKind, l.phaseName || l.phaseKey, l.laborCategory, l.regularHours.toFixed(2), l.overtimeHours.toFixed(2), l.hours.toFixed(2)]
+    [l.lineId, l.personEmail, l.personName, l.date, l.weekStart, l.jobCode, l.jobName, l.jobKind, l.phaseName || l.phaseKey, l.laborCategory, l.regularHours.toFixed(2), l.overtimeHours.toFixed(2), l.hours.toFixed(2), ...(opts.contractors ? [l.workerType ?? 'employee'] : [])]
       .map(cell)
       .join(','),
   )
-  return [CSV_COLUMNS.join(','), ...rows].join('\r\n') + '\r\n'
+  return [head.join(','), ...rows].join('\r\n') + '\r\n'
 }

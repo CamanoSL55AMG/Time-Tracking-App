@@ -3,6 +3,7 @@ import {
   Alert,
   Box,
   Button,
+  Chip,
   CircularProgress,
   MenuItem,
   Paper,
@@ -71,9 +72,11 @@ export default function PayrollPage() {
 
   const people = useMemo(() => {
     if (!data) return []
-    const byPerson = new Map<string, { name: string; email: string; regular: number; overtime: number; cats: Record<string, number> }>()
+    const byPerson = new Map<string, { name: string; email: string; regular: number; overtime: number; cats: Record<string, number>; w2: boolean; c1099: boolean }>()
     for (const l of data.lines) {
-      const p = byPerson.get(l.personId) ?? { name: l.personName, email: l.personEmail, regular: 0, overtime: 0, cats: {} }
+      const p = byPerson.get(l.personId) ?? { name: l.personName, email: l.personEmail, regular: 0, overtime: 0, cats: {}, w2: false, c1099: false }
+      if (l.workerType === 'contractor') p.c1099 = true
+      else p.w2 = true
       p.regular += l.regularHours
       p.overtime += l.overtimeHours
       p.cats[l.laborCategory] = (p.cats[l.laborCategory] ?? 0) + l.hours
@@ -174,6 +177,7 @@ export default function PayrollPage() {
                   <TableRow key={p.email}>
                     <TableCell>
                       {p.name}
+                      {p.c1099 && <Chip size="small" color="warning" label={p.w2 ? 'part 1099' : '1099'} sx={{ ml: 1 }} />}
                       <Typography variant="caption" color="text.secondary" component="div">
                         {p.email}
                       </Typography>

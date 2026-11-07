@@ -49,8 +49,13 @@ export interface Person {
   initials: string
   role: 'tech' | 'lead' | 'manager' | 'payroll' | 'admin'
   active: boolean
+  /** employee = W-2, contractor = 1099 (only used when the server has CONTRACTORS_ENABLED). */
+  workerType?: WorkerType
+  /** YYYY-MM-DD the current worker type started; null = always. */
+  workerTypeFrom?: string | null
   scopes: string[]
 }
+export type WorkerType = 'employee' | 'contractor'
 export interface Job {
   id: string
   /** repair = an Electronic Repair (SD) ticket from AV Inventory's check-in; visit = a pre-sale site visit (not billed). */
@@ -440,6 +445,8 @@ export type LaborLine = {
   regularHours: number
   overtimeHours: number
   hours: number
+  /** Only when contractors are on: employee (W-2) or contractor (1099) that day. */
+  workerType?: WorkerType
 }
 export type LaborNotReady = { personId: string; personName: string; personEmail: string; weekStart: string; status: string; hours: number; approvedThrough?: string }
 export type LaborExport = {
@@ -555,7 +562,12 @@ export const api = {
     http.post<{ expense: Expense }>(`/expenses/${id}/${decision}`, { note }).then((r) => r.data.expense),
 
   people: () => http.get<{ data: Person[] }>('/people').then((r) => r.data.data),
-  savePerson: (email: string, body: { name?: string; initials?: string; role?: string; active?: boolean; password?: string }) =>
+  /** The roster plus whether 1099 contractors are turned on (CONTRACTORS_ENABLED). */
+  roster: () => http.get<{ data: Person[]; contractorsEnabled?: boolean }>('/people').then((r) => ({ people: r.data.data, contractorsEnabled: Boolean(r.data.contractorsEnabled) })),
+  savePerson: (
+    email: string,
+    body: { name?: string; initials?: string; role?: string; active?: boolean; password?: string; workerType?: WorkerType; workerTypeFrom?: string | null },
+  ) =>
     http.put<{ created: boolean; person: Person }>(`/people/by-email/${encodeURIComponent(email)}`, body).then((r) => r.data),
 
   keys: () => http.get<{ data: ApiKey[]; availableScopes: string[] }>('/api-keys').then((r) => r.data),

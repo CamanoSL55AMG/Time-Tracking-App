@@ -537,6 +537,16 @@ approves or turns it down; nobody approves their own). Kiosk mode, webhooks and 
 (GED's Time page has a reconcile tab for the parallel run). Weeks run Monday to Sunday
 (`Company.weekStartDay`) until the pay period is settled (open decision 4).
 
+Status 2026-11-07: 1099 contractors (switch `CONTRACTORS_ENABLED`, off by default). Each
+person is a W-2 `employee` or a 1099 `contractor` (`Person.workerType`), set under Manage →
+People; a change keeps the day it starts (`workerTypeFrom`) and the type before it, so a pay
+period that spans it pays each day the right way. Contractors punch and log expenses as usual.
+In the payroll export their lines carry `workerType: "contractor"` (CSV column `worker_type`,
+added last), all hours regular, and they don't count toward an employee week's overtime.
+They accrue no leave: Phase 5 accrual must skip hours where `accruesLeave(workerTypeOn(...))`
+is false (`services/workerType.ts`). AIC Accounting pays contractor hours as a vendor bill,
+not through the pay run. Off = nobody can be marked, and the export is unchanged.
+
 Status 2026-11-03: payroll labor export built (`GET /payroll/labor`, scope `payroll:read`,
 off unless `PAYROLL_EXPORT_ENABLED=true`). Approved weeks only; every labor type goes out
 (one line per person, day, job and phase, with the phase's sold-labor category).

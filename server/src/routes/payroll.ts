@@ -32,11 +32,12 @@ route(
     }
     const from = str(req.query.from, 10)
     const to = str(req.query.to, 10) || from
-    const result = await laborExport(auth.companyId, from, to)
+    const contractors = config.contractorsEnabled
+    const result = await laborExport(auth.companyId, from, to, { contractors })
     if (str(req.query.format, 10).toLowerCase() === 'csv') {
       res.setHeader('Content-Type', 'text/csv; charset=utf-8')
       res.setHeader('Content-Disposition', `attachment; filename="labor-${result.from}-to-${result.to}.csv"`)
-      res.status(200).send(laborCsv(result.lines))
+      res.status(200).send(laborCsv(result.lines, { contractors }))
       return
     }
     return result
@@ -59,6 +60,7 @@ route(
     return {
       today,
       exportEnabled: config.payrollExportEnabled,
+      contractorsEnabled: config.contractorsEnabled,
       current: semimonthlyPeriod(today),
       previous: previousSemimonthlyPeriod(today),
     }
