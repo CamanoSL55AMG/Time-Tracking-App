@@ -302,16 +302,42 @@ const cell = (v: string | number): string => {
   return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
 }
 
+/** Approved paid leave, one line per person per day, in the CSV's own columns. */
+export interface LeaveCsvLine {
+  lineId: string
+  personEmail: string
+  personName: string
+  date: string
+  weekStart: string
+  leaveTypeKey: string
+  leaveTypeName: string
+  hours: number
+}
+
+/**
+ * Leave goes into the same file as labor (LEAVE_ENABLED): job_kind "leave", job_code
+ * LEAVE-<TYPE>, labor_category "leave", all hours regular. Paid leave is not hours
+ * worked, so it never counts toward overtime.
+ */
+export function leaveCsvRows(lines: LeaveCsvLine[], contractors = false): string[] {
+  return lines.map((l) =>
+    [l.lineId, l.personEmail, l.personName, l.date, l.weekStart, `LEAVE-${l.leaveTypeKey.toUpperCase()}`, l.leaveTypeName, 'leave', l.leaveTypeName, 'leave', l.hours.toFixed(2), '0.00', l.hours.toFixed(2), ...(contractors ? ['employee'] : [])]
+      .map(cell)
+      .join(','),
+  )
+}
+
 /**
  * The export as a CSV file, one line per row of `lines`, same columns AIC Accounting
  * imports. With contractors on, a last column worker_type (employee | contractor).
+ * Approved paid leave (opts.leave) follows the labor rows; only employees get it.
  */
-export function laborCsv(lines: LaborLine[], opts: { contractors?: boolean } = {}): string {
+export function laborCsv(lines: LaborLine[], opts: { contractors?: boolean; leave?: LeaveCsvLine[] } = {}): string {
   const head: string[] = [...CSV_COLUMNS, ...(opts.contractors ? ['worker_type'] : [])]
   const rows = lines.map((l) =>
     [l.lineId, l.personEmail, l.personName, l.date, l.weekStart, l.jobCode, l.jobName, l.jobKind, l.phaseName || l.phaseKey, l.laborCategory, l.regularHours.toFixed(2), l.overtimeHours.toFixed(2), l.hours.toFixed(2), ...(opts.contractors ? [l.workerType ?? 'employee'] : [])]
       .map(cell)
       .join(','),
   )
-  return [head.join(','), ...rows].join('\r\n') + '\r\n'
+  return [head.join(','), ...rows, ...leaveCsvRows(opts.leave ?? [], opts.contractors)].join('\r\n') + '\r\n'
 }

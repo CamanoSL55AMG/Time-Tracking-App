@@ -210,6 +210,8 @@ export interface BoardRow {
   atShop: boolean | null
   /** Clocked in at the job's site; null when the job has no site position or the punch no GPS. */
   atSite?: boolean | null
+  /** Approved leave today (LEAVE_ENABLED). Sick and state family leave show only as "Leave". */
+  off?: { leaveType: string; hours: number } | null
 }
 export interface Board {
   date: string
@@ -455,14 +457,147 @@ export type LaborExport = {
   overtimeWeeklyHours: number
   generatedAt: string
   lines: LaborLine[]
-  totals: { personId: string; personEmail: string; personName: string; regularHours: number; overtimeHours: number; hours: number }[]
+  totals: { personId: string; personEmail: string; personName: string; regularHours: number; overtimeHours: number; hours: number; leaveHours?: number }[]
   notReady: LaborNotReady[]
+  /** Only with leave on: approved paid leave per person per day, and requests still waiting. */
+  leaveLines?: { lineId: string; personName: string; date: string; leaveTypeName: string; hours: number }[]
+  leavePending?: { requestId: string; personName: string; leaveType: string; startDate: string; endDate: string; hours: number }[]
+}
+
+// ─── Leave (LEAVE_ENABLED) ──────────────────────────────────────────────────
+
+export interface LeaveType {
+  id: string
+  key: string
+  name: string
+  paid: boolean
+  drawsBalance: boolean
+  statutory: 'wa_sick' | 'wa_pfml' | 'none' | string
+  requestable?: boolean
+  usableFrom?: string | null
+}
+export interface LeaveBalance {
+  personId: string
+  leaveTypeId: string
+  /** Earned minus used, as of today. */
+  balance: number
+  /** Asked for, not yet decided. */
+  pending: number
+  /** What can still be asked for: balance minus pending. */
+  available: number
+  /** Approved, still to come. */
+  booked: number
+}
+export type LeaveStatus = 'pending' | 'approved' | 'denied' | 'cancelled'
+export interface LeaveRequest {
+  id: string
+  person: { id: string; name: string }
+  leaveType: { id: string; key: string; name: string }
+  startDate: string
+  endDate: string
+  days: { date: string; hours: number }[]
+  hours: number
+  note: string
+  status: LeaveStatus
+  requestedBy: string
+  decidedBy: string | null
+  decidedAt: string | null
+  decisionNote: string
+  createdAt: string
+}
+export interface MyLeave {
+  today: string
+  banks: 'separate' | 'combined'
+  types: LeaveType[]
+  balances: LeaveBalance[]
+  requests: LeaveRequest[]
+  hireDate: string | null
+  noticeAckAt: string | null
+}
+export interface LeaveTeam {
+  today: string
+  types: LeaveType[]
+  people: { id: string; name: string; email: string; role: string; hireDate: string | null; noticeAckAt: string | null; policies: Record<string, string>; balances: LeaveBalance[] }[]
+}
+export interface LeavePolicy {
+  id: string
+  leaveTypeId: string
+  name: string
+  method: 'per_hours_worked' | 'per_period' | 'annual_grant' | 'none'
+  rateHours: number
+  perHours: number
+  periodHours: number
+  grantOn: string
+  balanceCap: number | null
+  carryoverMax: number | null
+  waitingDays: number
+  active: boolean
+}
+export interface LeaveSettings {
+  banks: 'separate' | 'combined'
+  sickPayoutAtSeparation: boolean
+  switchoverDate: string | null
+}
+export interface LeaveRequestBody {
+  personId?: string
+  leaveTypeId: string
+  startDate: string
+  endDate?: string
+  hoursPerDay?: number
+  includeWeekends?: boolean
+  note?: string
+  approve?: boolean
+}
+export interface AccrualRun {
+  from: string
+  to: string
+  countedFrom: string
+  people: { personId: string; personName: string; hoursWorked: number; skipped?: string; accruals: { leaveTypeId: string; earned: number; posted: number; total: number; note?: string }[] }[]
+  notReady: { personId: string; personName: string; weekStart: string; status: string; hours: number }[]
+  posted: number
+}
+export interface ImportMapping {
+  headerRow: number
+  nameCol: number | null
+  emailCol: number | null
+  columns: { col: number; leaveTypeId: string }[]
+}
+export interface ImportPreview {
+  fileName: string
+  headers: string[]
+  sample: string[][]
+  rowCount: number
+  mapping: ImportMapping
+  mappingProblem: string | null
+  leaveTypes: { id: string; key: string; name: string }[]
+  people: { id: string; name: string; email: string; active: boolean }[]
+  rows: {
+    sheetRow: number
+    name: string
+    email: string
+    personId: string | null
+    personName: string | null
+    match: 'email' | 'name' | 'chosen' | 'none' | 'ambiguous'
+    balances: { leaveTypeId: string; hours: number | null; raw: string }[]
+    problems: string[]
+  }[]
+  ready: boolean
+  switchoverDate: string | null
+}
+export interface ImportBody {
+  fileName: string
+  contentBase64: string
+  mapping?: ImportMapping
+  chosen?: Record<string, string>
+  skip?: number[]
+  switchoverDate?: string
 }
 
 export const api = {
   login: (email: string, password: string) => http.post<{ token: string; person: Person }>('/auth/login', { email, password }).then((r) => r.data),
   sso: (token: string) => http.post<{ token: string; person: Person }>('/auth/sso', { token }).then((r) => r.data),
-  authConfig: () => http.get<{ googleClientId: string | null; dashboard?: boolean; switchedOff?: string | null }>('/auth/config').then((r) => r.data),
+  authConfig: () =>
+    http.get<{ googleClientId: string | null; dashboard?: boolean; switchedOff?: string | null; features?: { leave?: boolean } }>('/auth/config').then((r) => r.data),
   google: (credential: string) => http.post<{ token: string; person: Person }>('/auth/google', { credential }).then((r) => r.data),
   me: () => http.get<{ person: Person | null; scopes: string[] }>('/auth/me').then((r) => r.data),
   changePassword: (current: string, next: string) => http.post('/auth/password', { current, next }).then((r) => r.data),
@@ -573,6 +708,26 @@ export const api = {
   keys: () => http.get<{ data: ApiKey[]; availableScopes: string[] }>('/api-keys').then((r) => r.data),
   createKey: (name: string, scopes: string[]) => http.post<{ key: string; apiKey: ApiKey }>('/api-keys', { name, scopes }).then((r) => r.data),
   revokeKey: (id: string) => http.delete(`/api-keys/${id}`).then((r) => r.data),
+
+  myLeave: () => http.get<MyLeave>('/me/leave').then((r) => r.data),
+  ackLeaveNotice: () => http.post<{ noticeAckAt: string }>('/me/leave/notice', {}).then((r) => r.data),
+  askLeave: (body: LeaveRequestBody) => http.post<{ request: LeaveRequest }>('/leave/requests', body).then((r) => r.data.request),
+  leaveRequests: (params: { status?: LeaveStatus; personId?: string; from?: string; to?: string }) =>
+    http.get<{ data: LeaveRequest[] }>('/leave/requests', { params }).then((r) => r.data.data),
+  decideLeave: (id: string, decision: 'approve' | 'deny', note: string) => http.post<{ request: LeaveRequest }>(`/leave/requests/${id}/${decision}`, { note }).then((r) => r.data.request),
+  cancelLeave: (id: string, note = '') => http.post<{ request: LeaveRequest }>(`/leave/requests/${id}/cancel`, { note }).then((r) => r.data.request),
+  leaveTeam: () => http.get<LeaveTeam>('/leave/balances').then((r) => r.data),
+  leaveSettings: () => http.get<LeaveSettings>('/leave/settings').then((r) => r.data),
+  saveLeaveSettings: (s: Partial<Pick<LeaveSettings, 'banks' | 'sickPayoutAtSeparation'>>) => http.patch<LeaveSettings>('/leave/settings', s).then((r) => r.data),
+  leavePolicies: () => http.get<{ data: LeavePolicy[] }>('/leave/policies').then((r) => r.data.data),
+  updateLeavePolicy: (id: string, p: Partial<Omit<LeavePolicy, 'id' | 'leaveTypeId'>>) => http.patch<{ policy: LeavePolicy }>(`/leave/policies/${id}`, p).then((r) => r.data.policy),
+  assignLeavePolicy: (personId: string, leaveTypeId: string, leavePolicyId: string | null, effectiveFrom?: string) =>
+    http.put(`/people/${personId}/leave/policies`, { leaveTypeId, leavePolicyId, effectiveFrom }).then((r) => r.data),
+  setHireDate: (personId: string, hireDate: string | null) => http.patch(`/people/${personId}/leave/profile`, { hireDate }).then((r) => r.data),
+  adjustLeave: (body: { personId: string; leaveTypeId: string; hours: number; kind?: string; date?: string; note: string }) => http.post('/leave/adjustments', body).then((r) => r.data),
+  runAccrual: (from: string, to: string, dryRun: boolean) => http.post<AccrualRun>('/leave/accruals/run', { from, to, dryRun }).then((r) => r.data),
+  previewImport: (body: ImportBody) => http.post<ImportPreview>('/leave/import/preview', body, { timeout: 60_000 }).then((r) => r.data),
+  commitImport: (body: ImportBody) => http.post<{ posted: number; switchoverDate: string }>('/leave/import/commit', body, { timeout: 60_000 }).then((r) => r.data),
 }
 
 // ─── Formatting ─────────────────────────────────────────────────────────────

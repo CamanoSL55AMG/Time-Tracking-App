@@ -211,8 +211,42 @@ export default function PayrollPage() {
           <Typography variant="caption" color="text.secondary">
             {data.lines.length} lines, one per person, day, job and task. AIC Accounting imports these same lines.
           </Typography>
+          {data.leaveLines && <LeaveSummary data={data} />}
         </>
       )}
     </Stack>
+  )
+}
+
+/** Approved paid leave in the period (only when leave tracking is on). Not hours worked: never overtime. */
+function LeaveSummary({ data }: { data: LaborExport }) {
+  const lines = data.leaveLines ?? []
+  const byPerson = new Map<string, Map<string, number>>()
+  for (const l of lines) {
+    const m = byPerson.get(l.personName) ?? new Map<string, number>()
+    m.set(l.leaveTypeName, (m.get(l.leaveTypeName) ?? 0) + l.hours)
+    byPerson.set(l.personName, m)
+  }
+  const pending = data.leavePending ?? []
+  return (
+    <Paper sx={{ p: 2 }}>
+      <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
+        Paid leave: {h2(lines.reduce((t, l) => t + l.hours, 0))} h
+      </Typography>
+      {byPerson.size === 0 && <Typography color="text.secondary">No approved paid leave in this pay period.</Typography>}
+      {[...byPerson.entries()].map(([name, m]) => (
+        <Typography key={name} variant="body2">
+          {name}: {[...m.entries()].map(([t, hrs]) => `${t} ${h2(hrs)} h`).join(', ')}
+        </Typography>
+      ))}
+      {pending.length > 0 && (
+        <Alert severity="warning" sx={{ mt: 1 }}>
+          Still waiting for a decision, not in the export: {pending.map((p) => `${p.personName} (${p.leaveType}, ${h2(p.hours)} h)`).join('; ')}
+        </Alert>
+      )}
+      <Typography variant="caption" color="text.secondary" component="div" sx={{ mt: 1 }}>
+        Leave goes to AIC Accounting on its own lines (job kind "leave"), all regular hours.
+      </Typography>
+    </Paper>
   )
 }

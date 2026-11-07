@@ -6,6 +6,7 @@ import { config } from '../config.js'
 import { laborCsv, laborExport, previousSemimonthlyPeriod, semimonthlyPeriod } from '../services/payroll.js'
 import { prisma } from '../db.js'
 import { localDate } from '../lib/time.js'
+import { leaveForPayroll } from '../services/leave.js'
 
 export const payrollRouter = Router()
 
@@ -17,7 +18,8 @@ route(
     tag: 'Payroll',
     summary:
       'Approved hours for a pay period, for payroll: one line per person, day, job and phase with regular and overtime hours. ' +
-      'Weeks not approved yet are listed under notReady. Off unless PAYROLL_EXPORT_ENABLED=true.',
+      'Weeks not approved yet are listed under notReady. Off unless PAYROLL_EXPORT_ENABLED=true. ' +
+      'With LEAVE_ENABLED=true, approved paid leave comes too: leaveLines (and leave rows in the CSV, job_kind "leave"), leaveHours on each total, and requests still waiting under leavePending.',
     access: ['payroll:read'],
     query: {
       from: 'First day of the pay period, YYYY-MM-DD (company time)',
@@ -34,13 +36,28 @@ route(
     const to = str(req.query.to, 10) || from
     const contractors = config.contractorsEnabled
     const result = await laborExport(auth.companyId, from, to, { contractors })
+    const leave = config.leaveEnabled ? await leaveForPayroll(auth.companyId, result.from, result.to) : null
     if (str(req.query.format, 10).toLowerCase() === 'csv') {
       res.setHeader('Content-Type', 'text/csv; charset=utf-8')
       res.setHeader('Content-Disposition', `attachment; filename="labor-${result.from}-to-${result.to}.csv"`)
-      res.status(200).send(laborCsv(result.lines, { contractors }))
+      res.status(200).send(laborCsv(result.lines, { contractors, leave: leave?.lines ?? [] }))
       return
     }
-    return result
+    if (!leave) return result
+    // Leave adds to each person's totals (and adds people who only took leave).
+    const r2 = (n: number) => Math.round(n * 100) / 100
+    const totals = new Map(result.totals.map((t) => [t.personId, { ...t, leaveHours: 0 }]))
+    for (const l of leave.lines) {
+      const t = totals.get(l.personId) ?? { personId: l.personId, personEmail: l.personEmail, personName: l.personName, regularHours: 0, overtimeHours: 0, hours: 0, leaveHours: 0 }
+      t.leaveHours = r2(t.leaveHours + l.hours)
+      totals.set(l.personId, t)
+    }
+    return {
+      ...result,
+      totals: [...totals.values()].sort((a, b) => a.personName.localeCompare(b.personName)),
+      leaveLines: leave.lines,
+      leavePending: leave.pending,
+    }
   },
 )
 

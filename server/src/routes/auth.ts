@@ -88,6 +88,8 @@ route(
     dashboard: dashboardConfigured(),
     // Set while AIC Control Tower has Logbook switched OFF; the sign-in page shows it.
     switchedOff: switchState().on ? null : OFF_MESSAGE,
+    // Optional parts that are switched on here; the app shows their screens only then.
+    features: { leave: config.leaveEnabled },
   }),
 )
 

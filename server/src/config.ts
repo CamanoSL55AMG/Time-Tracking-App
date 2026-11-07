@@ -50,6 +50,10 @@ export const config = {
   // employee, the worker type can't be set, and the payroll export is unchanged.
   contractorsEnabled: /^(1|true|yes|on)$/i.test((process.env.CONTRACTORS_ENABLED ?? '').trim()),
   payrollExportEnabled: /^(1|true|yes|on)$/i.test((process.env.PAYROLL_EXPORT_ENABLED ?? '').trim()),
+  // Leave tracking (sick, vacation, WA family leave, time-off requests). Off unless
+  // LEAVE_ENABLED=true: every /leave endpoint answers 403 leave_off, the Leave tab is
+  // hidden, and the payroll export and board carry no leave.
+  leaveEnabled: /^(1|true|yes|on)$/i.test((process.env.LEAVE_ENABLED ?? '').trim()),
   // AIC Control Tower on/off switch (services/tower.ts). Both empty = not checked,
   // Logbook stays ON. TOWER_TOKEN is the aircraft's enrollment token from the Tower.
   towerUrl: (process.env.TOWER_URL ?? '').trim().replace(/\/+$/, ''),
