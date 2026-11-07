@@ -29,6 +29,28 @@ same way as the other apps, pointing at `http://localhost:5400`. Put that addres
 Google", set `GOOGLE_CLIENT_ID` and add the address to the client's Authorized
 JavaScript origins.
 
+## Control Tower switch
+
+Logbook can be turned on and off per company in AIC Control Tower (Manifest → Logbook).
+To have this Dell honour it, add to `server/.env`:
+
+```
+TOWER_URL=https://tower.aicpnw.com
+TOWER_TOKEN=<the same TOWER_TOKEN as /etc/ged-health-check.conf>
+```
+
+The Tower is behind Cloudflare Access, so Logbook also needs the health check's
+service-token pair. Copy it across without printing it:
+
+```
+sudo grep '^TOWER_ACCESS_' /etc/ged-health-check.conf >> ~/apps/time-tracking/server/.env
+```
+
+then `sudo systemctl restart logbook` and check
+`curl -s http://localhost:5400/api/v1/health` shows `"source":"tower"`. Without the two
+lines, or with the Tower unreachable, Logbook stays ON; `"detail"` in the health answer
+says why (a 302 means the Access pair is missing or wrong).
+
 ## Day to day
 
 - Changes reach the Dell by pushing to `main` (Github-save); the 14:30 job deploys them.

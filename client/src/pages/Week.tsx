@@ -88,8 +88,10 @@ export function WeekDetail({ week, onEdit }: { week: PersonWeek; onEdit?: (s: We
   )
 }
 
-export function signOffLine(w: { status: SheetStatus; signedAt: string | null; approvedAt: string | null; approvedBy: string | null; note: string }) {
+export function signOffLine(w: { status: SheetStatus; signedAt: string | null; approvedAt: string | null; approvedBy: string | null; approvedThrough?: string | null; partlyApproved?: boolean; note: string }) {
   const when = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString([], { month: 'short', day: 'numeric' }) : '')
+  if (w.status === 'approved' && w.partlyApproved && w.approvedThrough)
+    return `Approved through ${fmtDay(w.approvedThrough, { weekday: 'short', month: 'short', day: 'numeric' })}${w.approvedBy ? ` by ${w.approvedBy}` : ''}. Those days are locked; the rest of the week is still open.`
   if (w.status === 'approved') return `Approved ${when(w.approvedAt)}${w.approvedBy ? ` by ${w.approvedBy}` : ''}. Locked.`
   if (w.status === 'signed') return `Signed ${when(w.signedAt)}. Waiting for approval.`
   return w.note ? w.note : ''
@@ -139,7 +141,7 @@ export default function WeekPage() {
   }
 
   const line = signOffLine(week)
-  const canSign = week.status !== 'approved' && !week.openSegment && week.hours > 0
+  const canSign = (week.status !== 'approved' || week.partlyApproved) && !week.openSegment && week.hours > 0
   const today = new Date().toLocaleDateString('en-CA')
   const addDay = week.days.some((d) => d.date === today) ? today : week.weekStart
   const withdraw = async (id: string) => {

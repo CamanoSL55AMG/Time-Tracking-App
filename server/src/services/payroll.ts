@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto'
 import { prisma } from '../db.js'
 import { badRequest } from '../errors.js'
 import { addDays, isYmd, localDate, startOfLocalDay } from '../lib/time.js'
-import { weekOf } from './timesheets.js'
+import { approvedThroughOf, weekOf } from './timesheets.js'
+import { earnsOvertime, workerTypeOn, type WorkerType } from './workerType.js'
 
 // Labor export for payroll. AIC Accounting reads it (GET /payroll/labor) and
 // imports the hours to produce payroll.
@@ -14,6 +15,9 @@ import { weekOf } from './timesheets.js'
 // - Overtime is worked out per workweek (Company.weekStartDay): hours past
 //   Company.overtimeWeeklyHours, in the order they were worked, are overtime.
 //   Washington has no daily overtime. 0 = no split. Exempt people get none.
+// - With CONTRACTORS_ENABLED, each line carries the person's worker type on that day
+//   (employee = W-2, contractor = 1099; services/workerType.ts). Contractor hours are
+//   all regular and don't count toward an employee week's overtime.
 // - Hours are the real punched time to the hundredth of an hour. No rounding rule
 //   is applied here.
 // - A segment that runs past midnight counts on the day it started, like every
@@ -53,6 +57,25 @@ export function splitWorkweek<S extends WorkSegment>(segments: S[], thresholdHou
   })
 }
 
+/**
+ * One person's workweek when some of it may be 1099 contractor time: the employee
+ * segments are split as usual (splitWorkweek), contractor segments are all regular
+ * and don't count toward the employee's overtime threshold.
+ */
+export function splitMixedWeek<S extends WorkSegment>(
+  segments: S[],
+  typeOf: (s: S) => WorkerType,
+  thresholdHours: number,
+  exempt = false,
+): (SplitSegment<S> & { workerType: WorkerType })[] {
+  const employee = segments.filter((s) => earnsOvertime(typeOf(s)))
+  const contractor = segments.filter((s) => !earnsOvertime(typeOf(s)))
+  return [
+    ...splitWorkweek(employee, thresholdHours, exempt).map((x) => ({ ...x, workerType: 'employee' as const })),
+    ...splitWorkweek(contractor, 0).map((x) => ({ ...x, workerType: 'contractor' as const })),
+  ].sort((a, b) => a.segment.clockIn.getTime() - b.segment.clockIn.getTime())
+}
+
 const hundredths = (seconds: number) => Math.round((seconds / 3600) * 100) / 100
 
 /** Stable id for a line, so a re-export of the same period carries the same ids. */
@@ -78,6 +101,8 @@ export interface LaborLine {
   overtimeHours: number
   hours: number
   segments: number
+  /** Only with CONTRACTORS_ENABLED: employee (W-2) or contractor (1099) on that day. */
+  workerType?: WorkerType
 }
 
 export interface NotReady {
@@ -86,10 +111,12 @@ export interface NotReady {
   personEmail: string
   weekStart: string
   status: string // open | signed | approved (approved but someone is still on the clock)
+  /** Set when part of the week is approved: the days after this one aren't yet. */
+  approvedThrough?: string
   hours: number
 }
 
-export async function laborExport(companyId: string, from: string, to: string) {
+export async function laborExport(companyId: string, from: string, to: string, opts: { contractors?: boolean } = {}) {
   if (!isYmd(from) || !isYmd(to)) throw badRequest('from and to must be dates, YYYY-MM-DD.', { fields: ['from', 'to'] })
   if (to < from) throw badRequest('to must be on or after from.')
   const days = (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000 + 1
@@ -108,7 +135,7 @@ export async function laborExport(companyId: string, from: string, to: string) {
     prisma.punch.findMany({
       where: { companyId, clockIn: { gte: startOfLocalDay(firstWeek, tz), lt: startOfLocalDay(addDays(lastWeek, 7), tz) } },
       include: {
-        person: { select: { id: true, name: true, email: true, overtimeExempt: true } },
+        person: { select: { id: true, name: true, email: true, overtimeExempt: true, workerType: true, workerTypeFrom: true, priorWorkerType: true } },
         job: { select: { id: true, name: true, code: true, kind: true } },
         phase: { select: { id: true, key: true, name: true, laborCategory: true } },
       },
@@ -140,15 +167,26 @@ export async function laborExport(companyId: string, from: string, to: string) {
     const person = segs[0].person
     const inPeriod = segs.filter((s) => inRange(localDate(s.clockIn, tz)))
     if (!inPeriod.length) continue
-    const status = sheetOf.get(key)?.status ?? 'open'
-    const open = segs.some((s) => !s.clockOut)
-    if (status !== 'approved' || open) {
-      const seconds = inPeriod.reduce((t, s) => t + ((s.clockOut ?? now).getTime() - s.clockIn.getTime()) / 1000, 0)
-      notReady.push({ personId, personName: person.name, personEmail: person.email, weekStart, status, hours: hundredths(seconds) })
+    const sheet = sheetOf.get(key)
+    const status = sheet?.status ?? 'open'
+    // Approvers can sign off part of a week (through the 15th or month end). Only the
+    // days the approval covers go out; the rest wait. Overtime is split in the order
+    // worked, so the covered days come out the same as they will once the week is done.
+    const through = approvedThroughOf(sheet)
+    const covered = through ? segs.filter((s) => localDate(s.clockIn, tz) <= through) : []
+    const waiting = inPeriod.filter((s) => !through || localDate(s.clockIn, tz) > through)
+    const open = covered.some((s) => !s.clockOut)
+    const secondsOf = (list: P[]) => list.reduce((t, s) => t + ((s.clockOut ?? now).getTime() - s.clockIn.getTime()) / 1000, 0)
+    if (!through || open) {
+      notReady.push({ personId, personName: person.name, personEmail: person.email, weekStart, status, hours: hundredths(secondsOf(inPeriod)) })
       continue
     }
-    const closed = segs.map((s) => ({ ...s, clockOut: s.clockOut as Date }))
-    for (const { segment: s, regularSeconds, overtimeSeconds } of splitWorkweek(closed, company.overtimeWeeklyHours, person.overtimeExempt)) {
+    if (waiting.length) {
+      notReady.push({ personId, personName: person.name, personEmail: person.email, weekStart, status: 'open', approvedThrough: through, hours: hundredths(secondsOf(waiting)) })
+    }
+    const closed = covered.map((s) => ({ ...s, clockOut: s.clockOut as Date }))
+    const typeOf = (s: { clockIn: Date }): WorkerType => (opts.contractors ? workerTypeOn(person, localDate(s.clockIn, tz)) : 'employee')
+    for (const { segment: s, regularSeconds, overtimeSeconds, workerType } of splitMixedWeek(closed, typeOf, company.overtimeWeeklyHours, person.overtimeExempt)) {
       const date = localDate(s.clockIn, tz)
       if (!inRange(date)) continue
       const lineId = lineIdOf(personId, date, s.jobId, s.phaseId)
@@ -176,6 +214,7 @@ export async function laborExport(companyId: string, from: string, to: string) {
           segments: 0,
           regularSeconds: 0,
           overtimeSeconds: 0,
+          ...(opts.contractors ? { workerType } : {}),
         }
         lines.set(lineId, line)
       }
@@ -210,11 +249,32 @@ export async function laborExport(companyId: string, from: string, to: string) {
     timezone: tz,
     weekStartDay: company.weekStartDay,
     overtimeWeeklyHours: company.overtimeWeeklyHours,
+    ...(opts.contractors ? { contractorsEnabled: true } : {}),
     generatedAt: now.toISOString(),
     lines: out,
     totals: [...totals.values()].map((t) => ({ ...t, regularHours: r2(t.regularHours), overtimeHours: r2(t.overtimeHours), hours: r2(t.hours) })),
     notReady: notReady.sort((a, b) => a.personName.localeCompare(b.personName) || a.weekStart.localeCompare(b.weekStart)),
   }
+}
+
+// ─── Pay periods ────────────────────────────────────────────────────────────
+
+/**
+ * Morgan Sound runs payroll twice a month: the 1st to the 15th, and the 16th to the
+ * last day of the month. Overtime is still counted by the Monday to Sunday week, so a
+ * week that crosses a period end splits: its hours in each period keep the overtime
+ * they earned in the order worked (see splitWorkweek).
+ */
+export function semimonthlyPeriod(date: string): { from: string; to: string } {
+  const [y, m, d] = date.split('-').map(Number)
+  const mm = String(m).padStart(2, '0')
+  if (d <= 15) return { from: `${y}-${mm}-01`, to: `${y}-${mm}-15` }
+  const last = new Date(Date.UTC(y, m, 0)).getUTCDate()
+  return { from: `${y}-${mm}-16`, to: `${y}-${mm}-${String(last).padStart(2, '0')}` }
+}
+
+export function previousSemimonthlyPeriod(date: string): { from: string; to: string } {
+  return semimonthlyPeriod(addDays(semimonthlyPeriod(date).from, -1))
 }
 
 // ─── CSV ────────────────────────────────────────────────────────────────────
@@ -242,12 +302,42 @@ const cell = (v: string | number): string => {
   return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
 }
 
-/** The export as a CSV file, one line per row of `lines`, same columns AIC Accounting imports. */
-export function laborCsv(lines: LaborLine[]): string {
-  const rows = lines.map((l) =>
-    [l.lineId, l.personEmail, l.personName, l.date, l.weekStart, l.jobCode, l.jobName, l.jobKind, l.phaseName || l.phaseKey, l.laborCategory, l.regularHours.toFixed(2), l.overtimeHours.toFixed(2), l.hours.toFixed(2)]
+/** Approved paid leave, one line per person per day, in the CSV's own columns. */
+export interface LeaveCsvLine {
+  lineId: string
+  personEmail: string
+  personName: string
+  date: string
+  weekStart: string
+  leaveTypeKey: string
+  leaveTypeName: string
+  hours: number
+}
+
+/**
+ * Leave goes into the same file as labor (LEAVE_ENABLED): job_kind "leave", job_code
+ * LEAVE-<TYPE>, labor_category "leave", all hours regular. Paid leave is not hours
+ * worked, so it never counts toward overtime.
+ */
+export function leaveCsvRows(lines: LeaveCsvLine[], contractors = false): string[] {
+  return lines.map((l) =>
+    [l.lineId, l.personEmail, l.personName, l.date, l.weekStart, `LEAVE-${l.leaveTypeKey.toUpperCase()}`, l.leaveTypeName, 'leave', l.leaveTypeName, 'leave', l.hours.toFixed(2), '0.00', l.hours.toFixed(2), ...(contractors ? ['employee'] : [])]
       .map(cell)
       .join(','),
   )
-  return [CSV_COLUMNS.join(','), ...rows].join('\r\n') + '\r\n'
+}
+
+/**
+ * The export as a CSV file, one line per row of `lines`, same columns AIC Accounting
+ * imports. With contractors on, a last column worker_type (employee | contractor).
+ * Approved paid leave (opts.leave) follows the labor rows; only employees get it.
+ */
+export function laborCsv(lines: LaborLine[], opts: { contractors?: boolean; leave?: LeaveCsvLine[] } = {}): string {
+  const head: string[] = [...CSV_COLUMNS, ...(opts.contractors ? ['worker_type'] : [])]
+  const rows = lines.map((l) =>
+    [l.lineId, l.personEmail, l.personName, l.date, l.weekStart, l.jobCode, l.jobName, l.jobKind, l.phaseName || l.phaseKey, l.laborCategory, l.regularHours.toFixed(2), l.overtimeHours.toFixed(2), l.hours.toFixed(2), ...(opts.contractors ? [l.workerType ?? 'employee'] : [])]
+      .map(cell)
+      .join(','),
+  )
+  return [head.join(','), ...rows, ...leaveCsvRows(opts.leave ?? [], opts.contractors)].join('\r\n') + '\r\n'
 }

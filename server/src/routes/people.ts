@@ -7,6 +7,10 @@ import { requireScope } from '../auth/middleware.js'
 import { isRole, KEYS_MANAGE, PEOPLE_ROLES } from '../auth/apiKeys.js'
 import { emit } from '../services/events.js'
 import { publicPerson } from './auth.js'
+import { config } from '../config.js'
+import { ApiError } from '../errors.js'
+import { isYmd, localDate } from '../lib/time.js'
+import { isWorkerType, workerTypeChange } from '../services/workerType.js'
 
 export const peopleRouter = Router()
 
@@ -19,7 +23,7 @@ route(
       where: { companyId: auth.companyId, active: bool(req.query.active) },
       orderBy: { name: 'asc' },
     })
-    return { data: people.map(publicPerson) }
+    return { data: people.map(publicPerson), contractorsEnabled: config.contractorsEnabled }
   },
 )
 
@@ -37,6 +41,8 @@ route(
       role: 'tech | lead | manager | payroll | admin (admin needs a signed-in admin or a key with people:roles)',
       active: 'false to stop the person signing in or punching',
       password: 'Set an initial password (signed-in admins only)',
+      workerType: 'employee (W-2) | contractor (1099). Only with CONTRACTORS_ENABLED=true',
+      workerTypeFrom: 'YYYY-MM-DD the worker type starts (company time). A change defaults to today',
     },
   },
   async (req) => {
@@ -74,6 +80,22 @@ route(
       passwordHash = await bcrypt.hash(pw, 12)
     }
 
+    // W-2 or 1099 (services/workerType.ts).
+    let worker: { workerType: string; workerTypeFrom: string | null; priorWorkerType: string | null } | undefined
+    const wantType = req.body?.workerType
+    const wantFrom = req.body?.workerTypeFrom
+    if (wantType !== undefined || wantFrom !== undefined) {
+      if (!config.contractorsEnabled) {
+        throw new ApiError(403, 'contractors_off', 'Contractors are turned off. Set CONTRACTORS_ENABLED=true in server/.env and restart to turn them on.')
+      }
+      const type = wantType === undefined ? (existing?.workerType ?? 'employee') : String(wantType)
+      if (!isWorkerType(type)) throw badRequest('workerType must be employee or contractor.', { field: 'workerType' })
+      const from = wantFrom === undefined || wantFrom === null || wantFrom === '' ? null : String(wantFrom)
+      if (from !== null && !isYmd(from)) throw badRequest('workerTypeFrom must be a date, YYYY-MM-DD.', { field: 'workerTypeFrom' })
+      const company = await prisma.company.findUniqueOrThrow({ where: { id: auth.companyId } })
+      worker = workerTypeChange(existing, type, from, localDate(new Date(), company.timezone))
+    }
+
     const name = str(req.body?.name, 200)
     const initials = req.body?.initials === undefined ? undefined : str(req.body.initials, 8).toUpperCase()
 
@@ -81,7 +103,7 @@ route(
       const saved = existing
         ? await tx.person.update({
             where: { id: existing.id },
-            data: { name: name || undefined, initials, role, active, passwordHash },
+            data: { name: name || undefined, initials, role, active, passwordHash, ...worker },
           })
         : await tx.person.create({
             data: {
@@ -92,9 +114,10 @@ route(
               role: role ?? 'tech',
               active: active ?? true,
               passwordHash,
+              ...worker,
             },
           })
-      await emit(tx, auth.companyId, 'person.upserted', { person: { id: saved.id, email: saved.email, name: saved.name, role: saved.role, active: saved.active } })
+      await emit(tx, auth.companyId, 'person.upserted', { person: { id: saved.id, email: saved.email, name: saved.name, role: saved.role, active: saved.active, workerType: saved.workerType } })
       return saved
     })
     return { created: !existing, person: publicPerson(person) }
