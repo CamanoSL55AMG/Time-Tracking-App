@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   Alert,
-  Autocomplete,
   Box,
   Button,
   Chip,
@@ -21,6 +20,7 @@ import {
   Typography,
 } from '@mui/material'
 import { api, errorText, fmtDay, fmtMoney, type Expense, type ExpenseBody, type ExpenseCategory, type ExpenseStatus, type ExpenseTotals, type Job } from '../api'
+import { JobSearch, jobLabel } from '../components/JobSearch'
 import { RecurringSection } from './RecurringExpenses'
 
 // Expenses and mileage. Added from the clock screen onto the current flight (the
@@ -41,7 +41,6 @@ const monthStart = (ymd: string, back = 0) => {
   d.setUTCMonth(d.getUTCMonth() - back)
   return d.toISOString().slice(0, 10)
 }
-const jobLabel = (j: { name: string; code: string; kind?: string }) => (j.code && !j.name.includes(j.code) && j.kind !== 'shop' ? `${j.code} ${j.name}` : j.name)
 
 /** A phone photo shrunk to a sensible receipt size (long side 1600 px, JPEG). PDFs pass through. */
 async function readReceipt(file: File): Promise<{ type: string; data: string; preview: string | null }> {
@@ -234,18 +233,7 @@ export function ExpenseDialog({
                 {flight.jobName}
               </Typography>
             )}
-            {chargeTo === 'job' && (
-              <Autocomplete
-                sx={{ mt: 1 }}
-                options={jobs}
-                value={job}
-                onChange={(_, v) => setJob(v)}
-                getOptionLabel={jobLabel}
-                isOptionEqualToValue={(a, b) => a.id === b.id}
-                groupBy={(j) => ({ project: 'Projects', service: 'Service calls', visit: 'Site visits', shop: 'Shop', repair: 'Repair tickets', other: 'Office' })[j.kind] ?? 'Other'}
-                renderInput={(params) => <TextField {...params} label="Job" placeholder="Search by name or number" />}
-              />
-            )}
+            {chargeTo === 'job' && <JobSearch jobs={jobs} value={job} onChange={setJob} />}
           </Box>
 
           {!mileage && (
