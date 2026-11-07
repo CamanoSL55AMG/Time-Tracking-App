@@ -7,12 +7,14 @@ import { generateKey, isScope, KEYS_MANAGE, SCOPES } from '../auth/apiKeys.js'
 import { GROUPS, hoursReport, type Group } from '../services/reports.js'
 import { serviceBilling } from '../services/serviceBilling.js'
 import { addDays, dayBounds, isYmd, startOfLocalDay } from '../lib/time.js'
+import { switchState } from '../services/tower.js'
 
 export const systemRouter = Router()
 
 route(systemRouter, { method: 'get', path: '/health', tag: 'System', summary: 'Liveness check.', access: 'public' }, async () => {
   await prisma.$queryRaw`SELECT 1`
-  return { ok: true, time: new Date() }
+  const sw = switchState()
+  return { ok: true, time: new Date(), tower: { logbookOn: sw.on, source: sw.reason, checkedAt: sw.checkedAt, ...(sw.detail ? { detail: sw.detail } : {}) } }
 })
 
 // ─── Reports ────────────────────────────────────────────────────────────────

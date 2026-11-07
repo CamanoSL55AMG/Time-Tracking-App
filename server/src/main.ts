@@ -20,6 +20,8 @@ import { assignmentsRouter } from './routes/assignments.js'
 import { expensesRouter } from './routes/expenses.js'
 import { itemsRouter } from './routes/items.js'
 import { payrollRouter } from './routes/payroll.js'
+import { leaveRouter } from './routes/leave.js'
+import { logbookSwitch, startTowerSwitch } from './services/tower.js'
 
 assertConfig()
 
@@ -46,10 +48,13 @@ if (config.corsOrigins.length) {
 }
 // Receipt photos come up as base64 JSON; everything else stays small.
 app.use(/^\/api\/v1\/me\/expenses\/[^/]+\/receipt$/, express.json({ limit: '9mb' }))
+// The finance spreadsheet for opening leave balances comes up as base64 JSON too.
+app.use(/^\/api\/v1\/leave\/import\/(preview|commit)$/, express.json({ limit: '6mb' }))
 app.use(express.json({ limit: '1mb' }))
 
 // ─── API v1 ─────────────────────────────────────────────────────────────────
 const v1 = express.Router()
+v1.use(logbookSwitch) // AIC Control Tower on/off; fails open (services/tower.ts)
 v1.use(authenticate)
 v1.use(rateLimit)
 v1.use(systemRouter)
@@ -62,6 +67,7 @@ v1.use(timesheetsRouter)
 v1.use(expensesRouter)
 v1.use(itemsRouter)
 v1.use(payrollRouter)
+v1.use(leaveRouter)
 v1.use((req, _res, next) => next(new ApiError(404, 'not_found', `No such endpoint: ${req.method} ${req.originalUrl}`)))
 app.use('/api/v1', v1)
 app.use('/api', (req, _res, next) => next(new ApiError(404, 'not_found', `No such endpoint: ${req.method} ${req.originalUrl}. The API lives under /api/v1.`)))
@@ -113,6 +119,7 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
 
 const server = app.listen(config.port, () => {
   console.log(`Time Tracking API on http://localhost:${config.port}  (docs: /api/v1/docs)`)
+  startTowerSwitch()
 })
 
 const shutdown = () => {

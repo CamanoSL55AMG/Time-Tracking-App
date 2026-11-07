@@ -28,6 +28,9 @@ export const SCOPES = [
   'expenses:read',
   'expenses:approve',
   'payroll:read',
+  'leave:read',
+  'leave:write',
+  'leave:approve',
 ] as const
 export type Scope = (typeof SCOPES)[number]
 
@@ -38,20 +41,26 @@ export const KEYS_MANAGE = 'keys:manage'
 export const CREW = 'punch:crew'
 /** Approve and reopen weekly timesheets. */
 export const APPROVE = 'timesheets:approve'
+/** Approve or turn down a person's request to fix their own time (a missed clock-in or
+ *  clock-out). Managers, admins and payroll (Art, 2026-11-04); not crew leads. */
+export const FIX_APPROVE = 'requests:approve'
 
 export const ROLES = ['tech', 'lead', 'manager', 'payroll', 'admin'] as const
 export type Role = (typeof ROLES)[number]
 
 const TECH = [SELF, 'jobs:read']
-const LEAD = [...TECH, 'punch:read', 'people:read', CREW]
-const MANAGER = [...LEAD, APPROVE, 'punch:write:any', 'jobs:write', 'people:write', 'reports:read', 'events:read', 'assignments:write', 'expenses:read', 'expenses:approve']
+// Leave (Art, 2026-11-07): crew leads see who is off but don't decide; managers,
+// admins and payroll approve; payroll and admins also keep the balances
+// (adjustments, opening-balance import, policies, accrual runs).
+const LEAD = [...TECH, 'punch:read', 'people:read', CREW, 'leave:read']
+const MANAGER = [...LEAD, APPROVE, FIX_APPROVE, 'punch:write:any', 'jobs:write', 'people:write', 'reports:read', 'events:read', 'assignments:write', 'expenses:read', 'expenses:approve', 'leave:approve']
 
 export const ROLE_SCOPES: Record<Role, string[]> = {
   tech: TECH,
   lead: LEAD,
   manager: MANAGER,
-  payroll: [SELF, 'jobs:read', 'punch:read', 'people:read', 'reports:read', APPROVE, 'expenses:read', 'expenses:approve', 'payroll:read'],
-  admin: [...MANAGER, KEYS_MANAGE, 'payroll:read'],
+  payroll: [SELF, 'jobs:read', 'punch:read', 'people:read', 'reports:read', APPROVE, FIX_APPROVE, 'expenses:read', 'expenses:approve', 'payroll:read', 'leave:read', 'leave:approve', 'leave:write'],
+  admin: [...MANAGER, KEYS_MANAGE, 'payroll:read', 'leave:write'],
 }
 
 export const isRole = (v: unknown): v is Role => typeof v === 'string' && (ROLES as readonly string[]).includes(v)

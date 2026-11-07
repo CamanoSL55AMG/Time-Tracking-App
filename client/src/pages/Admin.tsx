@@ -20,7 +20,7 @@ import {
   TextField,
   Typography,
 } from '@mui/material'
-import { api, errorText, fmtTime, WORK_MODES, type ApiKey, type BillingRules, type Job, type Person, type Phase, type WorkMode } from '../api'
+import { api, errorText, fmtTime, WORK_MODES, type ApiKey, type BillingRules, type Job, type Person, type Phase, type WorkerType, type WorkMode } from '../api'
 import { MODE_INFO } from './modes'
 
 // People, jobs, phases and integration keys. Most jobs arrive from GED through the
@@ -83,11 +83,32 @@ const Row = ({ children, dim }: { children: ReactNode; dim?: boolean }) => (
 
 const ROLES: Person['role'][] = ['tech', 'lead', 'manager', 'payroll', 'admin']
 
+// W-2 employee or 1099 contractor. Shown only when the server has CONTRACTORS_ENABLED.
+const WORKER_LABEL: Record<WorkerType, string> = { employee: 'W-2', contractor: '1099' }
+const WORKER_TEXT: Record<WorkerType, string> = { employee: 'W-2 employee', contractor: '1099 contractor' }
+
 function People({ isAdmin }: { isAdmin: boolean }) {
-  const { data, error, setError, load } = useLoader(api.people)
+  const { data: roster, error, setError, load } = useLoader(api.roster)
+  const data = roster?.people
+  const contractors = roster?.contractorsEnabled ?? false
   const [adding, setAdding] = useState(false)
-  const [form, setForm] = useState({ email: '', name: '', initials: '', role: 'tech', password: '' })
+  const [form, setForm] = useState({ email: '', name: '', initials: '', role: 'tech', password: '', workerType: 'employee' as WorkerType })
   const [busy, setBusy] = useState(false)
+  const [payAs, setPayAs] = useState<{ person: Person; workerType: WorkerType; from: string } | null>(null)
+
+  const savePayAs = async () => {
+    if (!payAs) return
+    setBusy(true)
+    try {
+      await api.savePerson(payAs.person.email, { workerType: payAs.workerType, workerTypeFrom: payAs.from || null })
+      setPayAs(null)
+      await load()
+    } catch (err) {
+      setError(errorText(err))
+    } finally {
+      setBusy(false)
+    }
+  }
 
   const save = async () => {
     setBusy(true)
@@ -97,9 +118,10 @@ function People({ isAdmin }: { isAdmin: boolean }) {
         initials: form.initials.trim(),
         role: form.role,
         password: form.password || undefined,
+        ...(contractors ? { workerType: form.workerType } : {}),
       })
       setAdding(false)
-      setForm({ email: '', name: '', initials: '', role: 'tech', password: '' })
+      setForm({ email: '', name: '', initials: '', role: 'tech', password: '', workerType: 'employee' })
       await load()
     } catch (err) {
       setError(errorText(err))
@@ -134,6 +156,16 @@ function People({ isAdmin }: { isAdmin: boolean }) {
               {p.email}
             </Typography>
           </Box>
+          {contractors && (
+            <Chip
+              size="small"
+              variant={p.workerType === 'contractor' ? 'filled' : 'outlined'}
+              color={p.workerType === 'contractor' ? 'warning' : 'default'}
+              label={WORKER_LABEL[p.workerType ?? 'employee']}
+              onClick={() => setPayAs({ person: p, workerType: p.workerType ?? 'employee', from: p.workerTypeFrom ?? '' })}
+              aria-label={`${p.name} is paid as ${WORKER_TEXT[p.workerType ?? 'employee']}. Change`}
+            />
+          )}
           <Chip size="small" label={p.role} />
           <Switch checked={p.active} onChange={() => void toggle(p)} inputProps={{ 'aria-label': `${p.name} active` }} />
         </Row>
@@ -153,6 +185,15 @@ function People({ isAdmin }: { isAdmin: boolean }) {
                 </MenuItem>
               ))}
             </TextField>
+            {contractors && (
+              <TextField select label="Paid as" value={form.workerType} onChange={(e) => setForm({ ...form, workerType: e.target.value as WorkerType })}>
+                {(['employee', 'contractor'] as const).map((t) => (
+                  <MenuItem key={t} value={t}>
+                    {WORKER_TEXT[t]}
+                  </MenuItem>
+                ))}
+              </TextField>
+            )}
             {isAdmin && (
               <PasswordField
                 label="Starting password"
@@ -168,6 +209,39 @@ function People({ isAdmin }: { isAdmin: boolean }) {
           <Button onClick={() => setAdding(false)}>Cancel</Button>
           <Button variant="contained" onClick={save} disabled={busy || !form.email.includes('@') || !form.name.trim() || (form.password.length > 0 && form.password.length < 10)}>
             Add
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={Boolean(payAs)} onClose={() => setPayAs(null)} fullWidth maxWidth="xs">
+        <DialogTitle>How {payAs?.person.name} is paid</DialogTitle>
+        <DialogContent>
+          <Stack spacing={2} sx={{ pt: 1 }}>
+            <TextField select label="Paid as" value={payAs?.workerType ?? 'employee'} onChange={(e) => payAs && setPayAs({ ...payAs, workerType: e.target.value as WorkerType })}>
+              {(['employee', 'contractor'] as const).map((t) => (
+                <MenuItem key={t} value={t}>
+                  {WORKER_TEXT[t]}
+                </MenuItem>
+              ))}
+            </TextField>
+            <TextField
+              type="date"
+              label="Starting"
+              value={payAs?.from ?? ''}
+              onChange={(e) => payAs && setPayAs({ ...payAs, from: e.target.value })}
+              InputLabelProps={{ shrink: true }}
+              helperText="Hours from this day are paid this way. Leave blank for today when changing; days before it keep the old way."
+            />
+            <Typography variant="body2" color="text.secondary">
+              1099 contractors punch and log expenses as usual. Their hours go to payroll marked 1099, with no overtime and no sick or vacation
+              leave, and AIC Accounting pays them as a vendor with no withholding.
+            </Typography>
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setPayAs(null)}>Cancel</Button>
+          <Button variant="contained" onClick={savePayAs} disabled={busy}>
+            Save
           </Button>
         </DialogActions>
       </Dialog>

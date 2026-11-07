@@ -3,7 +3,7 @@ import { prisma } from '../db.js'
 import { optionalDate, requiredStr, route, str } from '../api.js'
 import { ApiError, badRequest } from '../errors.js'
 import { requireAuth, requirePerson, requireScope } from '../auth/middleware.js'
-import { APPROVE, CREW, SELF } from '../auth/apiKeys.js'
+import { APPROVE, CREW, FIX_APPROVE, SELF } from '../auth/apiKeys.js'
 import { parseGeo } from '../lib/geo.js'
 import { addDays, dayBounds, isYmd, startOfLocalDay } from '../lib/time.js'
 import { approveWeek, personWeek, reopenWeek, signWeek, weekSheet } from '../services/timesheets.js'
@@ -72,9 +72,14 @@ route(
     method: 'post',
     path: '/timesheets/approve',
     tag: 'Timesheets',
-    summary: 'Approve a finished week for one or more people. Approved weeks are locked.',
+    summary: 'Approve a week for one or more people, any time. Approved days are locked.',
     access: [APPROVE],
-    body: { personIds: 'People to approve', ...WEEK, note: 'Optional note kept with the approval' },
+    body: {
+      personIds: 'People to approve',
+      ...WEEK,
+      through: 'Optional last day to approve (YYYY-MM-DD). Default: the whole week once it is over, otherwise through yesterday',
+      note: 'Optional note kept with the approval',
+    },
   },
   async (req) => {
     const auth = requireScope(req, APPROVE)
@@ -82,7 +87,7 @@ route(
     const ids = Array.isArray(req.body?.personIds) ? (req.body.personIds as unknown[]).map((x) => str(x, 80)).filter(Boolean) : []
     if (!ids.length) throw badRequest('personIds must list at least one person.', { field: 'personIds' })
     if (ids.length > 200) throw badRequest('Approve 200 people at most per call.', { field: 'personIds' })
-    const results = await approveWeek(auth.companyId, approver.id, ids, str(req.body?.week, 10) || undefined, str(req.body?.note, 500))
+    const results = await approveWeek(auth.companyId, approver.id, ids, str(req.body?.week, 10) || undefined, str(req.body?.note, 500), str(req.body?.through, 10) || undefined)
     return { results, approved: results.filter((r) => r.ok).length }
   },
 )
@@ -191,11 +196,11 @@ for (const decision of ['approve', 'reject'] as const) {
       path: `/requests/:id/${decision}`,
       tag: 'Timesheets',
       summary: decision === 'approve' ? 'Approve a change request; the change is applied as a correction.' : 'Turn down a change request.',
-      access: [APPROVE],
+      access: [FIX_APPROVE],
       body: { note: decision === 'approve' ? 'Optional note' : 'Why it is turned down (required)' },
     },
     async (req) => {
-      const auth = requireScope(req, APPROVE)
+      const auth = requireScope(req, FIX_APPROVE)
       return { request: await decideRequest(requirePerson(auth), req.params.id, decision, str(req.body?.note, 500)) }
     },
   )

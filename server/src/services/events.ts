@@ -23,6 +23,12 @@ export type EventType =
   | 'expense.deleted'
   | 'item.closed'
   | 'item.kept'
+  | 'leave.requested'
+  | 'leave.approved'
+  | 'leave.denied'
+  | 'leave.cancelled'
+  | 'leave.accrued'
+  | 'leave.adjusted'
 
 export async function emit(tx: Tx, companyId: string, type: EventType, payload: Record<string, unknown>): Promise<void> {
   await tx.event.create({

@@ -11,6 +11,7 @@ import { verifySsoToken } from '../auth/ssoToken.js'
 import { verifyGoogleIdToken } from '../auth/googleIdToken.js'
 import { dashboardConfigured, finishSignIn, startUrl } from '../auth/dashboard.js'
 import { isRole, ROLE_SCOPES } from '../auth/apiKeys.js'
+import { OFF_MESSAGE, switchState } from '../services/tower.js'
 
 export const authRouter = Router()
 
@@ -21,6 +22,8 @@ export const publicPerson = (p: Person) => ({
   initials: p.initials,
   role: p.role,
   active: p.active,
+  workerType: p.workerType,
+  workerTypeFrom: p.workerTypeFrom,
   scopes: ROLE_SCOPES[isRole(p.role) ? p.role : 'tech'],
 })
 
@@ -80,7 +83,14 @@ route(
     summary: 'Which sign-in methods this server offers. The sign-in page reads this.',
     access: 'public',
   },
-  async () => ({ googleClientId: config.googleClientId || null, dashboard: dashboardConfigured() }),
+  async () => ({
+    googleClientId: config.googleClientId || null,
+    dashboard: dashboardConfigured(),
+    // Set while AIC Control Tower has Logbook switched OFF; the sign-in page shows it.
+    switchedOff: switchState().on ? null : OFF_MESSAGE,
+    // Optional parts that are switched on here; the app shows their screens only then.
+    features: { leave: config.leaveEnabled },
+  }),
 )
 
 // ─── Sign in with the Dashboard ─────────────────────────────────────────────

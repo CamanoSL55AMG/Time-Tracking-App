@@ -447,7 +447,7 @@ export async function personState(person: Person) {
   const company = await prisma.company.findUniqueOrThrow({ where: { id: person.companyId } })
   const now = new Date()
   const { start, end, date } = dayBounds(now, company.timezone)
-  const [open, today, phases, assignments, lastPunch, recent, overheadJob, benchJob] = await Promise.all([
+  const [open, today, phases, assignments, lastPunch, recent, overheadJob, benchJob, pendingChanges] = await Promise.all([
     prisma.punch.findFirst({ where: { personId: person.id, clockOut: null }, include }),
     prisma.punch.findMany({
       where: { personId: person.id, clockIn: { gte: start, lt: end } },
@@ -475,6 +475,13 @@ export async function personState(person: Person) {
     }),
     prisma.job.findFirst({ where: { companyId: person.companyId, code: OVERHEAD_CODE, active: true } }),
     prisma.job.findFirst({ where: { companyId: person.companyId, code: BENCH_CODE, active: true } }),
+    // Changes this person asked for that a supervisor has not decided yet.
+    prisma.changeRequest.findMany({
+      where: { personId: person.id, status: 'pending' },
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+      select: { id: true, kind: true, punchId: true, clockIn: true, clockOut: true, createdAt: true },
+    }),
   ])
 
   const byJob = new Map<string, { jobId: string; jobName: string; hours: number }>()
@@ -544,6 +551,8 @@ export async function personState(person: Person) {
     },
     // The last segment today, for "Back to …" after a break.
     lastSegment: open ? null : lastToday,
+    // Time fixes waiting for a supervisor; the clock screen marks the segment they are on.
+    pendingChanges,
     asOf: now,
   }
 }
