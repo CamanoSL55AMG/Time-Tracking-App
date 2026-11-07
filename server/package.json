@@ -14,7 +14,8 @@
     "smoke": "node scripts/smoke.mjs",
     "link-ged": "tsx scripts/link-ged.ts",
     "reset-password": "tsx scripts/reset-password.ts",
-    "recurring:add": "tsx scripts/add-recurring-expense.ts"
+    "recurring:add": "tsx scripts/add-recurring-expense.ts",
+    "grant-ged-scopes": "tsx scripts/grant-ged-scopes.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.1.0",

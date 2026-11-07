@@ -22,6 +22,10 @@ export const SCOPES = [
   'jobs:write',
   'people:read',
   'people:write',
+  // Set any Logbook role, admin included, through PUT /people/by-email. Meant for
+  // the AIC Terminal key: Terminal's enrollment is where people and their app
+  // roles are set. Without it a key can add people but not touch admins.
+  'people:roles',
   'reports:read',
   'events:read',
   'assignments:write',
@@ -39,6 +43,8 @@ export const SELF = 'punch:self'
 export const KEYS_MANAGE = 'keys:manage'
 /** Punch a crew in, to the next phase, or out together (crew leads). */
 export const CREW = 'punch:crew'
+/** A key may set any role, admin included (AIC Terminal's enrollment). */
+export const PEOPLE_ROLES = 'people:roles'
 /** Approve and reopen weekly timesheets. */
 export const APPROVE = 'timesheets:approve'
 /** Approve or turn down a person's request to fix their own time (a missed clock-in or
@@ -62,6 +68,10 @@ export const ROLE_SCOPES: Record<Role, string[]> = {
   payroll: [SELF, 'jobs:read', 'punch:read', 'people:read', 'reports:read', APPROVE, FIX_APPROVE, 'expenses:read', 'expenses:approve', 'payroll:read', 'leave:read', 'leave:approve', 'leave:write'],
   admin: [...MANAGER, KEYS_MANAGE, 'payroll:read', 'leave:write'],
 }
+
+/** What the AIC Terminal (GED) key may do. link-ged creates the key with these;
+ *  grant-ged-scopes brings an existing key up to date without rotating it. */
+export const GED_KEY_SCOPES: Scope[] = ['punch:read', 'punch:write:any', 'jobs:read', 'jobs:write', 'people:read', 'people:write', 'people:roles', 'reports:read', 'events:read', 'assignments:write']
 
 export const isRole = (v: unknown): v is Role => typeof v === 'string' && (ROLES as readonly string[]).includes(v)
 export const isScope = (v: unknown): v is Scope => typeof v === 'string' && (SCOPES as readonly string[]).includes(v)

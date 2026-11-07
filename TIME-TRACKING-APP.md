@@ -314,7 +314,7 @@ published document.
 | App acting for a person | API key + `X-Act-As: person@company.com` | Needs the `punch:write:any` scope; the audit trail records both the key and the person |
 
 Scopes: `punch:read`, `punch:write:any`, `jobs:read`, `jobs:write`, `people:read`,
-`people:write`, `reports:read`, `payroll:read`, `payroll:export`, `leave:read`,
+`people:write`, `people:roles` (set any role, admin included; AIC Terminal's key), `reports:read`, `payroll:read`, `payroll:export`, `leave:read`,
 `leave:write`, `leave:approve`, `expenses:read`, `expenses:write`, `expenses:approve`,
 `webhooks:manage`.
 
