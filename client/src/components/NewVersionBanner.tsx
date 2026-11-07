@@ -42,11 +42,17 @@ export function NewVersionBanner() {
     const onVisible = () => { if (document.visibilityState === 'visible') void check() }
     // A phone browser restoring the page from its back/forward cache.
     const onPageShow = (e: PageTransitionEvent) => { if (e.persisted) void check() }
+    // Clicking back into the browser window from another program. Switching
+    // windows doesn't always change visibility (the window can stay partly
+    // in view), so focus counts as coming back too.
+    const onFocus = () => { void check() }
     document.addEventListener('visibilitychange', onVisible)
     window.addEventListener('pageshow', onPageShow)
+    window.addEventListener('focus', onFocus)
     return () => {
       document.removeEventListener('visibilitychange', onVisible)
       window.removeEventListener('pageshow', onPageShow)
+      window.removeEventListener('focus', onFocus)
     }
   }, [])
 
