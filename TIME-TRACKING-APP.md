@@ -447,8 +447,10 @@ Permitted reasons include the employee's or a family member's health, public-hea
 closures, domestic violence leave, and (since 2025-07-27) immigration proceedings. The app
 does **not** ask for or store a reason beyond "sick leave". Medical detail stays out of it.
 
-To confirm with payroll before go-live: the exact definition of "hours worked" for accrual
-(overtime, travel, paid leave hours).
+Hours worked for accrual (decided by Art 2026-11-07): **every hour worked counts,
+overtime and travel included.** Paid leave hours taken (sick, vacation, holiday) are not
+hours worked: they come off the balance and earn nothing. Only approved hours count, the
+same hours the payroll export sends, and 1099 contractor days earn nothing.
 
 ### 7.3 Vacation and PTO
 
@@ -467,6 +469,8 @@ To confirm with payroll before go-live: the exact definition of "hours worked" f
 - A combined PTO bank remains a per-company option for other customers. Such a bank has to
   meet every sick-leave rule above, and the preset enforces that.
 - Other types (holiday, bereavement, jury duty, unpaid) are leave types with no accrual.
+- 1099 contractors (`CONTRACTORS_ENABLED`) earn no sick or vacation leave and can't take
+  paid leave; only days they were a W-2 employee count toward accrual.
 
 ### 7.4 Washington Paid Family and Medical Leave
 
@@ -536,6 +540,64 @@ screen, and change requests (a person asks for a fix or for missing time; a supe
 approves or turns it down; nobody approves their own). Kiosk mode, webhooks and the reconcile report inside this app are still to do
 (GED's Time page has a reconcile tab for the parallel run). Weeks run Monday to Sunday
 (`Company.weekStartDay`) until the pay period is settled (open decision 4).
+
+Status 2026-11-07: 1099 contractors (switch `CONTRACTORS_ENABLED`, off by default). Each
+person is a W-2 `employee` or a 1099 `contractor` (`Person.workerType`), set under Manage →
+People; a change keeps the day it starts (`workerTypeFrom`) and the type before it, so a pay
+period that spans it pays each day the right way. Contractors punch and log expenses as usual.
+In the payroll export their lines carry `workerType: "contractor"` (CSV column `worker_type`,
+added last), all hours regular, and they don't count toward an employee week's overtime.
+They accrue no leave: Phase 5 accrual must skip hours where `accruesLeave(workerTypeOn(...))`
+is false (`services/workerType.ts`). AIC Accounting pays contractor hours as a vendor bill,
+not through the pay run. Off = nobody can be marked, and the export is unchanged.
+
+Status 2026-11-07: Phase 5 leave built behind `LEAVE_ENABLED` (off by default; the beta
+runs without it). What is in it:
+
+- **Ledger** (`LeaveLedger`): every change is a row (accrual, use, adjustment, carryover,
+  forfeit, payout, reinstate); a balance is the sum. Company settings in `LeaveSettings`
+  (separate or combined banks, sick payout off, switchover day), hire date and the
+  sick-notice acknowledgment in `LeaveProfile`, so `Company` and `Person` are untouched.
+- **Types**: Sick leave (WA preset) and Vacation for separate banks, or one PTO bank that
+  meets every sick rule; Holiday (paid, no balance), WA Paid Family & Medical Leave
+  (no balance) and Unpaid.
+- **Policies** (`LeavePolicy`, `PersonLeavePolicy` with effective dates): per hour worked,
+  per pay period, or a yearly grant (Jan 1 or anniversary), tiers by years of service, cap,
+  carryover, waiting days. Sick (and PTO) policies are refused if they fall under any
+  Washington rule. Everyone is on the company sick policy unless assigned another;
+  vacation is earned only by people assigned a vacation policy. The seeded vacation
+  policy earns nothing until its rate is set (open decision 8).
+- **Accrual** (`POST /leave/accruals/run`, or Time off → Set up): run per pay period once
+  it is over, from approved hours (see 7.2). Safe to run again: each period is brought to
+  what its hours earn now, so a week approved late or reopened adds or takes back the
+  difference. Hours before the switchover day earn nothing (the opening balance holds
+  them). Dry run shows the result first. Year end (`POST /leave/year-end`) forfeits hours
+  over each policy's carryover limit.
+- **Requests**: a person asks (no reason asked; for sick leave none is kept); managers,
+  admin and payroll approve (`leave:approve`), crew leads see but don't decide, nobody
+  approves their own. Usable-from date enforced (90 days after hire for sick leave when a
+  hire date is set). Approving writes the `use` rows; cancelling writes them back.
+  Approvers can record leave for someone else and approve it at once (a call-in sick day,
+  a state family-leave period).
+- **Opening balances** (`POST /leave/import/preview`, `/leave/import/commit`, or
+  Time off → Set up): Gary's sheet as .xlsx or .csv, columns guessed and adjustable,
+  rows matched by email then name, problems flagged, nothing posted until every row is
+  matched; then one adjustment per person per type dated the switchover day.
+- **Payroll**: approved paid leave goes into `GET /payroll/labor` as its own lines
+  (`job_kind` and `labor_category` "leave", `job_code` `LEAVE-<TYPE>`, all regular, never
+  overtime); JSON adds `leaveLines`, `leavePending` and `leaveHours` per person. The
+  payroll report shows a paid-leave box.
+- **Board**: people on approved leave today show as "Off" (sick and state family leave as
+  just "Leave"), including people who never punched.
+- **Statements**: monthly, in the app (`GET /me/leave/statement`, `GET /leave/statements`).
+  Not emailed: work stays in the app.
+- **State report**: `GET /reports/pfml-quarterly` gives employee hours worked and paid
+  leave hours per person per quarter; contractor time is left out.
+
+Not built yet: leave on the Week / timesheet screen, the over-3-days verification flag,
+the "TB OFF" shared-calendar entry, reinstating a balance on rehire automatically (an
+adjustment of kind `reinstate` does it by hand), and running accrual automatically when a
+pay period locks (pay periods don't lock yet).
 
 Status 2026-11-03: payroll labor export built (`GET /payroll/labor`, scope `payroll:read`,
 off unless `PAYROLL_EXPORT_ENABLED=true`). Approved weeks only; every labor type goes out
