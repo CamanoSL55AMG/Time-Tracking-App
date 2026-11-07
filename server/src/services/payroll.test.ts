@@ -148,3 +148,12 @@ test('csv adds worker_type last only when contractors are on', () => {
   assert.ok(head.endsWith(',hours,worker_type'))
   assert.ok(row.endsWith(',8.00,contractor'))
 })
+
+test('approved leave follows the labor rows: its own job code, all regular, never overtime', () => {
+  const leave = [{ lineId: 'leave-abcd1234-2026-11-16', personEmail: 'pat@example.com', personName: 'Pat Example', date: '2026-11-16', weekStart: '2026-11-16', leaveTypeKey: 'vacation', leaveTypeName: 'Vacation', hours: 8 }]
+  const rows = laborCsv([], { leave }).trim().split('\r\n')
+  assert.equal(rows.length, 2)
+  assert.equal(rows[1], 'leave-abcd1234-2026-11-16,pat@example.com,Pat Example,2026-11-16,2026-11-16,LEAVE-VACATION,Vacation,leave,Vacation,leave,8.00,0.00,8.00')
+  const withType = laborCsv([], { leave, contractors: true }).trim().split('\r\n')
+  assert.ok(withType[1].endsWith(',8.00,0.00,8.00,employee'))
+})

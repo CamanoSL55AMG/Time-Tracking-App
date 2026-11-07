@@ -66,6 +66,12 @@ server/   Express + TypeScript + Prisma + PostgreSQL — the API at /api/v1     
   **Off** unless `PAYROLL_EXPORT_ENABLED=true` in `server/.env`. Needs the
   `payroll:read` scope (payroll and admin roles, or an API key).
 
+- **Time off** (name menu → Time off; **off** unless `LEAVE_ENABLED=true`): balances,
+  asking for leave, approval by managers, admin and payroll (never your own), team
+  balances, policies, accrual per pay period from approved hours, and the opening-balance
+  import from the finance spreadsheet. Approved paid leave goes into the payroll export
+  and shows as "Off" on the board. Details in TIME-TRACKING-APP.md section 7.
+
 - **Payroll report** (name menu → Payroll report, payroll and admin roles): pick last
   or this pay period (1st to 15th, 16th to month end) or any dates, run it, and see
   each person's regular, overtime and total hours by labor category, with totals.

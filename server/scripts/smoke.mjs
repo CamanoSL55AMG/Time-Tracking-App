@@ -686,6 +686,97 @@ try {
   await call('POST', '/punches/out', { token: key, headers: expAs, body: {} })
   await call('PUT', `/people/by-email/${encodeURIComponent(expEmail)}`, { token: key, body: { active: false } })
 
+  // Leave (LEAVE_ENABLED, off by default). Uses a throwaway person; posts no accrual
+  // (dry run only), commits no import and changes no company setting, so it is safe
+  // to run against the live server.
+  r = await call('GET', '/auth/config')
+  const leaveOn = r.json?.features?.leave === true
+  check('sign-in config says whether leave is on', r.status === 200 && typeof r.json?.features?.leave === 'boolean', JSON.stringify(r.json?.features))
+  if (!leaveOn) {
+    r = await call('GET', '/me/leave', { token: admin })
+    check('leave is off until turned on', r.status === 403 && r.json?.error?.code === 'leave_off', JSON.stringify(r.json))
+  } else {
+    const pw = () => `pw-${randomBytes(9).toString('base64url')}`
+    const lvEmail = `smoke-leave-${stamp}@example.invalid`
+    const lvPw = pw()
+    r = await call('PUT', `/people/by-email/${encodeURIComponent(lvEmail)}`, { token: admin, body: { name: 'Smoke Leave', password: lvPw } })
+    const lvId = r.json?.person?.id
+    const lv = (await call('POST', '/auth/login', { body: { email: lvEmail, password: lvPw } })).json?.token
+    const leadEmail = `smoke-leave-lead-${stamp}@example.invalid`
+    const leadPw = pw()
+    await call('PUT', `/people/by-email/${encodeURIComponent(leadEmail)}`, { token: admin, body: { name: 'Smoke Leave Lead', role: 'lead', password: leadPw } })
+    const lead = (await call('POST', '/auth/login', { body: { email: leadEmail, password: leadPw } })).json?.token
+
+    r = await call('GET', '/me/leave', { token: lv })
+    const me = r.json
+    const sick = me?.types?.find((t) => t.statutory === 'wa_sick')
+    check('my leave lists the kinds of leave and a sick balance', r.status === 200 && Boolean(sick) && me.balances.some((b) => b.leaveTypeId === sick.id), JSON.stringify(me))
+    r = await call('POST', '/me/leave/notice', { token: lv, body: {} })
+    check('the sick-leave notice can be acknowledged', r.status === 200 && Boolean(r.json?.noticeAckAt))
+
+    // A day a month out, Monday to Friday, so it does not clash with anything today.
+    let day = new Date(Date.now() + 35 * 86_400_000)
+    while ([0, 6].includes(day.getUTCDay())) day = new Date(day.getTime() + 86_400_000)
+    const d1 = day.toISOString().slice(0, 10)
+    r = await call('POST', '/leave/requests', { token: lv, body: { personId: lvId, leaveTypeId: sick.id, startDate: d1, endDate: d1, hoursPerDay: 8 } })
+    check('sick leave with no balance is refused', r.status === 409 && r.json?.error?.code === 'leave_balance_short', JSON.stringify(r.json))
+    r = await call('POST', '/leave/adjustments', { token: admin, body: { personId: lvId, leaveTypeId: sick.id, hours: 16 } })
+    check('a balance change needs a note', r.status === 400)
+    r = await call('POST', '/leave/adjustments', { token: admin, body: { personId: lvId, leaveTypeId: sick.id, hours: 16, note: 'Smoke test' } })
+    check('add hours by hand with a note', r.status === 201 && r.json?.entry?.hours === 16, JSON.stringify(r.json))
+    r = await call('POST', '/leave/adjustments', { token: lv, body: { personId: lvId, leaveTypeId: sick.id, hours: 100, note: 'mine' } })
+    check('a tech cannot change balances', r.status === 403)
+    r = await call('POST', '/leave/requests', { token: lv, body: { personId: lvId, leaveTypeId: sick.id, startDate: d1, endDate: d1, hoursPerDay: 8, note: 'flu' } })
+    const req1 = r.json?.request
+    check('ask for a sick day', r.status === 201 && req1?.status === 'pending' && req1?.hours === 8, JSON.stringify(r.json))
+    check('no reason is kept for sick leave', !req1?.note, JSON.stringify(req1?.note))
+    r = await call('POST', '/leave/requests', { token: lv, body: { personId: lvId, leaveTypeId: sick.id, startDate: d1, endDate: d1, hoursPerDay: 8 } })
+    check('the same day twice is refused', r.status === 409 && r.json?.error?.code === 'leave_overlap', JSON.stringify(r.json))
+    r = await call('POST', `/leave/requests/${req1?.id}/approve`, { token: lv, body: {} })
+    check('nobody approves their own leave', r.status === 403 || r.json?.error?.code === 'own_leave', JSON.stringify(r.json))
+    r = await call('POST', `/leave/requests/${req1?.id}/approve`, { token: lead, body: {} })
+    check('a crew lead cannot approve leave', Boolean(lead) && r.status === 403, JSON.stringify(r.json))
+    r = await call('POST', `/leave/requests/${req1?.id}/approve`, { token: admin, body: {} })
+    check('a manager approves it', r.status === 200 && r.json?.request?.status === 'approved', JSON.stringify(r.json))
+    r = await call('GET', `/people/${lvId}/leave/balances`, { token: admin })
+    const bal = r.json?.data?.find((b) => b.leaveTypeId === sick.id)
+    check('the approved day comes off the balance', bal?.balance === 8, JSON.stringify(r.json))
+    r = await call('POST', `/leave/requests/${req1?.id}/cancel`, { token: lv, body: {} })
+    check('cancel leave that has not started', r.status === 200 && r.json?.request?.status === 'cancelled', JSON.stringify(r.json))
+    r = await call('GET', `/people/${lvId}/leave/balances`, { token: admin })
+    check('cancelling puts the hours back', r.json?.data?.find((b) => b.leaveTypeId === sick.id)?.balance === 16, JSON.stringify(r.json))
+
+    // On the board as off today (approved by the office, then taken back).
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: process.env.COMPANY_TIMEZONE || 'America/Los_Angeles' })
+    r = await call('POST', '/leave/requests', { token: admin, body: { personId: lvId, leaveTypeId: sick.id, startDate: today, endDate: today, hoursPerDay: 4, includeWeekends: true, approve: true } })
+    const req2 = r.json?.request
+    check('the office records a call-in sick day, approved at once', r.status === 201 && req2?.status === 'approved', JSON.stringify(r.json))
+    r = await call('GET', '/board', { token: admin })
+    const row = r.json?.rows?.find((x) => x.personId === lvId)
+    check('the board shows them off, as "Leave" with no reason', row?.off?.leaveType === 'Leave' && row?.off?.hours === 4, JSON.stringify(row))
+    r = await call('POST', `/leave/requests/${req2?.id}/cancel`, { token: admin, body: {} })
+    check('the office can take back leave that has started', r.status === 200 && r.json?.request?.status === 'cancelled', JSON.stringify(r.json))
+    r = await call('POST', `/leave/requests/${req1?.id}/deny`, { token: admin, body: {} })
+    check('a closed request cannot be decided again', r.status === 409 || r.status === 400, JSON.stringify(r.json))
+
+    // Accrual (dry run only: writes nothing) and the opening-balance importer (preview only).
+    const twoDays = new Date(Date.now() - 2 * 86_400_000).toISOString().slice(0, 10)
+    r = await call('POST', '/leave/accruals/run', { token: admin, body: { from: twoDays, to: twoDays, dryRun: true } })
+    check('accrual dry run answers per person', r.status === 200 && Array.isArray(r.json?.people), JSON.stringify(r.json).slice(0, 300))
+    const csv = `Employee,Email,Sick balance\nSmoke Leave,${lvEmail},12.5\nNobody Here Smoke,,3\n`
+    r = await call('POST', '/leave/import/preview', { token: admin, body: { fileName: 'balances.csv', contentBase64: Buffer.from(csv).toString('base64') } })
+    const rows = r.json?.rows ?? []
+    check(
+      'import preview matches by email and flags who it cannot find',
+      r.status === 200 && rows[0]?.personId === lvId && rows[0]?.balances?.[0]?.hours === 12.5 && rows[1]?.match === 'none' && r.json?.ready === false,
+      JSON.stringify(r.json).slice(0, 400),
+    )
+    r = await call('POST', '/leave/import/preview', { token: lv, body: { fileName: 'balances.csv', contentBase64: Buffer.from(csv).toString('base64') } })
+    check('a tech cannot import balances', r.status === 403)
+
+    for (const e of [lvEmail, leadEmail]) await call('PUT', `/people/by-email/${encodeURIComponent(e)}`, { token: admin, body: { active: false } })
+  }
+
   // Clean up.
   await call('PUT', `/people/by-email/${encodeURIComponent(testEmail)}`, { token: key, body: { active: false } })
   await call('PUT', `/people/by-email/${encodeURIComponent(crewEmail)}`, { token: key, body: { active: false } })
