@@ -47,6 +47,7 @@ import { DayTimeline, jobColor, MODE_INFO, ModePicker, readMode, writeMode } fro
 import { ExpenseDialog } from './Expenses'
 import { ContactLine, NewClientDialog } from './NewClient'
 import { applyDecision, CloseOutDialog, DecisionBox, OpenItemsCard, type Decision } from './items'
+import { FixTimeLine } from './Requests'
 
 // The clock screen. After sign-in the person picks what the day is: Install,
 // Service, Office or Shop (kept on this phone for the day). Each mode offers its own
@@ -373,6 +374,14 @@ export default function PunchPage({ canCrew = false, meId = '', meName = '' }: {
   // Bench Repair, clock in / clock out only (Zach's team, 2026-11-02): one button, no
   // tickets, tasks, notes, expenses or open items. The full version stays behind the
   // switch in Manage > Phases.
+  // A start time can be fixed where the person clocked in, not where they switched from
+  // one job or phase to the next (moving that edge would overlap the segment before).
+  const clockedIn = (p: Segment) => !state.today.some((t) => t.id !== p.id && t.clockOut && new Date(t.clockOut).getTime() === new Date(p.clockIn).getTime())
+  const fixStart = (p: Segment) =>
+    clockedIn(p) ? <FixTimeLine key={`in-${p.id}`} punch={p} side="start" pending={state.pendingChanges} onSent={() => void load()} /> : null
+  const fixEnd = (p: Segment | null | undefined) =>
+    p?.clockOut ? <FixTimeLine key={`out-${p.id}`} punch={p} side="end" pending={state.pendingChanges} onSent={() => void load()} /> : null
+
   const bench = state.bench
   if (mode === 'bench' && bench?.clockOnly && (!state.open || state.open.job.code === BENCH_CODE)) {
     const benchOpen = state.open
@@ -407,6 +416,7 @@ export default function PunchPage({ canCrew = false, meId = '', meName = '' }: {
               {benchOpen ? fmtElapsed(benchOpen.clockIn, now) : now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
             </Typography>
             {benchOpen && <Typography color="text.secondary">Clocked in at {fmtTime(benchOpen.clockIn)}</Typography>}
+            {benchOpen ? fixStart(benchOpen) : fixEnd(state.lastSegment)}
           </Stack>
         </Paper>
         {error && <Alert severity="error">{error}</Alert>}
@@ -507,6 +517,7 @@ export default function PunchPage({ canCrew = false, meId = '', meName = '' }: {
               <Typography color="text.secondary">
                 {open.phase?.name ?? 'No phase'} · since {fmtTime(open.clockIn)} · {fmtElapsed(open.clockIn, now)}
               </Typography>
+              {fixStart(open)}
               {open.notes && (
                 <Typography variant="body2" color="text.secondary">
                   {open.notes}
@@ -516,9 +527,17 @@ export default function PunchPage({ canCrew = false, meId = '', meName = '' }: {
               <ContactLine job={open.job} />
             </Box>
           ) : (
-            <Typography variant="h5" sx={{ fontWeight: 700 }}>
-              {now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
-            </Typography>
+            <Box>
+              <Typography variant="h5" sx={{ fontWeight: 700 }}>
+                {now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+              </Typography>
+              {state.lastSegment?.clockOut && (
+                <Typography variant="body2" color="text.secondary">
+                  Clocked out at {fmtTime(state.lastSegment.clockOut)}
+                </Typography>
+              )}
+              {fixEnd(state.lastSegment)}
+            </Box>
           )}
 
           {open && phaseIndex >= 0 && flowPhases.length > 1 && <PhaseTrack phases={flowPhases} current={phaseIndex} />}

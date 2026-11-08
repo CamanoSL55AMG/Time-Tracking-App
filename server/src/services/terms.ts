@@ -140,6 +140,7 @@ export function decideAccept(manifest: Manifest, accepted: Accepted[], body: { d
 // ─── The gate ───────────────────────────────────────────────────────────────
 
 // Paths under /api/v1 a signed-in person may use before accepting: signing in, who am I,
+// changing their password (a password an admin set is changed first, then the terms),
 // the terms themselves, and what is public anyway. Signing out needs no call (the app
 // drops its session token).
 const EXEMPT = new Set([
@@ -153,6 +154,7 @@ const EXEMPT = new Set([
   '/auth/google',
   '/auth/sso',
   '/auth/me',
+  '/auth/password',
   '/terms/status',
   '/terms/accept',
 ])

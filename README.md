@@ -13,6 +13,16 @@ server/   Express + TypeScript + Prisma + PostgreSQL — the API at /api/v1     
 ## What works today
 
 - Sign-in by email and password, and one-click sign-in from GED (`/sso?token=…`).
+- Admins set or replace anyone's password from Manage → People (Password button), with a
+  built-in generator like Bitwarden's: length, A-Z / a-z / 0-9 / special toggles, avoid
+  ambiguous characters, Copy.
+- A password an admin sets must be changed at the person's next sign-in: until they pick
+  their own (different from the one they were given), the app shows only a "Set your own
+  password" screen and the API answers `403 password_change_required` to everything but
+  `/auth/*`. The admin can untick this in the Password dialog. People who were already
+  set up are not flagged; to flag one, set them a new password with the box ticked
+  (or send `mustChangePassword: true` to `PUT /people/by-email/:email` as a signed-in admin).
+  From the server console: `npm run reset-password -- --email <address> --must-change`.
 - **Sign in with Dashboard**: GED is the sign-in service for every add-on
   (`DASHBOARD-SIGN-IN.md` in the GED repo). Set up with GED's `npm run oidc:client`.
 - Clock in, Next phase, Switch job, Clock out. Each punch is stamped with the phone's
@@ -65,6 +75,33 @@ server/   Express + TypeScript + Prisma + PostgreSQL — the API at /api/v1     
   none. Weeks not approved yet come back under `notReady`. AIC Accounting imports it.
   **Off** unless `PAYROLL_EXPORT_ENABLED=true` in `server/.env`. Needs the
   `payroll:read` scope (payroll and admin roles, or an API key).
+
+- **Time off** (name menu → Time off; **off** unless `LEAVE_ENABLED=true`): balances,
+  asking for leave, approval by managers, admin and payroll (never your own), team
+  balances, policies, accrual per pay period from approved hours, and the opening-balance
+  import from the finance spreadsheet. Approved paid leave goes into the payroll export
+  and shows as "Off" on the board. Details in TIME-TRACKING-APP.md section 7.
+
+- **Payroll report** (name menu → Payroll report, payroll and admin roles): pick last
+  or this pay period (1st to 15th, 16th to month end) or any dates, run it, and see
+  each person's regular, overtime and total hours by labor category, with totals.
+  Download CSV or print. Anyone whose week isn't approved yet is listed as not ready.
+  `GET /api/v1/payroll/periods` gives this and last period in company time.
+
+- **Approve any time**: approvers can sign off a week before it is over, through any
+  day that has ended (Review → "Approve through", or `through` on
+  `POST /timesheets/approve`). So a week that crosses the 15th or month end is paid
+  for its days in the period on time. Approved days lock until the week is reopened
+  (with a reason, kept in the audit trail); the later days stay open and show as not
+  ready in the payroll report until they are approved too. Overtime is split in the
+  order worked, so the approved days pay the same as they will once the week ends.
+
+- **On/off from AIC Control Tower**: the Tower's Manifest has a Logbook switch per
+  company. With `TOWER_URL` and `TOWER_TOKEN` set (plus `TOWER_ACCESS_ID` / `TOWER_ACCESS_SECRET`
+  while the Tower sits behind Cloudflare Access), Logbook checks it every minute; when
+  it is OFF, sign-in and the API answer 403 `app_off` with a plain message (the sign-in
+  page shows it, and punches waiting on a phone stay queued). If the Tower can't be
+  reached, Logbook stays ON and logs a warning. `GET /api/v1/health` shows the switch.
 
 - **First sign-in terms** (built 2026-11-04). The first time someone signs in, the app
   shows the Logbook Privacy Policy, then the Logbook EULA, then the AIC Platform Terms,
@@ -168,6 +205,15 @@ npm run link-ged      # creates GED's key and writes it into GED's server\.env
 
 Then restart GED's server. GED pushes its active projects as jobs and today's job
 calendar as assignments, and its title-bar clock punches through this app.
+
+AIC Terminal (GED) is where people are enrolled. Its Users page turns Logbook on or off
+for each person and sets their Logbook role (tech, crew lead, manager, payroll or admin);
+its key carries `people:roles` so it can set admins too. An older GED key gets that scope
+without being replaced:
+
+```powershell
+npm run grant-ged-scopes   # adds any missing scope to the GED key in use; GED needs no restart
+```
 
 ## Linking another app
 

@@ -9,7 +9,7 @@ import { Prisma } from '@prisma/client'
 import { assertConfig, config } from './config.js'
 import { prisma } from './db.js'
 import { ApiError } from './errors.js'
-import { authenticate, rateLimit } from './auth/middleware.js'
+import { authenticate, passwordChangeGate, rateLimit } from './auth/middleware.js'
 import { logTermsAtStart, termsGate } from './auth/termsGate.js'
 import { authRouter } from './routes/auth.js'
 import { peopleRouter } from './routes/people.js'
@@ -22,6 +22,9 @@ import { expensesRouter } from './routes/expenses.js'
 import { itemsRouter } from './routes/items.js'
 import { payrollRouter } from './routes/payroll.js'
 import { termsRouter } from './routes/terms.js'
+import { leaveRouter } from './routes/leave.js'
+import { logbookSwitch, startTowerSwitch } from './services/tower.js'
+import { startRecurringExpenses } from './services/recurringExpenses.js'
 
 assertConfig()
 logTermsAtStart()
@@ -49,11 +52,15 @@ if (config.corsOrigins.length) {
 }
 // Receipt photos come up as base64 JSON; everything else stays small.
 app.use(/^\/api\/v1\/me\/expenses\/[^/]+\/receipt$/, express.json({ limit: '9mb' }))
+// The finance spreadsheet for opening leave balances comes up as base64 JSON too.
+app.use(/^\/api\/v1\/leave\/import\/(preview|commit)$/, express.json({ limit: '6mb' }))
 app.use(express.json({ limit: '1mb' }))
 
 // ─── API v1 ─────────────────────────────────────────────────────────────────
 const v1 = express.Router()
+v1.use(logbookSwitch) // AIC Control Tower on/off; fails open (services/tower.ts)
 v1.use(authenticate)
+v1.use(passwordChangeGate) // a password an admin set must be changed first
 v1.use(rateLimit)
 // First sign-in terms: a signed-in person who has not accepted every document only
 // reaches sign-in, /auth/me and /terms/* (off unless TERMS_GATE_ENABLED).
@@ -69,6 +76,7 @@ v1.use(timesheetsRouter)
 v1.use(expensesRouter)
 v1.use(itemsRouter)
 v1.use(payrollRouter)
+v1.use(leaveRouter)
 v1.use((req, _res, next) => next(new ApiError(404, 'not_found', `No such endpoint: ${req.method} ${req.originalUrl}`)))
 app.use('/api/v1', v1)
 app.use('/api', (req, _res, next) => next(new ApiError(404, 'not_found', `No such endpoint: ${req.method} ${req.originalUrl}. The API lives under /api/v1.`)))
@@ -120,6 +128,8 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
 
 const server = app.listen(config.port, () => {
   console.log(`Time Tracking API on http://localhost:${config.port}  (docs: /api/v1/docs)`)
+  startTowerSwitch()
+  startRecurringExpenses(config.recurringCheckMinutes)
 })
 
 const shutdown = () => {

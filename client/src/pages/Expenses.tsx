@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   Alert,
-  Autocomplete,
   Box,
   Button,
   Chip,
@@ -21,6 +20,8 @@ import {
   Typography,
 } from '@mui/material'
 import { api, errorText, fmtDay, fmtMoney, type Expense, type ExpenseBody, type ExpenseCategory, type ExpenseStatus, type ExpenseTotals, type Job } from '../api'
+import { JobSearch, jobLabel } from '../components/JobSearch'
+import { RecurringSection } from './RecurringExpenses'
 
 // Expenses and mileage. Added from the clock screen onto the current flight (the
 // job you are clocked into), or here on their own against any job or none. Each line
@@ -40,7 +41,6 @@ const monthStart = (ymd: string, back = 0) => {
   d.setUTCMonth(d.getUTCMonth() - back)
   return d.toISOString().slice(0, 10)
 }
-const jobLabel = (j: { name: string; code: string; kind?: string }) => (j.code && !j.name.includes(j.code) && j.kind !== 'shop' ? `${j.code} ${j.name}` : j.name)
 
 /** A phone photo shrunk to a sensible receipt size (long side 1600 px, JPEG). PDFs pass through. */
 async function readReceipt(file: File): Promise<{ type: string; data: string; preview: string | null }> {
@@ -233,18 +233,7 @@ export function ExpenseDialog({
                 {flight.jobName}
               </Typography>
             )}
-            {chargeTo === 'job' && (
-              <Autocomplete
-                sx={{ mt: 1 }}
-                options={jobs}
-                value={job}
-                onChange={(_, v) => setJob(v)}
-                getOptionLabel={jobLabel}
-                isOptionEqualToValue={(a, b) => a.id === b.id}
-                groupBy={(j) => ({ project: 'Projects', service: 'Service calls', visit: 'Site visits', shop: 'Shop', repair: 'Repair tickets', other: 'Office' })[j.kind] ?? 'Other'}
-                renderInput={(params) => <TextField {...params} label="Job" placeholder="Search by name or number" />}
-              />
-            )}
+            {chargeTo === 'job' && <JobSearch jobs={jobs} value={job} onChange={setJob} />}
           </Box>
 
           {!mileage && (
@@ -337,6 +326,11 @@ export function ExpenseLine({ e, showPerson = false, onOpen, actions }: { e: Exp
             {e.paidBy === 'company_card' ? ' · company card' : ''}
             {e.notes ? ` · ${e.notes}` : ''}
           </Typography>
+          {e.recurringExpenseId && (
+            <Typography variant="caption" color="primary.main" component="div">
+              Monthly repeat{e.hasReceipt ? '' : ' · no receipt needed'}
+            </Typography>
+          )}
           {e.status === 'rejected' && e.decisionNote && (
             <Typography variant="caption" color="error.main" component="div">
               {e.decisionNote}
@@ -415,6 +409,8 @@ export default function ExpensesPage() {
           Add expense
         </Button>
       </Stack>
+
+      <RecurringSection onLinesAdded={() => void load()} />
 
       <Stack direction="row" alignItems="center" spacing={1}>
         <Button size="small" onClick={() => setBack(back + 1)}>

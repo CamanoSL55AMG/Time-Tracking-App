@@ -28,6 +28,7 @@ export default function Login({ notice, onSignedIn }: { notice?: string; onSigne
   const [busy, setBusy] = useState(false)
   const [googleClientId, setGoogleClientId] = useState<string | null>(null)
   const [dashboard, setDashboard] = useState(false)
+  const [switchedOff, setSwitchedOff] = useState<string | null>(null)
   const googleBox = useRef<HTMLDivElement>(null)
   // The parent passes a new function each render; keep the latest without re-drawing Google's button.
   const signedIn = useRef(onSignedIn)
@@ -43,6 +44,7 @@ export default function Login({ notice, onSignedIn }: { notice?: string; onSigne
       .then((c) => {
         setGoogleClientId(googleUsable ? c.googleClientId : null)
         setDashboard(Boolean(c.dashboard))
+        setSwitchedOff(c.switchedOff ?? null)
       })
       .catch(() => setGoogleClientId(null))
   }, [googleUsable])
@@ -106,6 +108,7 @@ export default function Login({ notice, onSignedIn }: { notice?: string; onSigne
                 AIC Terminal time tracking. Sign in to clock in.
               </Typography>
             </Box>
+            {switchedOff && <Alert severity="warning">{switchedOff}</Alert>}
             {dashboard && (
               <>
                 {/* One sign-in for the Dashboard and every add-on (GED's DASHBOARD-SIGN-IN.md) */}

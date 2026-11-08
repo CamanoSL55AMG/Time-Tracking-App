@@ -35,6 +35,12 @@ async function call(method, path, { token, body, headers } = {}) {
   return { status: res.status, json, headers: res.headers }
 }
 
+/** Accept every pending terms document for this session, in order (smoke's own throwaway people only). */
+async function acceptAllTerms(token) {
+  const s = (await call('GET', '/terms/status', { token })).json
+  for (const d of s?.pending ?? []) await call('POST', '/terms/accept', { token, body: { documentId: d.id, version: d.version } })
+}
+
 const stamp = Date.now().toString(36)
 const testEmail = `smoke-${stamp}@example.invalid`
 const minutesAgo = (m) => new Date(Date.now() - m * 60_000).toISOString()
@@ -42,6 +48,8 @@ const minutesAgo = (m) => new Date(Date.now() - m * 60_000).toISOString()
 try {
   let r = await call('GET', '/health')
   check('health', r.status === 200 && r.json?.ok === true, JSON.stringify(r.json))
+  // AIC Control Tower switch: smoke needs Logbook ON (or the Tower not configured / unreachable = fail open).
+  check('control tower switch reported and ON', r.json?.tower?.logbookOn === true, JSON.stringify(r.json?.tower))
 
   r = await call('GET', '/me/state')
   check('anonymous call is refused with 401', r.status === 401 && r.json?.error?.code === 'unauthorized')
@@ -102,6 +110,21 @@ try {
   check('create person by email', r.status === 200 && r.json?.created === true, JSON.stringify(r.json))
   r = await call('PUT', `/people/by-email/${encodeURIComponent(testEmail)}`, { token: key, body: { role: 'admin' } })
   check('a key cannot make an admin', r.status === 403)
+
+  // AIC Terminal's key carries people:roles: it can make and unmake admins.
+  r = await call('POST', '/api-keys', { token: admin, body: { name: `smoke roles ${stamp}`, scopes: ['people:read', 'people:write', 'people:roles'] } })
+  check('create a key with people:roles', r.status === 201, JSON.stringify(r.json))
+  const rolesKey = r.json?.key
+  const rolesKeyId = r.json?.apiKey?.id
+  r = await call('PUT', `/people/by-email/${encodeURIComponent(testEmail)}`, { token: rolesKey, body: { role: 'admin' } })
+  check('a people:roles key can make an admin', r.status === 200 && r.json?.person?.role === 'admin', JSON.stringify(r.json))
+  r = await call('PUT', `/people/by-email/${encodeURIComponent(testEmail)}`, { token: rolesKey, body: { role: 'payroll' } })
+  check('a people:roles key can take admin away', r.status === 200 && r.json?.person?.role === 'payroll', JSON.stringify(r.json))
+  r = await call('PUT', `/people/by-email/${encodeURIComponent(testEmail)}`, { token: rolesKey, body: { password: 'not-allowed-123' } })
+  check('a people:roles key still cannot set a password', r.status === 403)
+  r = await call('PUT', `/people/by-email/${encodeURIComponent(testEmail)}`, { token: rolesKey, body: { role: 'tech' } })
+  check('a people:roles key sets an ordinary role', r.status === 200 && r.json?.person?.role === 'tech')
+  if (rolesKeyId) await call('DELETE', `/api-keys/${rolesKeyId}`, { token: admin })
 
   const as = { 'X-Act-As': testEmail }
   r = await call('POST', '/punches/in', { token: key, body: { jobId } })
@@ -182,10 +205,28 @@ try {
   r = await call('PUT', `/people/by-email/${encodeURIComponent(testEmail)}`, { token: key, body: { password: techPw } })
   check('a key cannot set a password', r.status === 403)
   r = await call('PUT', `/people/by-email/${encodeURIComponent(testEmail)}`, { token: admin, body: { password: techPw } })
-  check('an admin sets a password', r.status === 200)
+  check('an admin sets a password, and they must change it', r.status === 200 && r.json?.person?.mustChangePassword === true)
   r = await call('POST', '/auth/login', { body: { email: testEmail, password: techPw } })
   const tech = r.json?.token
-  check('the tech signs in', r.status === 200 && r.json?.person?.role === 'tech')
+  check('the tech signs in', r.status === 200 && r.json?.person?.role === 'tech' && r.json?.person?.mustChangePassword === true)
+  // First sign-in: nothing but "who am I" and "change password" until they pick their own.
+  r = await call('GET', '/me/state', { token: tech })
+  check('a password change is required before anything else', r.status === 403 && r.json?.error?.code === 'password_change_required', JSON.stringify(r.json))
+  r = await call('GET', '/auth/me', { token: tech })
+  check('who-am-I still answers while the change is due', r.status === 200 && r.json?.person?.mustChangePassword === true)
+  if (termsOn) {
+    r = await call('GET', '/terms/status', { token: tech })
+    check('the new password comes before the terms', r.status === 403 && r.json?.error?.code === 'password_change_required', JSON.stringify(r.json))
+  }
+  r = await call('POST', '/auth/password', { token: tech, body: { current: techPw, next: techPw } })
+  check('the new password must differ from the one the admin set', r.status === 400)
+  const techPw2 = `pw-${randomBytes(9).toString('base64url')}`
+  r = await call('POST', '/auth/password', { token: tech, body: { current: techPw, next: techPw2 } })
+  check('the tech picks their own password', r.status === 200)
+  r = await call('GET', '/auth/me', { token: tech })
+  check('the change clears the flag', r.status === 200 && r.json?.person?.mustChangePassword === false)
+  r = await call('PUT', `/people/by-email/${encodeURIComponent(testEmail)}`, { token: key, body: { mustChangePassword: true } })
+  check('a key cannot flag someone to change their password', r.status === 403)
 
   // The throwaway tech meets the terms on first sign-in (when the gate is on).
   {
@@ -280,10 +321,23 @@ try {
   check('a tech cannot approve', r.status === 403)
   r = await call('GET', '/timesheets', { token: tech })
   check('a tech cannot see everyone\'s week', r.status === 403)
-  r = await call('POST', '/timesheets/approve', { token: admin, body: { personIds: [row?.personId] } })
-  check('a week that is not over cannot be approved', r.status === 409 && r.json?.error?.code === 'week_not_over')
+  r = await call('POST', '/timesheets/approve', { token: admin, body: { personIds: [row?.personId], through: ymd(new Date()) } })
+  check('today cannot be approved until it is over', r.status === 409 && r.json?.error?.code === 'day_not_over', JSON.stringify(r.json))
+  // Approvers can sign off any time: approve last week only through the day before
+  // the punch. That day isn't paid yet and still takes punches.
+  r = await call('POST', '/timesheets/approve', { token: admin, body: { personIds: [crewId], week: lastWeek, through: ymd(new Date(t0.getTime() - 86_400_000)) } })
+  check('part of a week can be approved early', r.status === 200 && r.json?.approved === 1, JSON.stringify(r.json))
+  r = await call('GET', `/timesheets/${crewId}?week=${lastWeek}`, { token: admin })
+  check('a part-week approval says through which day', r.json?.partlyApproved === true && r.json?.approvedThrough < lastWeek, JSON.stringify(r.json?.approvedThrough))
+  r = await call('GET', `/payroll/labor?from=${lastWeek}&to=${lastWeek}`, { token: admin })
+  if (r.status === 200) {
+    const waiting = r.json?.notReady?.find((n) => n.personId === crewId)
+    check('a day after a part-week approval waits as not ready', !r.json?.lines?.some((l) => l.personId === crewId) && waiting?.approvedThrough < lastWeek, JSON.stringify(r.json?.notReady))
+  }
   r = await call('POST', '/timesheets/approve', { token: admin, body: { personIds: [crewId], week: lastWeek } })
   check('approve last week', r.status === 200 && r.json?.approved === 1, JSON.stringify(r.json))
+  r = await call('GET', `/timesheets/${crewId}?week=${lastWeek}`, { token: admin })
+  check('approving again covers the whole week', r.json?.partlyApproved === false && r.json?.status === 'approved', JSON.stringify(r.json?.approvedThrough))
   // Payroll labor export: approved weeks only, off unless PAYROLL_EXPORT_ENABLED=true.
   r = await call('GET', `/payroll/labor?from=${lastWeek}&to=${lastWeek}`, { token: tech })
   check('a tech cannot read the payroll export', r.status === 403)
@@ -297,6 +351,28 @@ try {
     )
   } else {
     check('payroll export is off until turned on', r.status === 403 && r.json?.error?.code === 'payroll_export_off', JSON.stringify(r.json))
+  }
+  r = await call('GET', '/payroll/periods', { token: admin })
+  check(
+    'pay periods are the 1st to the 15th and the 16th to month end',
+    r.status === 200 && /-(01|16)$/.test(r.json?.current?.from ?? '') && /-(01|16)$/.test(r.json?.previous?.from ?? '') && typeof r.json?.exportEnabled === 'boolean',
+    JSON.stringify(r.json),
+  )
+  r = await call('GET', '/payroll/periods', { token: tech })
+  check('a tech cannot read the pay periods', r.status === 403)
+  // 1099 contractors: off unless CONTRACTORS_ENABLED=true.
+  {
+    const subEmail = `smoke-1099-${Date.now()}@example.invalid`
+    r = await call('PUT', `/people/by-email/${encodeURIComponent(subEmail)}`, { token: admin, body: { name: 'Smoke Contractor', workerType: 'contractor' } })
+    if (/^(1|true|yes|on)$/i.test(process.env.CONTRACTORS_ENABLED ?? '')) {
+      check('a person can be added as a 1099 contractor', r.status === 200 && r.json?.person?.workerType === 'contractor', JSON.stringify(r.json))
+      r = await call('PUT', `/people/by-email/${encodeURIComponent(subEmail)}`, { token: admin, body: { workerType: 'employee', workerTypeFrom: lastWeek } })
+      check('a contractor can become an employee from a day', r.status === 200 && r.json?.person?.workerType === 'employee' && r.json?.person?.workerTypeFrom === lastWeek, JSON.stringify(r.json))
+      r = await call('PUT', `/people/by-email/${encodeURIComponent(subEmail)}`, { token: admin, body: { workerType: 'w2' } })
+      check('only employee or contractor is a worker type', r.status === 400, JSON.stringify(r.json))
+    } else {
+      check('the worker type cannot be set while contractors are off', r.status === 403 && r.json?.error?.code === 'contractors_off', JSON.stringify(r.json))
+    }
   }
   r = await call('PATCH', `/punches/${oldId}`, { token: key, body: { notes: 'after approval', reason: 'smoke' } })
   check('an approved week refuses corrections', r.status === 409 && r.json?.error?.code === 'week_approved', JSON.stringify(r.json))
@@ -326,8 +402,25 @@ try {
   check('a tech cannot approve a change request', r.status === 403)
   r = await call('GET', '/requests?status=pending', { token: admin })
   check('supervisors see waiting requests', r.status === 200 && r.json?.data?.some((x) => x.id === reqId))
-  r = await call('POST', `/requests/${reqId}/approve`, { token: admin, body: {} })
-  check('approve the change', r.status === 200 && r.json?.request?.status === 'approved', JSON.stringify(r.json))
+  {
+    // Time fixes are approved by managers, admins and payroll, not crew leads (Art, 2026-11-04).
+    const pw = () => `pw-${randomBytes(9).toString('base64url')}`
+    const leadEmail = `smoke-lead-${stamp}@example.invalid`
+    const leadPw = pw()
+    await call('PUT', `/people/by-email/${encodeURIComponent(leadEmail)}`, { token: admin, body: { name: 'Smoke Lead', role: 'lead', password: leadPw, mustChangePassword: false } })
+    const lead = (await call('POST', '/auth/login', { body: { email: leadEmail, password: leadPw } })).json?.token
+    if (termsOn) await acceptAllTerms(lead) // so the 403 below is the role, not the terms
+    r = await call('POST', `/requests/${reqId}/approve`, { token: lead, body: {} })
+    check('a crew lead cannot approve a time fix', Boolean(lead) && r.status === 403, JSON.stringify(r.json))
+    const payEmail = `smoke-payroll-${stamp}@example.invalid`
+    const payPw = pw()
+    await call('PUT', `/people/by-email/${encodeURIComponent(payEmail)}`, { token: admin, body: { name: 'Smoke Payroll', role: 'payroll', password: payPw, mustChangePassword: false } })
+    const pay = (await call('POST', '/auth/login', { body: { email: payEmail, password: payPw } })).json?.token
+    if (termsOn) await acceptAllTerms(pay)
+    r = await call('POST', `/requests/${reqId}/approve`, { token: pay, body: {} })
+    check('payroll approves the change', Boolean(pay) && r.status === 200 && r.json?.request?.status === 'approved', JSON.stringify(r.json))
+    for (const email of [leadEmail, payEmail]) await call('PUT', `/people/by-email/${encodeURIComponent(email)}`, { token: admin, body: { active: false } })
+  }
   r = await call('GET', `/punches/${oldId}`, { token: key })
   const lastEdit = r.json?.punch?.edits?.at(-1)
   check(
@@ -354,6 +447,27 @@ try {
   check('approve missing time', r.status === 200 && r.json?.request?.status === 'approved', JSON.stringify(r.json))
   r = await call('GET', `/timesheets/${crewId}?week=${lastWeek}`, { token: admin })
   check('the week adds up after the changes', Math.abs((r.json?.hours ?? 0) - 13) < 0.02 && r.json?.requests?.length === 4, `hours=${r.json?.hours} requests=${r.json?.requests?.length}`)
+
+  // What a person can still ask about: not the future, not older than CHANGE_REQUEST_DAYS,
+  // not an approved week. The clock screen shows fixes waiting for a supervisor.
+  r = await call('POST', '/me/requests', { token: key, headers: asB, body: { punchId: oldId, clockOut: new Date(Date.now() + 3 * H).toISOString(), reason: 'smoke: future' } })
+  check('a change cannot be for time that has not happened', r.status === 400, JSON.stringify(r.json))
+  const reqDays = Number(process.env.CHANGE_REQUEST_DAYS ?? 21)
+  if (reqDays > 0) {
+    const old = new Date(Date.now() - (reqDays + 3) * 86_400_000)
+    r = await call('POST', '/me/requests', { token: key, headers: asB, body: { clockIn: old.toISOString(), clockOut: new Date(old.getTime() + H).toISOString(), jobId, reason: 'smoke: old' } })
+    check('time older than the request window goes to a supervisor', r.status === 409 && r.json?.error?.code === 'too_old', JSON.stringify(r.json))
+  }
+  r = await call('POST', '/me/requests', { token: key, headers: asB, body: { punchId: oldId, notes: 'smoke: waiting', reason: 'smoke: shows on the clock screen' } })
+  const waitId = r.json?.request?.id
+  r = await call('GET', '/me/state', { token: key, headers: asB })
+  check('the clock screen lists fixes waiting for a supervisor', r.status === 200 && r.json?.pendingChanges?.some((c) => c.id === waitId && c.punchId === oldId), JSON.stringify(r.json?.pendingChanges ?? r.json))
+  await call('POST', `/me/requests/${waitId}/withdraw`, { token: key, headers: asB })
+  r = await call('POST', '/timesheets/approve', { token: admin, body: { personIds: [crewId], week: lastWeek } })
+  check('approve the corrected week', r.status === 200 && r.json?.approved === 1, JSON.stringify(r.json))
+  r = await call('POST', '/me/requests', { token: key, headers: asB, body: { punchId: oldId, notes: 'too late', reason: 'smoke: approved week' } })
+  check('no change requests into an approved week', r.status === 409 && r.json?.error?.code === 'week_approved', JSON.stringify(r.json))
+  await call('POST', '/timesheets/reopen', { token: admin, body: { personId: crewId, week: lastWeek, reason: 'smoke: reopen after request checks' } })
 
   // A tech adds a new client in the field (Service Call or Site Visit), then switches onto it.
   {
@@ -659,8 +773,141 @@ try {
   await call('DELETE', `/me/expenses/${own?.id}`, { token: admin })
   r = await call('DELETE', `/me/expenses/${exp2?.id}`, { token: key, headers: expAs })
   check('remove an expense that is not approved', r.status === 200)
+
+  // Monthly repeats: set up on day 1 (always come), this month's line is added once,
+  // a re-run adds nothing, it waits for approval like any line, pause / resume / stop.
+  r = await call('POST', '/me/recurring-expenses', { token: key, headers: expAs, body: { categoryId: mileCat?.id, amount: 40, dayOfMonth: 1 } })
+  check('mileage cannot repeat monthly', r.status === 400, JSON.stringify(r.json))
+  r = await call('POST', '/me/recurring-expenses', { token: key, headers: expAs, body: { categoryId: amountCat?.id, amount: 40, dayOfMonth: 1, startMonth: '2020-01' } })
+  check('a repeat cannot start in an earlier month', r.status === 400, JSON.stringify(r.json))
+  r = await call('POST', '/me/recurring-expenses', { token: key, headers: expAs, body: { categoryId: amountCat?.id, amount: 40, dayOfMonth: 1, vendor: 'Smoke phone', notes: 'Cell phone' } })
+  const rep = r.json?.recurring
+  const repLine = r.json?.added?.[0]
+  check(
+    'set up a monthly repeat; this month is added now',
+    r.status === 201 && rep?.status === 'active' && r.json?.added?.length === 1 && repLine?.amount === 40 && repLine?.status === 'submitted' && repLine?.recurringExpenseId === rep?.id && repLine?.date?.endsWith('-01') && repLine?.hasReceipt === false,
+    JSON.stringify(r.json),
+  )
+  r = await call('POST', '/recurring-expenses/run', { token: admin })
+  const runAgain = await call('POST', '/recurring-expenses/run', { token: admin })
+  r = await call('GET', '/me/expenses', { token: key, headers: expAs })
+  check(
+    'running the repeats again never adds a month twice',
+    runAgain.status === 200 && (r.json?.data ?? []).filter((e) => e.recurringExpenseId === rep?.id).length === 1,
+    JSON.stringify((r.json?.data ?? []).filter((e) => e.recurringExpenseId === rep?.id)),
+  )
+  r = await call('GET', '/expenses?status=submitted', { token: admin })
+  check('a repeat line waits for the office like any line', r.json?.data?.some((e) => e.id === repLine?.id))
+  r = await call('PATCH', `/me/recurring-expenses/${rep?.id}`, { token: key, headers: expAs, body: { amount: 45 } })
+  check('change a repeat for the months to come', r.status === 200 && r.json?.recurring?.amount === 45 && r.json?.added?.length === 0, JSON.stringify(r.json))
+  r = await call('POST', `/me/recurring-expenses/${rep?.id}/pause`, { token: key, headers: expAs })
+  check('pause a repeat', r.status === 200 && r.json?.recurring?.status === 'paused')
+  r = await call('POST', `/me/recurring-expenses/${rep?.id}/resume`, { token: key, headers: expAs })
+  check('resume a repeat without adding this month again', r.status === 200 && r.json?.recurring?.status === 'active' && r.json?.added?.length === 0, JSON.stringify(r.json))
+  r = await call('DELETE', `/me/expenses/${repLine?.id}`, { token: key, headers: expAs })
+  await call('POST', '/recurring-expenses/run', { token: admin })
+  r = await call('GET', '/me/expenses', { token: key, headers: expAs })
+  check('a removed repeat line does not come back', !(r.json?.data ?? []).some((e) => e.recurringExpenseId === rep?.id))
+  r = await call('PATCH', `/me/recurring-expenses/${rep?.id}`, { token: admin, body: { amount: 1 } })
+  check('nobody changes someone else\'s repeat', r.status === 403 || r.status === 404, JSON.stringify(r.json))
+  r = await call('POST', `/me/recurring-expenses/${rep?.id}/stop`, { token: key, headers: expAs })
+  check('stop a repeat', r.status === 200 && r.json?.recurring?.status === 'stopped')
+  r = await call('GET', '/me/recurring-expenses', { token: key, headers: expAs })
+  check('a stopped repeat drops off the list', r.status === 200 && !(r.json?.data ?? []).some((x) => x.id === rep?.id))
   await call('POST', '/punches/out', { token: key, headers: expAs, body: {} })
   await call('PUT', `/people/by-email/${encodeURIComponent(expEmail)}`, { token: key, body: { active: false } })
+
+  // Leave (LEAVE_ENABLED, off by default). Uses a throwaway person; posts no accrual
+  // (dry run only), commits no import and changes no company setting, so it is safe
+  // to run against the live server.
+  r = await call('GET', '/auth/config')
+  const leaveOn = r.json?.features?.leave === true
+  check('sign-in config says whether leave is on', r.status === 200 && typeof r.json?.features?.leave === 'boolean', JSON.stringify(r.json?.features))
+  if (!leaveOn) {
+    r = await call('GET', '/me/leave', { token: admin })
+    check('leave is off until turned on', r.status === 403 && r.json?.error?.code === 'leave_off', JSON.stringify(r.json))
+  } else {
+    const pw = () => `pw-${randomBytes(9).toString('base64url')}`
+    const lvEmail = `smoke-leave-${stamp}@example.invalid`
+    const lvPw = pw()
+    r = await call('PUT', `/people/by-email/${encodeURIComponent(lvEmail)}`, { token: admin, body: { name: 'Smoke Leave', password: lvPw, mustChangePassword: false } })
+    const lvId = r.json?.person?.id
+    const lv = (await call('POST', '/auth/login', { body: { email: lvEmail, password: lvPw } })).json?.token
+    const leadEmail = `smoke-leave-lead-${stamp}@example.invalid`
+    const leadPw = pw()
+    await call('PUT', `/people/by-email/${encodeURIComponent(leadEmail)}`, { token: admin, body: { name: 'Smoke Leave Lead', role: 'lead', password: leadPw, mustChangePassword: false } })
+    const lead = (await call('POST', '/auth/login', { body: { email: leadEmail, password: leadPw } })).json?.token
+    if (termsOn) await acceptAllTerms(lead) // so the 403 below is the role, not the terms
+
+    r = await call('GET', '/me/leave', { token: lv })
+    const me = r.json
+    const sick = me?.types?.find((t) => t.statutory === 'wa_sick')
+    check('my leave lists the kinds of leave and a sick balance', r.status === 200 && Boolean(sick) && me.balances.some((b) => b.leaveTypeId === sick.id), JSON.stringify(me))
+    r = await call('POST', '/me/leave/notice', { token: lv, body: {} })
+    check('the sick-leave notice can be acknowledged', r.status === 200 && Boolean(r.json?.noticeAckAt))
+
+    // A day a month out, Monday to Friday, so it does not clash with anything today.
+    let day = new Date(Date.now() + 35 * 86_400_000)
+    while ([0, 6].includes(day.getUTCDay())) day = new Date(day.getTime() + 86_400_000)
+    const d1 = day.toISOString().slice(0, 10)
+    r = await call('POST', '/leave/requests', { token: lv, body: { personId: lvId, leaveTypeId: sick.id, startDate: d1, endDate: d1, hoursPerDay: 8 } })
+    check('sick leave with no balance is refused', r.status === 409 && r.json?.error?.code === 'leave_balance_short', JSON.stringify(r.json))
+    r = await call('POST', '/leave/adjustments', { token: admin, body: { personId: lvId, leaveTypeId: sick.id, hours: 16 } })
+    check('a balance change needs a note', r.status === 400)
+    r = await call('POST', '/leave/adjustments', { token: admin, body: { personId: lvId, leaveTypeId: sick.id, hours: 16, note: 'Smoke test' } })
+    check('add hours by hand with a note', r.status === 201 && r.json?.entry?.hours === 16, JSON.stringify(r.json))
+    r = await call('POST', '/leave/adjustments', { token: lv, body: { personId: lvId, leaveTypeId: sick.id, hours: 100, note: 'mine' } })
+    check('a tech cannot change balances', r.status === 403)
+    r = await call('POST', '/leave/requests', { token: lv, body: { personId: lvId, leaveTypeId: sick.id, startDate: d1, endDate: d1, hoursPerDay: 8, note: 'flu' } })
+    const req1 = r.json?.request
+    check('ask for a sick day', r.status === 201 && req1?.status === 'pending' && req1?.hours === 8, JSON.stringify(r.json))
+    check('no reason is kept for sick leave', !req1?.note, JSON.stringify(req1?.note))
+    r = await call('POST', '/leave/requests', { token: lv, body: { personId: lvId, leaveTypeId: sick.id, startDate: d1, endDate: d1, hoursPerDay: 8 } })
+    check('the same day twice is refused', r.status === 409 && r.json?.error?.code === 'leave_overlap', JSON.stringify(r.json))
+    r = await call('POST', `/leave/requests/${req1?.id}/approve`, { token: lv, body: {} })
+    check('nobody approves their own leave', r.status === 403 || r.json?.error?.code === 'own_leave', JSON.stringify(r.json))
+    r = await call('POST', `/leave/requests/${req1?.id}/approve`, { token: lead, body: {} })
+    check('a crew lead cannot approve leave', Boolean(lead) && r.status === 403, JSON.stringify(r.json))
+    r = await call('POST', `/leave/requests/${req1?.id}/approve`, { token: admin, body: {} })
+    check('a manager approves it', r.status === 200 && r.json?.request?.status === 'approved', JSON.stringify(r.json))
+    r = await call('GET', `/people/${lvId}/leave/balances`, { token: admin })
+    const bal = r.json?.data?.find((b) => b.leaveTypeId === sick.id)
+    check('the approved day comes off the balance', bal?.balance === 8, JSON.stringify(r.json))
+    r = await call('POST', `/leave/requests/${req1?.id}/cancel`, { token: lv, body: {} })
+    check('cancel leave that has not started', r.status === 200 && r.json?.request?.status === 'cancelled', JSON.stringify(r.json))
+    r = await call('GET', `/people/${lvId}/leave/balances`, { token: admin })
+    check('cancelling puts the hours back', r.json?.data?.find((b) => b.leaveTypeId === sick.id)?.balance === 16, JSON.stringify(r.json))
+
+    // On the board as off today (approved by the office, then taken back).
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: process.env.COMPANY_TIMEZONE || 'America/Los_Angeles' })
+    r = await call('POST', '/leave/requests', { token: admin, body: { personId: lvId, leaveTypeId: sick.id, startDate: today, endDate: today, hoursPerDay: 4, includeWeekends: true, approve: true } })
+    const req2 = r.json?.request
+    check('the office records a call-in sick day, approved at once', r.status === 201 && req2?.status === 'approved', JSON.stringify(r.json))
+    r = await call('GET', '/board', { token: admin })
+    const row = r.json?.rows?.find((x) => x.personId === lvId)
+    check('the board shows them off, as "Leave" with no reason', row?.off?.leaveType === 'Leave' && row?.off?.hours === 4, JSON.stringify(row))
+    r = await call('POST', `/leave/requests/${req2?.id}/cancel`, { token: admin, body: {} })
+    check('the office can take back leave that has started', r.status === 200 && r.json?.request?.status === 'cancelled', JSON.stringify(r.json))
+    r = await call('POST', `/leave/requests/${req1?.id}/deny`, { token: admin, body: {} })
+    check('a closed request cannot be decided again', r.status === 409 || r.status === 400, JSON.stringify(r.json))
+
+    // Accrual (dry run only: writes nothing) and the opening-balance importer (preview only).
+    const twoDays = new Date(Date.now() - 2 * 86_400_000).toISOString().slice(0, 10)
+    r = await call('POST', '/leave/accruals/run', { token: admin, body: { from: twoDays, to: twoDays, dryRun: true } })
+    check('accrual dry run answers per person', r.status === 200 && Array.isArray(r.json?.people), JSON.stringify(r.json).slice(0, 300))
+    const csv = `Employee,Email,Sick balance\nSmoke Leave,${lvEmail},12.5\nNobody Here Smoke,,3\n`
+    r = await call('POST', '/leave/import/preview', { token: admin, body: { fileName: 'balances.csv', contentBase64: Buffer.from(csv).toString('base64') } })
+    const rows = r.json?.rows ?? []
+    check(
+      'import preview matches by email and flags who it cannot find',
+      r.status === 200 && rows[0]?.personId === lvId && rows[0]?.balances?.[0]?.hours === 12.5 && rows[1]?.match === 'none' && r.json?.ready === false,
+      JSON.stringify(r.json).slice(0, 400),
+    )
+    r = await call('POST', '/leave/import/preview', { token: lv, body: { fileName: 'balances.csv', contentBase64: Buffer.from(csv).toString('base64') } })
+    check('a tech cannot import balances', r.status === 403)
+
+    for (const e of [lvEmail, leadEmail]) await call('PUT', `/people/by-email/${encodeURIComponent(e)}`, { token: admin, body: { active: false } })
+  }
 
   // Clean up.
   await call('PUT', `/people/by-email/${encodeURIComponent(testEmail)}`, { token: key, body: { active: false } })

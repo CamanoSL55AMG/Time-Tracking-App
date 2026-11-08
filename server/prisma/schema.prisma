@@ -51,6 +51,7 @@ model Company {
   timesheets        Timesheet[]
   expenses          Expense[]
   expenseCategories ExpenseCategory[]
+  recurringExpenses RecurringExpense[]
 }
 
 model Person {
@@ -61,9 +62,20 @@ model Person {
   initials     String   @default("")
   role         String   @default("tech") // tech | lead | manager | payroll | admin
   passwordHash String?
+  // Set when an admin creates the person with a password or sets a new one for them.
+  // While true, a signed-in session can only read /auth/me and change its own
+  // password (auth/middleware.ts passwordChangeGate). Cleared by that change.
+  mustChangePassword Boolean @default(false)
   active       Boolean  @default(true)
   // Salaried / exempt: the payroll export sends all of their hours as regular.
   overtimeExempt Boolean @default(false)
+  // How the person is paid (CONTRACTORS_ENABLED): employee = W-2 (payroll, overtime,
+  // leave); contractor = 1099 (paid as a vendor in AIC Accounting: no withholding, no
+  // overtime split, no leave accrual). workerTypeFrom (YYYY-MM-DD, company time) is the
+  // day the current type started; days before it count as priorWorkerType. Null = always.
+  workerType      String  @default("employee") // employee | contractor
+  workerTypeFrom  String?
+  priorWorkerType String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -72,6 +84,7 @@ model Person {
   assignments Assignment[]
   timesheets  Timesheet[]
   expenses    Expense[]
+  recurringExpenses RecurringExpense[]
   workItems   WorkItem[]
   jobsAdded   Job[]        @relation("JobAddedBy")
   termsAcceptances TermsAcceptance[]
@@ -106,6 +119,7 @@ model Job {
   punches     Punch[]
   assignments Assignment[]
   expenses    Expense[]
+  recurringExpenses RecurringExpense[]
   workItems   WorkItem[]
   addedBy     Person?      @relation("JobAddedBy", fields: [addedById], references: [id])
 
@@ -231,6 +245,10 @@ model Timesheet {
   signedById   String?
   approvedAt   DateTime?
   approvedById String?
+  // Last day (YYYY-MM-DD) the approval covers. Approvers can sign off any time, so a
+  // week can be approved through the 15th or month end before it is over; the days
+  // after it stay open. Null on an approved week means the whole week.
+  approvedThrough String?
   note         String    @default("") // why it was reopened, or the approver's note
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
@@ -401,8 +419,9 @@ model ExpenseCategory {
   sortOrder   Int     @default(0)
   active      Boolean @default(true)
 
-  company  Company   @relation(fields: [companyId], references: [id])
-  expenses Expense[]
+  company   Company            @relation(fields: [companyId], references: [id])
+  expenses  Expense[]
+  recurring RecurringExpense[]
 
   @@unique([companyId, name])
 }
@@ -432,16 +451,200 @@ model Expense {
   decidedAt    DateTime?
   decisionNote String    @default("")
   clientId     String? // generated on the phone; a re-send does not add it twice
+  // Made by a monthly repeat (RecurringExpense). RecurringExpenseRun keeps which
+  // month it was for, so a restart or a second run never adds a month twice.
+  recurringExpenseId String?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
-  company  Company         @relation(fields: [companyId], references: [id])
-  person   Person          @relation(fields: [personId], references: [id])
-  job      Job?            @relation(fields: [jobId], references: [id])
-  category ExpenseCategory @relation(fields: [categoryId], references: [id])
+  company   Company           @relation(fields: [companyId], references: [id])
+  person    Person            @relation(fields: [personId], references: [id])
+  job       Job?              @relation(fields: [jobId], references: [id])
+  category  ExpenseCategory   @relation(fields: [categoryId], references: [id])
+  recurring RecurringExpense? @relation(fields: [recurringExpenseId], references: [id], onDelete: SetNull)
 
   @@unique([companyId, clientId])
   @@index([companyId, status])
   @@index([personId, date])
   @@index([jobId])
+}
+
+// A monthly repeat: a bill a person pays every month (a phone plan, say). Once a
+// month, on its day, it adds a normal submitted Expense line that goes through the
+// usual approval. Pausing skips the months it is paused; stopping is for good.
+model RecurringExpense {
+  id          String   @id @default(uuid())
+  companyId   String
+  personId    String
+  categoryId  String
+  jobId       String?
+  amountCents Int
+  paidBy      String   @default("employee") // employee (reimburse) | company_card
+  vendor      String   @default("")
+  notes       String   @default("")
+  dayOfMonth  Int // 1-31; a short month uses its last day
+  startMonth  String // YYYY-MM, the first month a line can be made (moved up on resume)
+  endMonth    String? // YYYY-MM, the last month; null = until stopped
+  status      String   @default("active") // active | paused | stopped
+  lastMonth   String? // YYYY-MM of the last line made (for show; the runs table is the record)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  company  Company         @relation(fields: [companyId], references: [id])
+  person   Person          @relation(fields: [personId], references: [id])
+  job      Job?            @relation(fields: [jobId], references: [id])
+  category ExpenseCategory @relation(fields: [categoryId], references: [id])
+  expenses Expense[]
+  runs     RecurringExpenseRun[]
+
+  @@index([companyId, status])
+  @@index([personId])
+}
+
+// One row per repeat per month that has been made. Its key is what makes the monthly
+// run safe to repeat: a second insert for the same month fails, and the month is
+// never made again, even if its line was later removed.
+model RecurringExpenseRun {
+  recurringExpenseId String
+  month              String // YYYY-MM
+  expenseId          String? // the line it made (it may since have been removed)
+  createdAt          DateTime @default(now())
+
+  recurring RecurringExpense @relation(fields: [recurringExpenseId], references: [id], onDelete: Cascade)
+
+  @@id([recurringExpenseId, month])
+}
+
+// ─── Leave (Phase 5, TIME-TRACKING-APP.md §7) ───────────────────────────────
+// Off unless LEAVE_ENABLED=true. Kept in tables of their own, linked by id, so the
+// rest of the schema doesn't change.
+
+// Company-wide leave settings. One row per company, made on first use.
+model LeaveSettings {
+  companyId              String   @id
+  // separate = sick leave and vacation are different banks (Morgan Sound);
+  // combined = one PTO bank that has to meet every Washington sick-leave rule.
+  banks                  String   @default("separate")
+  // Pay the sick balance at separation (WA construction-industry rule). Does not
+  // apply to Morgan Sound; off by default.
+  sickPayoutAtSeparation Boolean  @default(false)
+  // The day Logbook took over the balances (opening balances are dated this day).
+  // Accrual counts only hours worked on or after it, so nothing is earned twice.
+  switchoverDate         String?
+  updatedAt              DateTime @updatedAt
+}
+
+// What leave needs to know about a person beyond the roster.
+model LeaveProfile {
+  personId    String    @id
+  companyId   String
+  hireDate    String? // YYYY-MM-DD; drives the 90-day wait and years-of-service tiers
+  noticeAckAt DateTime? // when they acknowledged the written notice of sick-leave rights
+  updatedAt   DateTime  @updatedAt
+
+  @@index([companyId])
+}
+
+// Kinds of leave: sick, vacation (or one PTO bank), WA family leave, holiday, unpaid…
+model LeaveType {
+  id           String   @id @default(uuid())
+  companyId    String
+  key          String // stable slug: sick | vacation | pto | wa_pfml | holiday | unpaid …
+  name         String
+  paid         Boolean  @default(true) // paid by the company: goes into the payroll export
+  drawsBalance Boolean  @default(true) // requests take hours off a balance
+  statutory    String   @default("none") // wa_sick | wa_pfml | none
+  sortOrder    Int      @default(0)
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([companyId, key])
+}
+
+// How a leave type is earned. A person gets a policy per leave type (PersonLeavePolicy).
+model LeavePolicy {
+  id           String   @id @default(uuid())
+  companyId    String
+  leaveTypeId  String
+  name         String
+  // per_hours_worked: rateHours for every perHours worked (all hours: overtime and travel too)
+  // per_period: periodHours each pay period
+  // annual_grant: periodHours on Jan 1 (grantOn jan1) or the work anniversary (grantOn anniversary)
+  // none: nothing is earned (holiday, unpaid, family leave)
+  method       String   @default("per_hours_worked")
+  rateHours    Float    @default(1)
+  perHours     Float    @default(40)
+  periodHours  Float    @default(0)
+  grantOn      String   @default("jan1")
+  // Years-of-service steps: [{ "years": 5, "rateHours": 1.5 }] or [{ "years": 5, "periodHours": 6 }]
+  tiers        Json     @default("[]")
+  balanceCap   Float? // accrual stops at this balance; null = no cap
+  carryoverMax Float? // balance kept past Dec 31; null = all of it
+  waitingDays  Int      @default(0) // usable from this many days after the hire date
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([companyId, leaveTypeId])
+}
+
+model PersonLeavePolicy {
+  id            String   @id @default(uuid())
+  companyId     String
+  personId      String
+  leaveTypeId   String
+  leavePolicyId String
+  effectiveFrom String // YYYY-MM-DD
+  effectiveTo   String? // YYYY-MM-DD inclusive; null = still in force
+  createdAt     DateTime @default(now())
+
+  @@index([personId, leaveTypeId])
+  @@index([companyId])
+}
+
+// Every change to a balance is a row; a balance is the sum. Never updated or deleted.
+model LeaveLedger {
+  id          String   @id @default(uuid())
+  companyId   String
+  personId    String
+  leaveTypeId String
+  kind        String // accrual | use | adjustment | carryover | forfeit | payout | reinstate
+  hours       Float // + adds to the balance, - takes away
+  date        String // YYYY-MM-DD the entry counts on (company time)
+  // Where it came from: accrual:<policy>:<from>:<to>, grant:<policy>:<date>,
+  // request:<id>, request:<id>:cancel, import:<date>, year-end:<year>:<policy>, manual
+  sourceRef   String   @default("manual")
+  note        String   @default("")
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  @@index([personId, leaveTypeId, date])
+  @@index([companyId, date])
+  @@index([companyId, sourceRef])
+}
+
+// Time off asked for (or recorded by a supervisor, e.g. a state family-leave period).
+// No reason is stored: sick leave is just "sick leave", with no medical detail.
+model LeaveRequest {
+  id            String    @id @default(uuid())
+  companyId     String
+  personId      String
+  leaveTypeId   String
+  startDate     String // YYYY-MM-DD
+  endDate       String // YYYY-MM-DD inclusive
+  days          Json // [{ "date": "YYYY-MM-DD", "hours": 8 }]
+  hours         Float
+  note          String    @default("") // scheduling note only; never kept for sick leave
+  status        String    @default("pending") // pending | approved | denied | cancelled
+  requestedById String
+  decidedById   String?
+  decidedAt     DateTime?
+  decisionNote  String    @default("")
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([companyId, status])
+  @@index([personId, startDate])
+  @@index([companyId, startDate])
 }

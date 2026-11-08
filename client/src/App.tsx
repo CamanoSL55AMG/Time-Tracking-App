@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import {
   Alert,
   AppBar,
+  Badge,
   BottomNavigation,
   BottomNavigationAction,
   Box,
@@ -20,8 +21,9 @@ import {
   Toolbar,
   Typography,
 } from '@mui/material'
-import { api, errorText, getToken, setSignedOutHandler, setTermsRequiredHandler, setToken, type Person } from './api'
+import { api, errorText, getToken, setPasswordChangeHandler, setSignedOutHandler, setTermsRequiredHandler, setToken, type Person } from './api'
 import Login from './pages/Login'
+import FirstPassword from './pages/FirstPassword'
 import PasswordField from './PasswordField'
 import PunchPage from './pages/Punch'
 import BoardPage from './pages/Board'
@@ -30,9 +32,11 @@ import WeekPage from './pages/Week'
 import ReviewPage from './pages/Review'
 import ExpensesPage from './pages/Expenses'
 import TermsGate from './pages/Terms'
+import PayrollPage from './pages/Payroll'
+import LeavePage from './pages/Leave'
 import { writeMode } from './pages/modes'
 
-type Tab = 'clock' | 'week' | 'expenses' | 'board' | 'review' | 'admin'
+type Tab = 'clock' | 'week' | 'expenses' | 'board' | 'review' | 'admin' | 'payroll' | 'leave'
 
 const ClockIcon = () => (
   <SvgIcon>
@@ -75,6 +79,37 @@ export default function App() {
   // First sign-in terms: checked after every sign-in, and again whenever the server
   // answers terms_required. The app only shows once this is true.
   const [termsOk, setTermsOk] = useState(false)
+  // Time fixes waiting for a supervisor: the count on the Review tab for managers, admins and payroll.
+  const [waitingFixes, setWaitingFixes] = useState(0)
+  const approver = Boolean(person?.scopes.includes('requests:approve'))
+  // Time off shows only when the server has leave tracking on (LEAVE_ENABLED).
+  const [leaveOn, setLeaveOn] = useState(false)
+  useEffect(() => {
+    if (!person) return
+    api.authConfig().then(
+      (c) => setLeaveOn(Boolean(c.features?.leave)),
+      () => setLeaveOn(false),
+    )
+  }, [person])
+  useEffect(() => {
+    if (!approver) {
+      setWaitingFixes(0)
+      return
+    }
+    let live = true
+    const check = () =>
+      api.pendingRequests().then(
+        (r) => live && setWaitingFixes(r.length),
+        () => undefined,
+      )
+    void check()
+    const onVisible = () => document.visibilityState === 'visible' && void check()
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      live = false
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [approver, tab])
 
   const signOut = useCallback(() => {
     setToken(null)
@@ -90,6 +125,7 @@ export default function App() {
       setTermsOk(false)
     })
     setTermsRequiredHandler(() => setTermsOk(false))
+    setPasswordChangeHandler(() => setPerson((p) => (p ? { ...p, mustChangePassword: true } : p)))
     const boot = async () => {
       // Arriving from GED with a one-click sign-in link: /sso?token=…
       // Back from "Sign in with Dashboard": /sso#session=… (the session itself),
@@ -140,7 +176,11 @@ export default function App() {
         }}
       />
     )
-  // Privacy Policy, EULA, then the AIC Platform Terms, each accepted on its own screen.
+  // A password an admin set: nothing else until they pick their own (the server holds
+  // the terms back too, so this comes first).
+  if (person.mustChangePassword) return <FirstPassword person={person} onDone={setPerson} onSignOut={signOut} />
+
+  // Then the Privacy Policy, EULA and AIC Platform Terms, each accepted on its own screen.
   if (!termsOk) return <TermsGate onDone={() => setTermsOk(true)} onSignOut={signOut} />
 
   const can = (scope: string) => person.scopes.includes(scope)
@@ -149,8 +189,11 @@ export default function App() {
   const showWeek = can('punch:self')
   // Leads look at the week; managers and payroll approve it.
   const showReview = can('punch:read')
+  // Payroll and admin: the pay period report, from the name menu.
+  const showPayroll = can('payroll:read')
+  const showLeave = leaveOn && (can('punch:self') || can('leave:read'))
   const hidden =
-    (tab === 'board' && !showBoard) || (tab === 'admin' && !showAdmin) || ((tab === 'week' || tab === 'expenses') && !showWeek) || (tab === 'review' && !showReview)
+    (tab === 'board' && !showBoard) || (tab === 'admin' && !showAdmin) || ((tab === 'week' || tab === 'expenses') && !showWeek) || (tab === 'review' && !showReview) || (tab === 'payroll' && !showPayroll) || (tab === 'leave' && !showLeave)
   const current: Tab = hidden ? 'clock' : tab
 
   return (
@@ -169,6 +212,26 @@ export default function App() {
                 {person.email} · {person.role}
               </Typography>
             </MenuItem>
+            {showLeave && (
+              <MenuItem
+                onClick={() => {
+                  setMenuAt(null)
+                  setTab('leave')
+                }}
+              >
+                Time off
+              </MenuItem>
+            )}
+            {showPayroll && (
+              <MenuItem
+                onClick={() => {
+                  setMenuAt(null)
+                  setTab('payroll')
+                }}
+              >
+                Payroll report
+              </MenuItem>
+            )}
             <MenuItem
               onClick={() => {
                 setMenuAt(null)
@@ -186,9 +249,11 @@ export default function App() {
         {current === 'clock' && <PunchPage canCrew={can('punch:crew')} meId={person.id} meName={person.name} />}
         {current === 'week' && <WeekPage />}
         {current === 'expenses' && <ExpensesPage />}
-        {current === 'review' && <ReviewPage canApprove={can('timesheets:approve')} canEdit={can('punch:write:any')} canApproveExpenses={can('expenses:approve')} meId={person.id} />}
+        {current === 'review' && <ReviewPage onWaitingChange={approver ? setWaitingFixes : undefined} canApprove={can('timesheets:approve')} canDecideFixes={can('requests:approve')} canEdit={can('punch:write:any')} canApproveExpenses={can('expenses:approve')} meId={person.id} />}
         {current === 'board' && <BoardPage />}
         {current === 'admin' && <AdminPage me={person} />}
+        {current === 'payroll' && <PayrollPage />}
+        {current === 'leave' && <LeavePage me={person} scopes={person.scopes} />}
       </Container>
 
       {(showWeek || showBoard || showAdmin) && (
@@ -198,7 +263,17 @@ export default function App() {
             {showWeek && <BottomNavigationAction value="week" label="My week" icon={<WeekIcon />} />}
             {showWeek && <BottomNavigationAction value="expenses" label="Expenses" icon={<ExpenseIcon />} />}
             {showBoard && <BottomNavigationAction value="board" label="Board" icon={<BoardIcon />} />}
-            {showReview && <BottomNavigationAction value="review" label="Review" icon={<ReviewIcon />} />}
+            {showReview && (
+              <BottomNavigationAction
+                value="review"
+                label="Review"
+                icon={
+                  <Badge badgeContent={waitingFixes} color="warning" max={99}>
+                    <ReviewIcon />
+                  </Badge>
+                }
+              />
+            )}
             {showAdmin && <BottomNavigationAction value="admin" label="Manage" icon={<AdminIcon />} />}
           </BottomNavigation>
         </Paper>
@@ -246,7 +321,7 @@ function PasswordDialog({ open, onClose }: { open: boolean; onClose: () => void 
           ) : (
             <>
               <PasswordField label="Current password" autoComplete="current-password" value={current} onChange={(e) => setCurrent(e.target.value)} helperText="Leave blank if you have never set one" />
-              <PasswordField label="New password" autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} helperText="At least 10 characters" />
+              <PasswordField label="New password" autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} onGenerate={setNext} helperText="At least 10 characters. Save a generated one in your password manager first" />
               {error && <Alert severity="error">{error}</Alert>}
             </>
           )}

@@ -42,7 +42,31 @@ export const config = {
   // Labor export for payroll (GET /payroll/labor), read by AIC Accounting. Off unless
   // PAYROLL_EXPORT_ENABLED=true, so nothing leaves while payroll still runs from
   // Timesheets.com.
-  payrollExportEnabled: isOn(process.env.PAYROLL_EXPORT_ENABLED),
+  // How many days back a person may ask for their own time to be changed (a missed
+  // clock-in or clock-out). Today always counts; 0 = no limit. Approved weeks are
+  // refused whatever this says: a supervisor reopens those and corrects them directly.
+  // 21 covers a full semimonthly pay period plus the days until payroll runs.
+  changeRequestDays: Math.max(0, num(process.env.CHANGE_REQUEST_DAYS) ?? 21),
+  // W-2 employees and 1099 contractors (services/workerType.ts). Off = everyone is an
+  // employee, the worker type can't be set, and the payroll export is unchanged.
+  contractorsEnabled: /^(1|true|yes|on)$/i.test((process.env.CONTRACTORS_ENABLED ?? '').trim()),
+  payrollExportEnabled: /^(1|true|yes|on)$/i.test((process.env.PAYROLL_EXPORT_ENABLED ?? '').trim()),
+  // Leave tracking (sick, vacation, WA family leave, time-off requests). Off unless
+  // LEAVE_ENABLED=true: every /leave endpoint answers 403 leave_off, the Leave tab is
+  // hidden, and the payroll export and board carry no leave.
+  leaveEnabled: /^(1|true|yes|on)$/i.test((process.env.LEAVE_ENABLED ?? '').trim()),
+  // AIC Control Tower on/off switch (services/tower.ts). Both empty = not checked,
+  // Logbook stays ON. TOWER_TOKEN is the aircraft's enrollment token from the Tower.
+  towerUrl: (process.env.TOWER_URL ?? '').trim().replace(/\/+$/, ''),
+  towerToken: (process.env.TOWER_TOKEN ?? '').trim(),
+  // Cloudflare Access service token for a Tower behind Access (optional).
+  towerAccessId: (process.env.TOWER_ACCESS_ID ?? '').trim(),
+  towerAccessSecret: (process.env.TOWER_ACCESS_SECRET ?? '').trim(),
+  towerCheckSeconds: Math.max(15, num(process.env.TOWER_CHECK_SECONDS) ?? 60),
+  // Monthly repeating expenses (services/recurringExpenses.ts): how often the server
+  // looks for a repeat whose day has come. 0 = never on its own (the office can still
+  // run it from POST /recurring-expenses/run).
+  recurringCheckMinutes: Math.max(0, num(process.env.RECURRING_EXPENSES_CHECK_MINUTES) ?? 60),
   // First sign-in terms: each person must accept the Privacy Policy, the EULA and the
   // AIC Platform Terms (legal/manifest.json) before the app does anything else for
   // them. Off unless TERMS_GATE_ENABLED=true.
