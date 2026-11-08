@@ -322,6 +322,11 @@ Scopes: `punch:read`, `punch:write:any`, `jobs:read`, `jobs:write`, `people:read
 `leave:write`, `leave:approve`, `expenses:read`, `expenses:write`, `expenses:approve`,
 `webhooks:manage`.
 
+First sign-in terms (2026-11-04, off unless `TERMS_GATE_ENABLED=true`): a person's
+session can only sign in, call `/auth/me` and `/terms/*` until they have accepted the
+Privacy Policy, the EULA and the AIC Platform Terms in `legal/`; everything else answers
+`403 terms_required`. API keys are never held. See the README.
+
 Idempotency: every POST accepts an `Idempotency-Key` header. Repeating a request with the
 same key returns the original result. This is what makes offline sync and retried
 one-click punches safe.

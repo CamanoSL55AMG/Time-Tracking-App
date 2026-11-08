@@ -35,6 +35,12 @@ async function call(method, path, { token, body, headers } = {}) {
   return { status: res.status, json, headers: res.headers }
 }
 
+/** Accept every pending terms document for this session, in order (smoke's own throwaway people only). */
+async function acceptAllTerms(token) {
+  const s = (await call('GET', '/terms/status', { token })).json
+  for (const d of s?.pending ?? []) await call('POST', '/terms/accept', { token, body: { documentId: d.id, version: d.version } })
+}
+
 const stamp = Date.now().toString(36)
 const testEmail = `smoke-${stamp}@example.invalid`
 const minutesAgo = (m) => new Date(Date.now() - m * 60_000).toISOString()
@@ -55,6 +61,17 @@ try {
   check('admin signs in', r.status === 200 && Boolean(r.json?.token), JSON.stringify(r.json))
   const admin = r.json?.token
   if (!admin) throw new Error('Cannot continue without signing in. Check ADMIN_EMAIL / ADMIN_PASSWORD in .env and that `npm run seed` has run.')
+
+  // First sign-in terms (TERMS_GATE_ENABLED). The smoke run never accepts terms for the
+  // admin: that is the admin's own step, in the app.
+  r = await call('GET', '/terms/status', { token: admin })
+  check('terms status answers', r.status === 200 && typeof r.json?.enabled === 'boolean' && Array.isArray(r.json?.pending) && Array.isArray(r.json?.documents), JSON.stringify(r.json))
+  const termsOn = r.json?.enabled === true
+  check('the AIC Platform Terms come last', r.json?.documents?.at(-1)?.id === 'aic-platform-terms' && r.json?.documents?.at(-1)?.kind === 'global', JSON.stringify(r.json?.documents))
+  if (!termsOn) check('with the terms gate off nothing is pending', r.json?.complete === true && r.json?.pending?.length === 0)
+  if (termsOn && r.json?.complete !== true) {
+    throw new Error(`The terms gate is on and ${email} has not accepted the terms yet. Sign in to the app as ${email}, accept them, then run smoke again.`)
+  }
 
   r = await call('GET', '/phases', { token: admin })
   const allPhases = r.json?.data ?? []
@@ -197,6 +214,10 @@ try {
   check('a password change is required before anything else', r.status === 403 && r.json?.error?.code === 'password_change_required', JSON.stringify(r.json))
   r = await call('GET', '/auth/me', { token: tech })
   check('who-am-I still answers while the change is due', r.status === 200 && r.json?.person?.mustChangePassword === true)
+  if (termsOn) {
+    r = await call('GET', '/terms/status', { token: tech })
+    check('the new password comes before the terms', r.status === 403 && r.json?.error?.code === 'password_change_required', JSON.stringify(r.json))
+  }
   r = await call('POST', '/auth/password', { token: tech, body: { current: techPw, next: techPw } })
   check('the new password must differ from the one the admin set', r.status === 400)
   const techPw2 = `pw-${randomBytes(9).toString('base64url')}`
@@ -206,6 +227,44 @@ try {
   check('the change clears the flag', r.status === 200 && r.json?.person?.mustChangePassword === false)
   r = await call('PUT', `/people/by-email/${encodeURIComponent(testEmail)}`, { token: key, body: { mustChangePassword: true } })
   check('a key cannot flag someone to change their password', r.status === 403)
+
+  // The throwaway tech meets the terms on first sign-in (when the gate is on).
+  {
+    r = await call('GET', '/terms/status', { token: tech })
+    const status = r.json
+    const docs = status?.documents ?? []
+    if (termsOn) {
+      check('a new person has every terms document pending, in order', status?.complete === false && status?.pending?.map((d) => d.id).join() === docs.map((d) => d.id).join(), JSON.stringify(status))
+      r = await call('GET', '/me/state', { token: tech })
+      check('the app refuses them until they accept', r.status === 403 && r.json?.error?.code === 'terms_required', JSON.stringify(r.json))
+      r = await call('GET', '/auth/me', { token: tech })
+      check('who-am-I still answers before accepting', r.status === 200 && r.json?.person?.email === testEmail)
+      r = await call('GET', '/me/state', { token: key, headers: as })
+      check('an integration acting for them is not held by the terms', r.status === 200, JSON.stringify(r.json?.error))
+      r = await call('POST', '/terms/accept', { token: key, headers: as, body: { documentId: docs[0]?.id, version: docs[0]?.version } })
+      check('an integration cannot accept terms for a person', r.status === 403)
+      r = await call('POST', '/terms/accept', { token: tech, body: { documentId: docs[1]?.id, version: docs[1]?.version } })
+      check('accepting out of order is refused', r.status === 409 && r.json?.error?.code === 'terms_out_of_order', JSON.stringify(r.json))
+      r = await call('POST', '/terms/accept', { token: tech, body: { documentId: docs[0]?.id, version: 'not-the-version' } })
+      check('accepting an old version is refused', r.status === 409 && r.json?.error?.code === 'terms_version_changed', JSON.stringify(r.json))
+    } else {
+      check('with the gate off a new person is not asked', status?.enabled === false && status?.complete === true, JSON.stringify(status))
+    }
+    r = await call('GET', `/terms/documents/${docs[0]?.id}`, { token: tech })
+    check('a terms document can be read', r.status === 200 && r.json?.version === docs[0]?.version && typeof r.json?.text === 'string' && r.json.text.length > 0)
+    let last = null
+    for (const d of docs) {
+      last = await call('POST', '/terms/accept', { token: tech, body: { documentId: d.id, version: d.version } })
+      if (last.status !== 200) break
+    }
+    check('accept each document, one at a time', last?.status === 200 && last.json?.complete === true && last.json?.documents?.every((d) => d.accepted), JSON.stringify(last?.json))
+    r = await call('POST', '/terms/accept', { token: tech, body: { documentId: docs[0]?.id, version: docs[0]?.version } })
+    check('accepting again changes nothing', r.status === 200 && r.json?.complete === true)
+    if (termsOn) {
+      r = await call('GET', '/me/state', { token: tech })
+      check('once everything is accepted the app answers', r.status === 200, JSON.stringify(r.json?.error))
+    }
+  }
   r = await call('GET', '/board', { token: tech })
   check('a tech cannot open the board', r.status === 403)
   r = await call('GET', '/people', { token: tech })
@@ -350,12 +409,14 @@ try {
     const leadPw = pw()
     await call('PUT', `/people/by-email/${encodeURIComponent(leadEmail)}`, { token: admin, body: { name: 'Smoke Lead', role: 'lead', password: leadPw, mustChangePassword: false } })
     const lead = (await call('POST', '/auth/login', { body: { email: leadEmail, password: leadPw } })).json?.token
+    if (termsOn) await acceptAllTerms(lead) // so the 403 below is the role, not the terms
     r = await call('POST', `/requests/${reqId}/approve`, { token: lead, body: {} })
     check('a crew lead cannot approve a time fix', Boolean(lead) && r.status === 403, JSON.stringify(r.json))
     const payEmail = `smoke-payroll-${stamp}@example.invalid`
     const payPw = pw()
     await call('PUT', `/people/by-email/${encodeURIComponent(payEmail)}`, { token: admin, body: { name: 'Smoke Payroll', role: 'payroll', password: payPw, mustChangePassword: false } })
     const pay = (await call('POST', '/auth/login', { body: { email: payEmail, password: payPw } })).json?.token
+    if (termsOn) await acceptAllTerms(pay)
     r = await call('POST', `/requests/${reqId}/approve`, { token: pay, body: {} })
     check('payroll approves the change', Boolean(pay) && r.status === 200 && r.json?.request?.status === 'approved', JSON.stringify(r.json))
     for (const email of [leadEmail, payEmail]) await call('PUT', `/people/by-email/${encodeURIComponent(email)}`, { token: admin, body: { active: false } })
@@ -776,6 +837,7 @@ try {
     const leadPw = pw()
     await call('PUT', `/people/by-email/${encodeURIComponent(leadEmail)}`, { token: admin, body: { name: 'Smoke Leave Lead', role: 'lead', password: leadPw, mustChangePassword: false } })
     const lead = (await call('POST', '/auth/login', { body: { email: leadEmail, password: leadPw } })).json?.token
+    if (termsOn) await acceptAllTerms(lead) // so the 403 below is the role, not the terms
 
     r = await call('GET', '/me/leave', { token: lv })
     const me = r.json

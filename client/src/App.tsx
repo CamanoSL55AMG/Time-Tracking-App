@@ -21,7 +21,7 @@ import {
   Toolbar,
   Typography,
 } from '@mui/material'
-import { api, errorText, getToken, setPasswordChangeHandler, setSignedOutHandler, setToken, type Person } from './api'
+import { api, errorText, getToken, setPasswordChangeHandler, setSignedOutHandler, setTermsRequiredHandler, setToken, type Person } from './api'
 import Login from './pages/Login'
 import FirstPassword from './pages/FirstPassword'
 import PasswordField from './PasswordField'
@@ -31,6 +31,7 @@ import AdminPage from './pages/Admin'
 import WeekPage from './pages/Week'
 import ReviewPage from './pages/Review'
 import ExpensesPage from './pages/Expenses'
+import TermsGate from './pages/Terms'
 import PayrollPage from './pages/Payroll'
 import LeavePage from './pages/Leave'
 import { writeMode } from './pages/modes'
@@ -75,6 +76,9 @@ export default function App() {
   const [tab, setTab] = useState<Tab>('clock')
   const [menuAt, setMenuAt] = useState<HTMLElement | null>(null)
   const [pwOpen, setPwOpen] = useState(false)
+  // First sign-in terms: checked after every sign-in, and again whenever the server
+  // answers terms_required. The app only shows once this is true.
+  const [termsOk, setTermsOk] = useState(false)
   // Time fixes waiting for a supervisor: the count on the Review tab for managers, admins and payroll.
   const [waitingFixes, setWaitingFixes] = useState(0)
   const approver = Boolean(person?.scopes.includes('requests:approve'))
@@ -110,12 +114,17 @@ export default function App() {
   const signOut = useCallback(() => {
     setToken(null)
     setPerson(null)
+    setTermsOk(false)
     setMenuAt(null)
     setTab('clock')
   }, [])
 
   useEffect(() => {
-    setSignedOutHandler(() => setPerson(null))
+    setSignedOutHandler(() => {
+      setPerson(null)
+      setTermsOk(false)
+    })
+    setTermsRequiredHandler(() => setTermsOk(false))
     setPasswordChangeHandler(() => setPerson((p) => (p ? { ...p, mustChangePassword: true } : p)))
     const boot = async () => {
       // Arriving from GED with a one-click sign-in link: /sso?token=…
@@ -162,13 +171,17 @@ export default function App() {
         notice={bootError}
         onSignedIn={(p) => {
           writeMode(null)
+          setTermsOk(false)
           setPerson(p)
         }}
       />
     )
-
-  // A password an admin set: nothing else until they pick their own.
+  // A password an admin set: nothing else until they pick their own (the server holds
+  // the terms back too, so this comes first).
   if (person.mustChangePassword) return <FirstPassword person={person} onDone={setPerson} onSignOut={signOut} />
+
+  // Then the Privacy Policy, EULA and AIC Platform Terms, each accepted on its own screen.
+  if (!termsOk) return <TermsGate onDone={() => setTermsOk(true)} onSignOut={signOut} />
 
   const can = (scope: string) => person.scopes.includes(scope)
   const showBoard = can('punch:read')

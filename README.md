@@ -103,6 +103,12 @@ server/   Express + TypeScript + Prisma + PostgreSQL — the API at /api/v1     
   page shows it, and punches waiting on a phone stay queued). If the Tower can't be
   reached, Logbook stays ON and logs a warning. `GET /api/v1/health` shows the switch.
 
+- **First sign-in terms** (built 2026-11-04). The first time someone signs in, the app
+  shows the Logbook Privacy Policy, then the Logbook EULA, then the AIC Platform Terms,
+  each on its own screen with its own "I have read and agree" box and Accept button
+  ("Sign out" declines). Only after the last one does the app open. **Off** unless
+  `TERMS_GATE_ENABLED=true` in `server/.env`. Details below.
+
 Not built yet: expense export, pay periods (locking) and leave hours in the payroll
 export, kiosk mode, webhooks. See the phases in the plan.
 
@@ -153,12 +159,42 @@ app behind the Cloudflare tunnel the same way as the other apps.
 
 ```powershell
 cd server
-npm test        # unit tests: time zones, geofence, sign-in tokens, keys
+npm test        # unit tests: time zones, geofence, sign-in tokens, keys, terms gate
 npm run smoke   # with the API running: end-to-end checks against your database
 ```
 
 `npm run smoke` creates a throwaway person and job, walks a whole day of punches through
 the API, and deactivates them again when it is done.
+
+## First sign-in terms
+
+The documents live in [`legal/`](legal/README.md): `manifest.json` lists them in the
+order shown (the AIC Platform Terms always last, and that file is identical in every
+AIC app). The server reads the folder once at start (`TERMS_DIR` overrides where).
+The texts in the repo are placeholders until AIC-PNW's attorney approves the final ones.
+
+With `TERMS_GATE_ENABLED=true`, sign-in still works and issues a session, but until the
+person has accepted every document at its current version, every API call from that
+session answers `403 terms_required` except sign-in, `GET /auth/me` and the terms
+endpoints (`GET /terms/status`, `GET /terms/documents/:id`, `POST /terms/accept`).
+API keys are never held, including keys acting for a person with `X-Act-As`, and a key
+cannot accept terms for anyone. If the gate is on and the manifest is broken (a missing
+or empty file, a duplicate id, the global document not last), the server logs why at
+start and people's calls answer `503 terms_unavailable` until it is fixed.
+
+**Updating a document:** replace its text in `legal/`, change its `"version"` in
+`legal/manifest.json`, restart the server. Everyone is asked to accept that document
+again; the others are not asked again.
+
+**Who accepted what** is in the `terms_acceptance` table, one row per person, document
+and version, with the SHA-256 of the exact text shown, the time, IP address and browser.
+Rows are only ever added:
+
+```sql
+SELECT p.email, t."documentId", t.version, t."acceptedAt", t.ip
+FROM terms_acceptance t JOIN "Person" p ON p.id = t."userId"
+ORDER BY t."acceptedAt" DESC;
+```
 
 ## Linking GED
 

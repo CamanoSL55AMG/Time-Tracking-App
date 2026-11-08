@@ -87,6 +87,7 @@ model Person {
   recurringExpenses RecurringExpense[]
   workItems   WorkItem[]
   jobsAdded   Job[]        @relation("JobAddedBy")
+  termsAcceptances TermsAcceptance[]
 
   @@index([companyId, active])
 }
@@ -344,6 +345,26 @@ model IdempotencyKey {
   createdAt DateTime @default(now())
 
   @@unique([companyId, key])
+}
+
+// First sign-in terms (legal/manifest.json): one row each time a person accepts one
+// version of one document. Append-only: the app never updates or deletes these rows.
+model TermsAcceptance {
+  id            String   @id @default(uuid())
+  companyId     String
+  userId        String // the person who accepted
+  documentId    String // e.g. logbook-eula, aic-platform-terms
+  version       String
+  contentSha256 String // sha256 hex of the exact file they were shown
+  acceptedAt    DateTime @default(now())
+  ip            String   @default("")
+  userAgent     String   @default("")
+
+  person Person @relation(fields: [userId], references: [id])
+
+  @@unique([userId, documentId, version])
+  @@index([companyId, userId])
+  @@map("terms_acceptance")
 }
 
 // One-click sign-in tokens from GED are single use.

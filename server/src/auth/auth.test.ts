@@ -83,7 +83,7 @@ test('the AIC Terminal key can set Logbook roles; no signed-in role gets that sc
 test('a person told to change their password reaches only the sign-in endpoints', () => {
   const flagged = { via: 'session' as const, person: { mustChangePassword: true } }
   for (const p of ['/auth/me', '/auth/password', '/auth/config', '/auth/login', '/health']) assert.equal(passwordChangeBlocks(flagged, p), false, p)
-  for (const p of ['/me/state', '/punches/in', '/board', '/people', '/people/by-email/x@y.z', '/payroll/report', '/', '/authx', '/Auth/me']) {
+  for (const p of ['/me/state', '/punches/in', '/board', '/people', '/terms/status', '/terms/accept', '/people/by-email/x@y.z', '/payroll/report', '/', '/authx', '/Auth/me']) {
     assert.equal(passwordChangeBlocks(flagged, p), true, p)
   }
   assert.equal(passwordChangeBlocks({ via: 'session', person: { mustChangePassword: false } }, '/board'), false)
