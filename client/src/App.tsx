@@ -200,9 +200,15 @@ export default function App() {
     <Box sx={{ minHeight: '100dvh', pb: 'calc(72px + env(safe-area-inset-bottom))' }}>
       <AppBar position="sticky" color="primary" elevation={0}>
         <Toolbar sx={{ gap: 1 }}>
-          <Typography variant="h6" sx={{ fontWeight: 700, flex: 1 }}>
-            Logbook
-          </Typography>
+          {/* AICPNW chrome logo with the app name under it (same on every AIC app) */}
+          <Box sx={{ flex: 1, display: 'flex', minWidth: 0 }}>
+            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '3px' }}>
+              <Box component="img" src="/brand/aicpnw-logo.png" alt="AICPNW" sx={{ height: { xs: 20, sm: 24 }, width: 'auto', display: 'block' }} />
+              <Box component="span" sx={{ fontSize: { xs: 10, sm: 11 }, fontWeight: 600, letterSpacing: '0.16em', textTransform: 'uppercase', color: '#c9d1d7', lineHeight: 1, whiteSpace: 'nowrap' }}>
+                Logbook
+              </Box>
+            </Box>
+          </Box>
           <Button color="inherit" onClick={(e) => setMenuAt(e.currentTarget)} sx={{ fontWeight: 600 }}>
             {person.name}
           </Button>
