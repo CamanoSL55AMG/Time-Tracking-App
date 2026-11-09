@@ -99,6 +99,9 @@ model Job {
   name         String
   code         String    @default("") // P-number, service ticket, etc.
   active       Boolean   @default(true)
+  // Jetbuilt stage (PROPOSAL, CONTRACT, INSTALL, REVIEW…), sent across by GED. Empty
+  // for jobs added here. Used with recent punches to fold old projects under Archived.
+  stage        String    @default("")
   siteLat      Float?
   siteLng      Float?
   siteRadiusM  Int?

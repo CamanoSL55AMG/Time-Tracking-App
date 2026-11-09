@@ -7,6 +7,7 @@ import { requirePerson, requireScope } from '../auth/middleware.js'
 import { SELF } from '../auth/apiKeys.js'
 import { emit } from '../services/events.js'
 import { MODES } from '../services/punch.js'
+import { isArchived } from '../services/jobArchive.js'
 
 export const jobsRouter = Router()
 
@@ -33,6 +34,7 @@ function jobFields(body: Record<string, unknown> | undefined) {
     name: body?.name === undefined ? undefined : requiredStr(body.name, 'name', 300),
     code: body?.code === undefined ? undefined : str(body.code, 80),
     active: bool(body?.active),
+    stage: body?.stage === undefined ? undefined : str(body.stage, 40).toUpperCase(),
     siteLat: num(body?.siteLat, 'siteLat'),
     siteLng: num(body?.siteLng, 'siteLng'),
     siteRadiusM: radius === null || radius === undefined ? radius : Math.round(radius),
@@ -67,13 +69,26 @@ function phoneOf(v: unknown, required: boolean): string {
 
 const ADDED_BY = { addedBy: { select: { id: true, name: true } } } as const
 
+// Each job also carries when time was last charged to it and whether it folds
+// under Archived in the lists (services/jobArchive.ts). Nothing is stored for that.
 async function withRefs(jobs: Job[]) {
   if (!jobs.length) return []
-  const refs = await prisma.externalRef.findMany({ where: { entity: 'job', entityId: { in: jobs.map((j) => j.id) } } })
-  return jobs.map((j) => ({
-    ...j,
-    refs: refs.filter((r) => r.entityId === j.id).map((r) => ({ system: r.system, externalId: r.externalId })),
-  }))
+  const ids = jobs.map((j) => j.id)
+  const [refs, last] = await Promise.all([
+    prisma.externalRef.findMany({ where: { entity: 'job', entityId: { in: ids } } }),
+    prisma.punch.groupBy({ by: ['jobId'], where: { jobId: { in: ids } }, _max: { clockIn: true } }),
+  ])
+  const lastBy = new Map(last.map((l) => [l.jobId, l._max.clockIn]))
+  const now = new Date()
+  return jobs.map((j) => {
+    const lastPunchAt = lastBy.get(j.id) ?? null
+    return {
+      ...j,
+      refs: refs.filter((r) => r.entityId === j.id).map((r) => ({ system: r.system, externalId: r.externalId })),
+      lastPunchAt,
+      archived: isArchived({ ...j, lastPunchAt }, now),
+    }
+  })
 }
 
 const announce = (tx: Tx, job: Job) =>
@@ -85,7 +100,7 @@ route(
     method: 'get',
     path: '/jobs',
     tag: 'Jobs',
-    summary: 'Jobs time can be charged to.',
+    summary: 'Jobs time can be charged to. Each carries lastPunchAt and archived (an old project, or one closed to new time).',
     access: ['jobs:read'],
     query: {
       active: 'true (default) or false; "all" for both',
@@ -276,7 +291,13 @@ route(
     tag: 'Jobs',
     summary: 'Create or update a job by its id in another system (ged, jetbuilt, timesheets…). Safe to repeat.',
     access: ['jobs:write'],
-    body: { name: 'Name (required when creating)', kind: 'project | service | shop | other', code: 'P-number or ticket', active: 'false closes the job to new time' },
+    body: {
+      name: 'Name (required when creating)',
+      kind: 'project | service | shop | other',
+      code: 'P-number or ticket',
+      active: 'false closes the job to new time',
+      stage: 'Jetbuilt stage (PROPOSAL, CONTRACT, INSTALL, REVIEW…); won stages keep a project out of Archived',
+    },
   },
   async (req) => {
     const auth = requireScope(req, 'jobs:write')
@@ -294,7 +315,7 @@ route(
       }
       if (!f.name) throw badRequest('name is required when the job does not exist yet.', { field: 'name' })
       const created = await tx.job.create({
-        data: { companyId: auth.companyId, name: f.name, kind: f.kind ?? 'project', code: f.code ?? '', active: f.active ?? true, siteLat: f.siteLat, siteLng: f.siteLng, siteRadiusM: f.siteRadiusM, siteAddress: f.siteAddress ?? '' },
+        data: { companyId: auth.companyId, name: f.name, kind: f.kind ?? 'project', code: f.code ?? '', active: f.active ?? true, stage: f.stage ?? '', siteLat: f.siteLat, siteLng: f.siteLng, siteRadiusM: f.siteRadiusM, siteAddress: f.siteAddress ?? '' },
       })
       await tx.externalRef.create({ data: { companyId: auth.companyId, entity: 'job', entityId: created.id, system, externalId } })
       await announce(tx, created)
