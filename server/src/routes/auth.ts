@@ -229,10 +229,13 @@ route(
   { method: 'get', path: '/auth/me', tag: 'Sign-in', summary: 'Who the caller is and what they may do.', access: [] },
   async (req) => {
     const auth = requireAuth(req)
+    // The company name is shown after the divider in the top bar.
+    const company = await prisma.company.findUnique({ where: { id: auth.companyId }, select: { name: true } })
     return {
       via: auth.via,
       scopes: [...auth.scopes],
       person: auth.person ? publicPerson(auth.person) : null,
+      company: company ? { name: company.name } : null,
     }
   },
 )

@@ -678,7 +678,7 @@ export const api = {
   authConfig: () =>
     http.get<{ googleClientId: string | null; dashboard?: boolean; switchedOff?: string | null; features?: { leave?: boolean } }>('/auth/config').then((r) => r.data),
   google: (credential: string) => http.post<{ token: string; person: Person }>('/auth/google', { credential }).then((r) => r.data),
-  me: () => http.get<{ person: Person | null; scopes: string[] }>('/auth/me').then((r) => r.data),
+  me: () => http.get<{ person: Person | null; scopes: string[]; company?: { name: string } | null }>('/auth/me').then((r) => r.data),
   changePassword: (current: string, next: string) => http.post('/auth/password', { current, next }).then((r) => r.data),
   termsStatus: () => http.get<TermsStatus>('/terms/status').then((r) => r.data),
   termsDocument: (id: string) => http.get<TermsDocument>(`/terms/documents/${encodeURIComponent(id)}`).then((r) => r.data),
