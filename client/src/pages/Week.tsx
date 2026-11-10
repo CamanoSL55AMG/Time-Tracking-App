@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Alert, Box, Button, Chip, CircularProgress, Divider, IconButton, Paper, Stack, Typography } from '@mui/material'
 import { api, errorText, fmtDay, fmtTime, shiftWeek, type PersonWeek, type SheetStatus, type TimeException, type WeekSegment } from '../api'
 import { RequestCard, RequestDialog } from './Requests'
+import DayFix from './DayFix'
 
 // A tech's week: every segment by day, the total, and the Sign button. Signing says
 // "these hours are right"; a manager approves after the week is over, and an
@@ -47,7 +48,27 @@ export function ExceptionList({ items, showName }: { items: TimeException[]; sho
 }
 
 /** Days of one person's week with their segments. */
-export function WeekDetail({ week, onEdit }: { week: PersonWeek; onEdit?: (s: WeekSegment) => void }) {
+/** Days a person may fix themselves: from the start of the open pay period, through today, and not approved yet. */
+export function fixableDay(week: PersonWeek, date: string, today: string) {
+  if (!week.selfEditFrom || date < week.selfEditFrom || date > today) return false
+  if (week.status === 'approved' && date <= (week.approvedThrough ?? week.weekEnd)) return false
+  return true
+}
+
+export function WeekDetail({
+  week,
+  onEdit,
+  onFixDay,
+  mine = false,
+}: {
+  week: PersonWeek
+  /** The tech's own week ("fixed by you"); a supervisor's view says "fixed by them". */
+  mine?: boolean
+  onEdit?: (s: WeekSegment) => void
+  /** Set on the tech's own week: a "Fix times" link on each day they can fix themselves. */
+  onFixDay?: { canFix: (date: string) => boolean; open: (date: string) => void }
+}) {
+  const fixedBySelf = new Map((week.selfEdits ?? []).map((e) => [e.segment.id, e]))
   return (
     <Stack divider={<Divider flexItem />} spacing={1}>
       {week.days.map((d) => (
@@ -55,6 +76,16 @@ export function WeekDetail({ week, onEdit }: { week: PersonWeek; onEdit?: (s: We
           <Stack direction="row" alignItems="baseline">
             <Typography variant="body2" sx={{ fontWeight: 700, flex: 1 }}>
               {fmtDay(d.date)}
+              {onFixDay && d.segments.length > 0 && onFixDay.canFix(d.date) && (
+                <Box
+                  component="button"
+                  type="button"
+                  onClick={() => onFixDay.open(d.date)}
+                  sx={{ all: 'unset', ml: 1, color: 'primary.main', fontWeight: 600, fontSize: '0.75rem', cursor: 'pointer' }}
+                >
+                  Fix times
+                </Box>
+              )}
             </Typography>
             <Typography variant="body2" sx={{ fontVariantNumeric: 'tabular-nums', fontWeight: 700 }} color={d.hours ? 'text.primary' : 'text.disabled'}>
               {h(d.hours)}
@@ -73,7 +104,7 @@ export function WeekDetail({ week, onEdit }: { week: PersonWeek; onEdit?: (s: We
               </Typography>
               <Typography variant="caption" sx={{ flex: 1, minWidth: 0 }} noWrap>
                 {s.phase?.short ?? '—'} · {s.job.name}
-                {s.edited && ' · corrected'}
+                {fixedBySelf.has(s.id) ? (fixedBySelf.get(s.id)!.reviewedAt ? ` · fixed by ${mine ? 'you' : 'them'}, looked at` : ` · fixed by ${mine ? 'you' : 'them'}`) : s.edited && ' · corrected'}
                 {s.source === 'lead' && ' · by crew lead'}
               </Typography>
             </Stack>
@@ -105,6 +136,8 @@ export default function WeekPage() {
   // Asking for a change: a segment to fix, or a day to add missing time to.
   const [asking, setAsking] = useState<{ segment?: WeekSegment; day?: string } | null>(null)
   const [sentNote, setSentNote] = useState('')
+  // Fixing your own day: the day, and the segment to start on.
+  const [fixing, setFixing] = useState<{ date: string; startId?: string } | null>(null)
 
   const load = useCallback(async (to?: string) => {
     setError('')
@@ -144,6 +177,7 @@ export default function WeekPage() {
   const canSign = (week.status !== 'approved' || week.partlyApproved) && !week.openSegment && week.hours > 0
   const today = new Date().toLocaleDateString('en-CA')
   const addDay = week.days.some((d) => d.date === today) ? today : week.weekStart
+  const canFix = (date: string) => fixableDay(week, date, today)
   const withdraw = async (id: string) => {
     setError('')
     try {
@@ -171,13 +205,24 @@ export default function WeekPage() {
               {line}
             </Typography>
           )}
-          <WeekDetail week={week} onEdit={(s) => setAsking({ segment: s })} />
+          <WeekDetail
+            week={week}
+            mine
+            onEdit={(s) => {
+              const date = week.days.find((d) => d.segments.some((x) => x.id === s.id))?.date
+              if (date && canFix(date)) setFixing({ date, startId: s.id })
+              else setAsking({ segment: s })
+            }}
+            onFixDay={{ canFix, open: (date) => setFixing({ date }) }}
+          />
           <Typography variant="caption" color="text.secondary">
-            Something wrong? Tap the segment to ask for a change. Forgot to punch?{' '}
+            {week.selfEditFrom
+              ? `Something wrong? Tap a segment to fix it. From ${fmtDay(week.selfEditFrom, { month: 'short', day: 'numeric' })} on, your fix counts right away and your supervisor sees what changed; older time needs their OK. Forgot to punch? `
+              : 'Something wrong? Tap the segment to ask for a change. Forgot to punch? '}
             <Box component="button" type="button" onClick={() => setAsking({ day: addDay })} sx={{ all: 'unset', color: 'primary.main', fontWeight: 600, cursor: 'pointer' }}>
               Add missing time
             </Box>
-            . Your supervisor approves changes before they count.
+            {week.selfEditFrom ? ' (your supervisor approves that).' : '. Your supervisor approves changes before they count.'}
           </Typography>
         </Stack>
       </Paper>
@@ -226,6 +271,16 @@ export default function WeekPage() {
         </Stack>
       )}
 
+      {fixing && (
+        <DayFix
+          date={fixing.date}
+          startId={fixing.startId}
+          today={today}
+          segments={week.days.find((d) => d.date === fixing.date)?.segments ?? []}
+          onClose={() => setFixing(null)}
+          onChanged={() => load(week.weekStart)}
+        />
+      )}
       {asking && (
         <RequestDialog
           segment={asking.segment}
