@@ -86,6 +86,12 @@ export interface Job {
   name: string
   code: string
   active: boolean
+  /** Jetbuilt stage sent across by GED (PROPOSAL, CONTRACT, INSTALL, REVIEW…); empty for jobs added here. */
+  stage?: string
+  /** When time was last charged to the job. */
+  lastPunchAt?: string | null
+  /** An old project (no won stage, no punches lately) or a job closed to new time: shown under Archived. */
+  archived?: boolean
   /** Job site, sent across from Jetbuilt by GED. Empty when unknown. */
   siteAddress?: string
   siteLat?: number | null

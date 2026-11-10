@@ -105,6 +105,11 @@ try {
   check('repeat updates the same job', r.status === 200 && r.json?.created === false && r.json?.job?.id === jobId && r.json?.job?.code === `SMK2-${stamp}`)
   r = await call('PUT', `/jobs/by-ref/smoke/${stamp}`, { token: key, body: { siteAddress: '6621 220th St SW, Mountlake Terrace, WA 98043' } })
   check('a job keeps its site address', r.status === 200 && r.json?.job?.siteAddress === '6621 220th St SW, Mountlake Terrace, WA 98043', JSON.stringify(r.json?.job ?? r.json))
+  // Old projects fold under Archived: no won stage and no time lately. A won stage keeps it on top.
+  r = await call('PUT', `/jobs/by-ref/smoke/${stamp}`, { token: key, body: { stage: 'proposal' } })
+  check('a proposal with no time is archived', r.status === 200 && r.json?.job?.stage === 'PROPOSAL' && r.json?.job?.archived === true, JSON.stringify(r.json?.job ?? r.json))
+  r = await call('PUT', `/jobs/by-ref/smoke/${stamp}`, { token: key, body: { stage: 'CONTRACT' } })
+  check('a won project is not archived', r.status === 200 && r.json?.job?.archived === false && r.json?.job?.active === true, JSON.stringify(r.json?.job ?? r.json))
 
   r = await call('PUT', `/people/by-email/${encodeURIComponent(testEmail)}`, { token: key, body: { name: 'Smoke Test', initials: 'ZZ' } })
   check('create person by email', r.status === 200 && r.json?.created === true, JSON.stringify(r.json))
