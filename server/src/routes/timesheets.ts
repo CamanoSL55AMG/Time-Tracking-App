@@ -1,24 +1,37 @@
 import { Router } from 'express'
 import { prisma } from '../db.js'
-import { optionalDate, requiredStr, route, str } from '../api.js'
+import { bool, limitOf, optionalDate, requiredStr, route, str } from '../api.js'
 import { ApiError, badRequest } from '../errors.js'
 import { requireAuth, requirePerson, requireScope } from '../auth/middleware.js'
 import { APPROVE, CREW, FIX_APPROVE, SELF } from '../auth/apiKeys.js'
 import { parseGeo } from '../lib/geo.js'
 import { addDays, dayBounds, isYmd, startOfLocalDay } from '../lib/time.js'
-import { approveWeek, personWeek, reopenWeek, signWeek, weekSheet } from '../services/timesheets.js'
+import { approveWeek, personWeek, reopenWeek, signWeek, weekBounds, weekSheet } from '../services/timesheets.js'
 import { findExceptions } from '../services/exceptions.js'
 import { createRequest, decideRequest, listRequests, withdrawRequest } from '../services/requests.js'
-import { personState, punchIn, punchNext, punchOut, type Actor, type PunchInput } from '../services/punch.js'
+import { editOwnTimes, personState, punchIn, punchNext, punchOut, selfEditFrom, type Actor, type PunchInput } from '../services/punch.js'
+import { listSelfEdits, markReviewed, waitingByPerson, type ReviewStatus } from '../services/selfEdits.js'
 
 export const timesheetsRouter = Router()
 
 const WEEK = { week: 'Any date in the week, YYYY-MM-DD. Defaults to this week' }
 
-/** A person's week plus the change requests made for it. */
+/** A person's week plus the change requests made for it, and the times they fixed themselves. */
 async function weekWithRequests(companyId: string, personId: string, week: string | undefined) {
   const w = await personWeek(companyId, personId, week)
-  return { ...w, requests: await listRequests(companyId, { personId, weekStart: w.weekStart }) }
+  const { start, end } = weekBounds(w.weekStart, w.timezone)
+  const [requests, selfEdits] = await Promise.all([
+    listRequests(companyId, { personId, weekStart: w.weekStart }),
+    listSelfEdits(companyId, { status: 'all', personId, from: start, to: end }),
+  ])
+  return {
+    ...w,
+    requests,
+    selfEdits,
+    // First day the person may fix their own time on (the start of the open pay
+    // period); null when that is switched off.
+    selfEditFrom: selfEditFrom(new Date(), w.timezone),
+  }
 }
 
 // ─── The tech's own week ────────────────────────────────────────────────────
@@ -57,7 +70,16 @@ route(
 route(
   timesheetsRouter,
   { method: 'get', path: '/timesheets', tag: 'Timesheets', summary: "Everyone's week: hours per day, sign-off state and problems to look at.", access: ['punch:read'], query: WEEK },
-  async (req) => weekSheet(requireScope(req, 'punch:read').companyId, str(req.query.week, 10) || undefined),
+  async (req) => {
+    const companyId = requireScope(req, 'punch:read').companyId
+    const sheet = await weekSheet(companyId, str(req.query.week, 10) || undefined)
+    const company = await prisma.company.findUniqueOrThrow({ where: { id: companyId } })
+    const { start, end } = weekBounds(sheet.weekStart, company.timezone)
+    // Times people fixed themselves this week that nobody has looked at yet.
+    const waiting = await waitingByPerson(companyId, start, end)
+    const rows = sheet.rows.map((r) => ({ ...r, editsToReview: waiting.get(r.person.id) ?? 0 }))
+    return { ...sheet, rows, counts: { ...sheet.counts, editsToReview: rows.reduce((n, r) => n + r.editsToReview, 0) } }
+  },
 )
 
 route(
@@ -205,6 +227,78 @@ for (const decision of ['approve', 'reject'] as const) {
     },
   )
 }
+
+// ─── Fixing your own time ───────────────────────────────────────────────────
+// A tech corrects their own punch times back to the start of the open pay period
+// (Art, 2026-11-09). No approval first: the change counts at once, keeps the old
+// times in the segment's history, and waits on Review until a supervisor or admin
+// marks it looked at.
+
+route(
+  timesheetsRouter,
+  {
+    method: 'patch',
+    path: '/me/punches/:id',
+    tag: 'Timesheets',
+    summary: 'Fix the start or end of one of your own segments in the open pay period. A switch moves both sides together.',
+    access: [SELF],
+    body: {
+      clockIn: 'New start (ISO date-time)',
+      clockOut: 'New end (ISO date-time). Closes a segment left open on an earlier day',
+      keepJoined: 'Default true: a segment that meets this one (a switch) moves with it. false leaves it where it is (time off in between)',
+      reason: 'What happened (required)',
+    },
+  },
+  async (req) => {
+    const auth = requireScope(req, SELF)
+    const person = requirePerson(auth)
+    const b = (req.body ?? {}) as Record<string, unknown>
+    if (b.clockOut === null) throw badRequest('A segment cannot be reopened here. Clock in on the clock screen instead.', { field: 'clockOut' })
+    const result = await editOwnTimes(
+      { person, apiKeyId: auth.apiKeyId },
+      req.params.id,
+      { clockIn: optionalDate(b.clockIn, 'clockIn'), clockOut: optionalDate(b.clockOut, 'clockOut') },
+      str(b.reason, 500),
+      bool(b.keepJoined) ?? true,
+    )
+    return result
+  },
+)
+
+route(
+  timesheetsRouter,
+  {
+    method: 'get',
+    path: '/edits',
+    tag: 'Timesheets',
+    summary: 'Times people fixed themselves: waiting to be looked at (default), looked at, or all.',
+    access: ['punch:read'],
+    query: { status: 'waiting, reviewed or all. Defaults to waiting', personId: 'Only this person', limit: 'At most this many, 200 by default' },
+  },
+  async (req) => {
+    const auth = requireScope(req, 'punch:read')
+    const status = (str(req.query.status, 20) || 'waiting') as ReviewStatus
+    if (!['waiting', 'reviewed', 'all'].includes(status)) throw badRequest('status must be waiting, reviewed or all.', { field: 'status' })
+    return { data: await listSelfEdits(auth.companyId, { status, personId: str(req.query.personId, 80) || undefined, limit: limitOf(req.query.limit, 200, 500) }) }
+  },
+)
+
+route(
+  timesheetsRouter,
+  {
+    method: 'post',
+    path: '/edits/reviewed',
+    tag: 'Timesheets',
+    summary: 'Mark times people fixed themselves as looked at.',
+    access: [FIX_APPROVE],
+    body: { ids: 'Edit ids from GET /edits' },
+  },
+  async (req) => {
+    const auth = requireScope(req, FIX_APPROVE)
+    const ids = Array.isArray(req.body?.ids) ? (req.body.ids as unknown[]).map((x) => str(x, 80)).filter(Boolean) : []
+    return markReviewed(requirePerson(auth), ids)
+  },
+)
 
 route(
   timesheetsRouter,

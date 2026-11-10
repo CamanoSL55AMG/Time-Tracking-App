@@ -447,6 +447,32 @@ export interface RequestBody {
   reason: string
 }
 
+/** A time a person fixed themselves. It counts at once and waits for a supervisor to look at it. */
+export interface SelfEdit {
+  id: string
+  at: string
+  reason: string
+  person: { id: string; name: string }
+  segment: {
+    id: string
+    clockIn: string
+    clockOut: string | null
+    job: { id: string; name: string; code: string }
+    phase: { id: string; name: string; short: string } | null
+  }
+  before: { clockIn: string; clockOut: string | null } | null
+  after: { clockIn: string; clockOut: string | null } | null
+  reviewedBy: string | null
+  reviewedAt: string | null
+}
+export interface FixTimesBody {
+  clockIn?: string
+  clockOut?: string
+  /** Default true: a segment that meets this one (a switch) moves with it. */
+  keepJoined?: boolean
+  reason: string
+}
+
 export interface PersonWeek extends SheetState {
   person: { id: string; name: string; email: string }
   weekStart: string
@@ -459,6 +485,10 @@ export interface PersonWeek extends SheetState {
   hoursAtSignOff: number | null
   exceptions: TimeException[]
   requests: ChangeRequest[]
+  /** Times the person fixed themselves this week. */
+  selfEdits?: SelfEdit[]
+  /** First day (YYYY-MM-DD) the person may fix their own time on; null when that is off. */
+  selfEditFrom?: string | null
 }
 export interface WeekSheetRow extends SheetState {
   person: { id: string; name: string; email: string; active: boolean; role: string }
@@ -467,6 +497,8 @@ export interface WeekSheetRow extends SheetState {
   openSegment: boolean
   problems: number
   pendingRequests: number
+  /** Times this person fixed themselves this week that nobody has looked at yet. */
+  editsToReview?: number
 }
 export interface WeekSheet {
   weekStart: string
@@ -476,7 +508,7 @@ export interface WeekSheet {
   rows: WeekSheetRow[]
   quiet: { id: string; name: string }[]
   exceptions: TimeException[]
-  counts: { approved: number; partlyApproved: number; signed: number; open: number; pendingRequests: number }
+  counts: { approved: number; partlyApproved: number; signed: number; open: number; pendingRequests: number; editsToReview?: number }
 }
 export interface CrewResult {
   personId: string
@@ -741,6 +773,12 @@ export const api = {
   editPunch: (id: string, body: { clockIn?: string; clockOut?: string | null; notes?: string; reason: string }) =>
     http.patch<{ punch: Punch }>(`/punches/${id}`, body).then((r) => r.data.punch),
   askChange: (body: RequestBody) => http.post<{ request: ChangeRequest }>('/me/requests', body).then((r) => r.data.request),
+  fixMyTime: (id: string, body: FixTimesBody) =>
+    http.patch<{ changed: Punch[]; opensGap: boolean; editableFrom: string }>(`/me/punches/${id}`, body).then((r) => r.data),
+  /** Switches the server has on (the same answer as authConfig, features only). */
+  features: () => http.get<{ features?: { leave?: boolean; selfEdit?: boolean } }>('/auth/config').then((r) => r.data.features ?? {}),
+  selfEdits: (status: 'waiting' | 'reviewed' | 'all' = 'waiting') => http.get<{ data: SelfEdit[] }>('/edits', { params: { status } }).then((r) => r.data.data),
+  markEditsReviewed: (ids: string[]) => http.post<{ marked: number }>('/edits/reviewed', { ids }).then((r) => r.data),
   withdrawRequest: (id: string) => http.post<{ request: ChangeRequest }>(`/me/requests/${id}/withdraw`).then((r) => r.data.request),
   pendingRequests: () => http.get<{ data: ChangeRequest[] }>('/requests', { params: { status: 'pending' } }).then((r) => r.data.data),
   decideRequest: (id: string, decision: 'approve' | 'reject', note: string) =>
