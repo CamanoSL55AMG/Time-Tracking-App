@@ -1,4 +1,5 @@
 import 'dotenv/config'
+import { isOn } from './lib/flag.js'
 
 const num = (v: string | undefined): number | null => {
   if (v === undefined || v.trim() === '') return null
@@ -46,6 +47,10 @@ export const config = {
   // refused whatever this says: a supervisor reopens those and corrects them directly.
   // 21 covers a full semimonthly pay period plus the days until payroll runs.
   changeRequestDays: Math.max(0, num(process.env.CHANGE_REQUEST_DAYS) ?? 21),
+  // A tech fixes their own punch times back to the start of the open pay period,
+  // with no approval first; each change keeps the old times and waits for a
+  // supervisor to look it over (Art, 2026-11-09). On unless SELF_EDIT_ENABLED=false.
+  selfEditEnabled: !/^(0|false|no|off)$/i.test((process.env.SELF_EDIT_ENABLED ?? '').trim()),
   // W-2 employees and 1099 contractors (services/workerType.ts). Off = everyone is an
   // employee, the worker type can't be set, and the payroll export is unchanged.
   contractorsEnabled: /^(1|true|yes|on)$/i.test((process.env.CONTRACTORS_ENABLED ?? '').trim()),
@@ -66,6 +71,12 @@ export const config = {
   // looks for a repeat whose day has come. 0 = never on its own (the office can still
   // run it from POST /recurring-expenses/run).
   recurringCheckMinutes: Math.max(0, num(process.env.RECURRING_EXPENSES_CHECK_MINUTES) ?? 60),
+  // First sign-in terms: each person must accept the Privacy Policy, the EULA and the
+  // AIC Platform Terms (legal/manifest.json) before the app does anything else for
+  // them. Off unless TERMS_GATE_ENABLED=true.
+  termsGateEnabled: isOn(process.env.TERMS_GATE_ENABLED),
+  // Folder holding manifest.json and the documents. Empty = <repo>/legal.
+  termsDir: (process.env.TERMS_DIR ?? '').trim(),
 }
 
 /** Refuse to start with a missing or weak signing secret. */

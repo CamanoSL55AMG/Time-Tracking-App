@@ -18,13 +18,34 @@ let onSignedOut: (() => void) | null = null
 export const setSignedOutHandler = (fn: () => void) => {
   onSignedOut = fn
 }
+// The server holds a signed-in person's calls until they accept the terms; the app
+// then shows the terms screen.
+let onTermsRequired: (() => void) | null = null
+export const setTermsRequiredHandler = (fn: () => void) => {
+  onTermsRequired = fn
+}
+const errorCode = (err: unknown): string | undefined =>
+  axios.isAxiosError(err) ? (err.response?.data as { error?: { code?: string } } | undefined)?.error?.code : undefined
+/** The server refused because the person has terms to accept first. */
+export const isTermsRequired = (err: unknown) => axios.isAxiosError(err) && err.response?.status === 403 && errorCode(err) === 'terms_required'
+
+// The server holds everything back until a password an admin set is changed.
+let onPasswordChangeRequired: (() => void) | null = null
+export const setPasswordChangeHandler = (fn: () => void) => {
+  onPasswordChangeRequired = fn
+}
+
 http.interceptors.response.use(
   (r) => r,
   (err: AxiosError) => {
     if (err.response?.status === 401 && getToken() && !String(err.config?.url ?? '').startsWith('/auth/')) {
       setToken(null)
       onSignedOut?.()
+    } else if (isTermsRequired(err)) {
+      onTermsRequired?.()
     }
+    const code = (err.response?.data as { error?: { code?: string } } | undefined)?.error?.code
+    if (err.response?.status === 403 && code === 'password_change_required') onPasswordChangeRequired?.()
     return Promise.reject(err)
   },
 )
@@ -51,6 +72,8 @@ export interface Person {
   /** The group inside the company, e.g. "Stage Forge". A division_admin sees only their own. */
   division?: string
   active: boolean
+  /** An admin set their password: they must pick their own before anything else. */
+  mustChangePassword?: boolean
   /** employee = W-2, contractor = 1099 (only used when the server has CONTRACTORS_ENABLED). */
   workerType?: WorkerType
   /** YYYY-MM-DD the current worker type started; null = always. */
@@ -65,6 +88,12 @@ export interface Job {
   name: string
   code: string
   active: boolean
+  /** Jetbuilt stage sent across by GED (PROPOSAL, CONTRACT, INSTALL, REVIEW…); empty for jobs added here. */
+  stage?: string
+  /** When time was last charged to the job. */
+  lastPunchAt?: string | null
+  /** An old project (no won stage, no punches lately) or a job closed to new time: shown under Archived. */
+  archived?: boolean
   /** Job site, sent across from Jetbuilt by GED. Empty when unknown. */
   siteAddress?: string
   siteLat?: number | null
@@ -335,6 +364,28 @@ export interface ExpenseBody {
 }
 export const fmtMoney = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD' })
 
+// ─── First sign-in terms ────────────────────────────────────────────────────
+
+export type TermsKind = 'privacy' | 'eula' | 'global'
+export interface TermsBrief {
+  id: string
+  title: string
+  kind: TermsKind
+  version: string
+}
+export interface TermsStatus {
+  enabled: boolean
+  /** Nothing left to accept (always true while the gate is off). */
+  complete: boolean
+  /** Still to accept, in the order they must be accepted. */
+  pending: TermsBrief[]
+  documents: (TermsBrief & { accepted: boolean })[]
+}
+export interface TermsDocument extends TermsBrief {
+  /** Markdown. */
+  text: string
+}
+
 export interface ApiKey {
   id: string
   name: string
@@ -404,6 +455,32 @@ export interface RequestBody {
   reason: string
 }
 
+/** A time a person fixed themselves. It counts at once and waits for a supervisor to look at it. */
+export interface SelfEdit {
+  id: string
+  at: string
+  reason: string
+  person: { id: string; name: string }
+  segment: {
+    id: string
+    clockIn: string
+    clockOut: string | null
+    job: { id: string; name: string; code: string }
+    phase: { id: string; name: string; short: string } | null
+  }
+  before: { clockIn: string; clockOut: string | null } | null
+  after: { clockIn: string; clockOut: string | null } | null
+  reviewedBy: string | null
+  reviewedAt: string | null
+}
+export interface FixTimesBody {
+  clockIn?: string
+  clockOut?: string
+  /** Default true: a segment that meets this one (a switch) moves with it. */
+  keepJoined?: boolean
+  reason: string
+}
+
 export interface PersonWeek extends SheetState {
   person: { id: string; name: string; email: string }
   weekStart: string
@@ -416,6 +493,10 @@ export interface PersonWeek extends SheetState {
   hoursAtSignOff: number | null
   exceptions: TimeException[]
   requests: ChangeRequest[]
+  /** Times the person fixed themselves this week. */
+  selfEdits?: SelfEdit[]
+  /** First day (YYYY-MM-DD) the person may fix their own time on; null when that is off. */
+  selfEditFrom?: string | null
 }
 export interface WeekSheetRow extends SheetState {
   person: { id: string; name: string; email: string; active: boolean; role: string }
@@ -424,6 +505,8 @@ export interface WeekSheetRow extends SheetState {
   openSegment: boolean
   problems: number
   pendingRequests: number
+  /** Times this person fixed themselves this week that nobody has looked at yet. */
+  editsToReview?: number
 }
 export interface WeekSheet {
   weekStart: string
@@ -433,7 +516,7 @@ export interface WeekSheet {
   rows: WeekSheetRow[]
   quiet: { id: string; name: string }[]
   exceptions: TimeException[]
-  counts: { approved: number; partlyApproved: number; signed: number; open: number; pendingRequests: number }
+  counts: { approved: number; partlyApproved: number; signed: number; open: number; pendingRequests: number; editsToReview?: number }
 }
 export interface CrewResult {
   personId: string
@@ -637,6 +720,9 @@ export const api = {
   google: (credential: string) => http.post<{ token: string; person: Person }>('/auth/google', { credential }).then((r) => r.data),
   me: () => http.get<{ person: Person | null; scopes: string[] }>('/auth/me').then((r) => r.data),
   changePassword: (current: string, next: string) => http.post('/auth/password', { current, next }).then((r) => r.data),
+  termsStatus: () => http.get<TermsStatus>('/terms/status').then((r) => r.data),
+  termsDocument: (id: string) => http.get<TermsDocument>(`/terms/documents/${encodeURIComponent(id)}`).then((r) => r.data),
+  acceptTerms: (documentId: string, version: string) => http.post<TermsStatus>('/terms/accept', { documentId, version }).then((r) => r.data),
 
   state: () => http.get<DayState>('/me/state').then((r) => r.data),
   punchIn: (jobId: string, phaseId: string | undefined, notes?: string) => punch('in', { jobId, phaseId, notes: notes?.trim() || undefined }),
@@ -695,6 +781,12 @@ export const api = {
   editPunch: (id: string, body: { clockIn?: string; clockOut?: string | null; notes?: string; reason: string }) =>
     http.patch<{ punch: Punch }>(`/punches/${id}`, body).then((r) => r.data.punch),
   askChange: (body: RequestBody) => http.post<{ request: ChangeRequest }>('/me/requests', body).then((r) => r.data.request),
+  fixMyTime: (id: string, body: FixTimesBody) =>
+    http.patch<{ changed: Punch[]; opensGap: boolean; editableFrom: string }>(`/me/punches/${id}`, body).then((r) => r.data),
+  /** Switches the server has on (the same answer as authConfig, features only). */
+  features: () => http.get<{ features?: { leave?: boolean; selfEdit?: boolean } }>('/auth/config').then((r) => r.data.features ?? {}),
+  selfEdits: (status: 'waiting' | 'reviewed' | 'all' = 'waiting') => http.get<{ data: SelfEdit[] }>('/edits', { params: { status } }).then((r) => r.data.data),
+  markEditsReviewed: (ids: string[]) => http.post<{ marked: number }>('/edits/reviewed', { ids }).then((r) => r.data),
   withdrawRequest: (id: string) => http.post<{ request: ChangeRequest }>(`/me/requests/${id}/withdraw`).then((r) => r.data.request),
   pendingRequests: () => http.get<{ data: ChangeRequest[] }>('/requests', { params: { status: 'pending' } }).then((r) => r.data.data),
   decideRequest: (id: string, decision: 'approve' | 'reject', note: string) =>
@@ -747,7 +839,7 @@ export const api = {
       .then((r) => ({ people: r.data.data, contractorsEnabled: Boolean(r.data.contractorsEnabled), divisions: r.data.divisions ?? [] })),
   savePerson: (
     email: string,
-    body: { name?: string; initials?: string; role?: string; division?: string; active?: boolean; password?: string; workerType?: WorkerType; workerTypeFrom?: string | null },
+    body: { name?: string; initials?: string; role?: string; division?: string; active?: boolean; password?: string; mustChangePassword?: boolean; workerType?: WorkerType; workerTypeFrom?: string | null },
   ) =>
     http.put<{ created: boolean; person: Person }>(`/people/by-email/${encodeURIComponent(email)}`, body).then((r) => r.data),
 
@@ -901,11 +993,13 @@ export async function flushPunches(): Promise<boolean> {
         sentAny = true
       } catch (err) {
         if (isOffline(err)) break
-        // Signed out: keep the punch until someone signs in again.
+        // Signed out, or terms still to accept: keep the punch until that is done.
         if (axios.isAxiosError(err) && err.response?.status === 401) break
-        const code = axios.isAxiosError(err) ? (err.response?.data as { error?: { code?: string } } | undefined)?.error?.code : undefined
-        // Logbook switched off in AIC Control Tower: keep the punch until it is back on.
-        if (code === 'app_off') break
+        if (isTermsRequired(err)) break
+        const code = errorCode(err)
+        // Logbook switched off in AIC Control Tower, or a new password to set first:
+        // keep the punch until that is sorted.
+        if (code === 'app_off' || code === 'password_change_required') break
         // Clocking out when already out is not worth a warning.
         if (!(q[0].kind === 'out' && code === 'not_clocked_in')) {
           const when = new Date(String(q[0].body.at)).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })

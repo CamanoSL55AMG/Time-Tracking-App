@@ -23,6 +23,7 @@ export const publicPerson = (p: Person) => ({
   role: p.role,
   division: p.division,
   active: p.active,
+  mustChangePassword: p.mustChangePassword,
   workerType: p.workerType,
   workerTypeFrom: p.workerTypeFrom,
   scopes: ROLE_SCOPES[isRole(p.role) ? p.role : 'tech'],
@@ -90,7 +91,7 @@ route(
     // Set while AIC Control Tower has Logbook switched OFF; the sign-in page shows it.
     switchedOff: switchState().on ? null : OFF_MESSAGE,
     // Optional parts that are switched on here; the app shows their screens only then.
-    features: { leave: config.leaveEnabled },
+    features: { leave: config.leaveEnabled, selfEdit: config.selfEditEnabled },
   }),
 )
 
@@ -243,7 +244,7 @@ route(
     method: 'post',
     path: '/auth/password',
     tag: 'Sign-in',
-    summary: 'Change your own password.',
+    summary: 'Change your own password. Also clears "must change password" after an admin set it.',
     access: ['punch:self'],
     body: { current: 'Current password (omit if none is set yet)', next: 'New password, at least 10 characters' },
   },
@@ -256,8 +257,11 @@ route(
     if (person.passwordHash) {
       const current = typeof req.body?.current === 'string' ? req.body.current : ''
       if (!(await bcrypt.compare(current, person.passwordHash))) throw unauthorized('The current password is not correct.')
+      if (await bcrypt.compare(next, person.passwordHash)) {
+        throw badRequest('Pick a new password, not the one you have now.', { field: 'next' })
+      }
     }
-    await prisma.person.update({ where: { id: person.id }, data: { passwordHash: await bcrypt.hash(next, 12) } })
+    await prisma.person.update({ where: { id: person.id }, data: { passwordHash: await bcrypt.hash(next, 12), mustChangePassword: false } })
     return { ok: true }
   },
 )

@@ -65,16 +65,17 @@ import { FixTimeLine } from './Requests'
 // With no signal, taps are kept on the phone and the screen carries on as if they
 // had gone through.
 
-type Group = 'Today' | 'Projects' | 'Service' | 'Visits' | 'Shop' | 'Repair' | 'Office'
+type Group = 'Today' | 'Projects' | 'Service' | 'Visits' | 'Shop' | 'Repair' | 'Office' | 'Archived'
 const KIND_GROUP: Record<Job['kind'], Group> = { project: 'Projects', service: 'Service', visit: 'Visits', shop: 'Shop', repair: 'Repair', other: 'Office' }
-const GROUP_LABEL: Partial<Record<Group, string>> = { Today: "Today's schedule", Service: 'Service calls', Visits: 'Site visits', Repair: 'Repair tickets' }
+const GROUP_LABEL: Partial<Record<Group, string>> = { Today: "Today's schedule", Service: 'Service calls', Visits: 'Site visits', Repair: 'Repair tickets', Archived: 'Archived projects' }
 const groupLabel = (g: Group) => GROUP_LABEL[g] ?? g
 const MODE_GROUPS: Record<WorkMode, Group[]> = {
-  install: ['Today', 'Projects', 'Shop', 'Service', 'Visits', 'Office'],
-  service: ['Today', 'Service', 'Visits', 'Shop', 'Projects', 'Office'],
-  office: ['Today', 'Projects', 'Office', 'Visits', 'Service', 'Shop'],
-  shop: ['Today', 'Projects', 'Shop', 'Service', 'Visits', 'Office'],
-  cad: ['Today', 'Projects', 'Office', 'Visits', 'Service', 'Shop'],
+  // Old projects (see the server's jobArchive.ts) sit last, under Archived projects.
+  install: ['Today', 'Projects', 'Shop', 'Service', 'Visits', 'Office', 'Archived'],
+  service: ['Today', 'Service', 'Visits', 'Shop', 'Projects', 'Office', 'Archived'],
+  office: ['Today', 'Projects', 'Office', 'Visits', 'Service', 'Shop', 'Archived'],
+  shop: ['Today', 'Projects', 'Shop', 'Service', 'Visits', 'Office', 'Archived'],
+  cad: ['Today', 'Projects', 'Office', 'Visits', 'Service', 'Shop', 'Archived'],
   // Bench Repair offers only the Electronic Repair tickets (see choices).
   bench: ['Repair'],
 }
@@ -242,7 +243,11 @@ export default function PunchPage({ canCrew = false, meId = '', meName = '' }: {
       seen.add(a.job!.id)
       out.push({ job: a.job!, group: 'Today', hint: [a.shopTime && `${a.shopTime} shop`, a.title].filter(Boolean).join(' · ') })
     }
-    for (const j of jobs) if (!seen.has(j.id) && j.code !== OVERHEAD_CODE) out.push({ job: j, group: KIND_GROUP[j.kind] ?? 'Office' })
+    // A job on today's schedule shows there even if it is an old project.
+    for (const j of jobs) {
+      if (seen.has(j.id) || j.code === OVERHEAD_CODE) continue
+      out.push({ job: j, group: j.archived && j.kind === 'project' ? 'Archived' : KIND_GROUP[j.kind] ?? 'Office' })
+    }
     // Repair tickets belong to Bench Repair, and Bench Repair offers nothing else.
     const fits = (c: Choice) => (mode === 'bench' ? c.job.kind === 'repair' : c.job.kind !== 'repair')
     const rank = (g: Group) => (order.indexOf(g) < 0 ? 99 : order.indexOf(g))

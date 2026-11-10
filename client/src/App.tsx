@@ -21,8 +21,9 @@ import {
   Toolbar,
   Typography,
 } from '@mui/material'
-import { api, errorText, getToken, setSignedOutHandler, setToken, type Person } from './api'
+import { api, errorText, getToken, setPasswordChangeHandler, setSignedOutHandler, setTermsRequiredHandler, setToken, type Person } from './api'
 import Login from './pages/Login'
+import FirstPassword from './pages/FirstPassword'
 import PasswordField from './PasswordField'
 import PunchPage from './pages/Punch'
 import BoardPage from './pages/Board'
@@ -30,6 +31,7 @@ import AdminPage from './pages/Admin'
 import WeekPage from './pages/Week'
 import ReviewPage from './pages/Review'
 import ExpensesPage from './pages/Expenses'
+import TermsGate from './pages/Terms'
 import PayrollPage from './pages/Payroll'
 import LeavePage from './pages/Leave'
 import { writeMode } from './pages/modes'
@@ -74,6 +76,9 @@ export default function App() {
   const [tab, setTab] = useState<Tab>('clock')
   const [menuAt, setMenuAt] = useState<HTMLElement | null>(null)
   const [pwOpen, setPwOpen] = useState(false)
+  // First sign-in terms: checked after every sign-in, and again whenever the server
+  // answers terms_required. The app only shows once this is true.
+  const [termsOk, setTermsOk] = useState(false)
   // Time fixes waiting for a supervisor: the count on the Review tab for managers, admins and payroll.
   const [waitingFixes, setWaitingFixes] = useState(0)
   const approver = Boolean(person?.scopes.includes('requests:approve'))
@@ -109,12 +114,18 @@ export default function App() {
   const signOut = useCallback(() => {
     setToken(null)
     setPerson(null)
+    setTermsOk(false)
     setMenuAt(null)
     setTab('clock')
   }, [])
 
   useEffect(() => {
-    setSignedOutHandler(() => setPerson(null))
+    setSignedOutHandler(() => {
+      setPerson(null)
+      setTermsOk(false)
+    })
+    setTermsRequiredHandler(() => setTermsOk(false))
+    setPasswordChangeHandler(() => setPerson((p) => (p ? { ...p, mustChangePassword: true } : p)))
     const boot = async () => {
       // Arriving from GED with a one-click sign-in link: /sso?token=…
       // Back from "Sign in with Dashboard": /sso#session=… (the session itself),
@@ -160,10 +171,17 @@ export default function App() {
         notice={bootError}
         onSignedIn={(p) => {
           writeMode(null)
+          setTermsOk(false)
           setPerson(p)
         }}
       />
     )
+  // A password an admin set: nothing else until they pick their own (the server holds
+  // the terms back too, so this comes first).
+  if (person.mustChangePassword) return <FirstPassword person={person} onDone={setPerson} onSignOut={signOut} />
+
+  // Then the Privacy Policy, EULA and AIC Platform Terms, each accepted on its own screen.
+  if (!termsOk) return <TermsGate onDone={() => setTermsOk(true)} onSignOut={signOut} />
 
   const can = (scope: string) => person.scopes.includes(scope)
   const showBoard = can('punch:read')
@@ -182,9 +200,15 @@ export default function App() {
     <Box sx={{ minHeight: '100dvh', pb: 'calc(72px + env(safe-area-inset-bottom))' }}>
       <AppBar position="sticky" color="primary" elevation={0}>
         <Toolbar sx={{ gap: 1 }}>
-          <Typography variant="h6" sx={{ fontWeight: 700, flex: 1 }}>
-            Logbook
-          </Typography>
+          {/* AICPNW chrome logo with the app name under it (same on every AIC app) */}
+          <Box sx={{ flex: 1, display: 'flex', minWidth: 0 }}>
+            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '3px' }}>
+              <Box component="img" src="/brand/aicpnw-logo.png" alt="AICPNW" sx={{ height: { xs: 20, sm: 24 }, width: 'auto', display: 'block' }} />
+              <Box component="span" sx={{ fontSize: { xs: 10, sm: 11 }, fontWeight: 600, letterSpacing: '0.16em', textTransform: 'uppercase', color: '#c9d1d7', lineHeight: 1, whiteSpace: 'nowrap' }}>
+                Logbook
+              </Box>
+            </Box>
+          </Box>
           <Button color="inherit" onClick={(e) => setMenuAt(e.currentTarget)} sx={{ fontWeight: 600 }}>
             {person.name}
           </Button>
@@ -227,7 +251,7 @@ export default function App() {
         </Toolbar>
       </AppBar>
 
-      <Container maxWidth={current === 'clock' || current === 'week' || current === 'expenses' ? 'sm' : 'md'} sx={{ py: 2 }}>
+      <Container maxWidth={current === 'clock' || current === 'expenses' ? 'sm' : 'md'} sx={{ py: 2 }}>
         {current === 'clock' && <PunchPage canCrew={can('punch:crew')} meId={person.id} meName={person.name} />}
         {current === 'week' && <WeekPage />}
         {current === 'expenses' && <ExpensesPage />}
@@ -303,7 +327,7 @@ function PasswordDialog({ open, onClose }: { open: boolean; onClose: () => void 
           ) : (
             <>
               <PasswordField label="Current password" autoComplete="current-password" value={current} onChange={(e) => setCurrent(e.target.value)} helperText="Leave blank if you have never set one" />
-              <PasswordField label="New password" autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} helperText="At least 10 characters" />
+              <PasswordField label="New password" autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} onGenerate={setNext} helperText="At least 10 characters. Save a generated one in your password manager first" />
               {error && <Alert severity="error">{error}</Alert>}
             </>
           )}

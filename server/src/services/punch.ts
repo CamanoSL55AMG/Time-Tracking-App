@@ -1,11 +1,12 @@
 import type { Company, Job, Person, Phase, Prisma, Punch } from '@prisma/client'
 import { prisma, type Tx } from '../db.js'
-import { ApiError, badRequest, conflict, notFound } from '../errors.js'
-import { dayBounds, hoursBetween } from '../lib/time.js'
+import { ApiError, badRequest, conflict, forbidden, notFound } from '../errors.js'
+import { addDays, dayBounds, hoursBetween, localDate, startOfLocalDay } from '../lib/time.js'
 import { insideFence, type Fence, type GeoStamp } from '../lib/geo.js'
 import { emit } from './events.js'
 import { touchWeeks } from './timesheets.js'
 import { config } from '../config.js'
+import { payPeriodStart, planTimesChange, type PlanProblem, type TimesChange } from './requestRules.js'
 
 // The punch engine. A person has at most one open segment. Clocking in while on the
 // clock is a switch: the open segment closes at the same instant the new one opens,
@@ -429,6 +430,133 @@ export async function addSegmentTx(tx: Tx, actor: EditActor, personId: string, s
   return punch
 }
 
+// ─── Fixing your own time ───────────────────────────────────────────────────
+// A tech opens an earlier day, fixes a punch, then steps forward through each switch
+// until the day is right (Jake's ask, Art 2026-11-09). Their own segments only, back
+// to the start of the open pay period, no approval first. Every row that moves gets a
+// PunchEdit with the old and new times, marked selfEdit, and shows as edited until a
+// supervisor or admin has looked it over (services/selfEdits.ts).
+
+/** First local day a person may fix their own time on today, or null when it is switched off. */
+export function selfEditFrom(now: Date, tz: string): string | null {
+  return config.selfEditEnabled ? payPeriodStart(localDate(now, tz)) : null
+}
+
+const fmtClock = (d: Date, tz: string) => d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: tz })
+
+function planError(p: PlanProblem, names: Map<string, string>, tz: string, times: Map<string, { clockIn: Date; clockOut: Date | null }>): ApiError {
+  const label = (id: string) => {
+    const s = times.get(id)
+    return `${names.get(id) ?? 'the segment'}${s ? ` (${fmtClock(s.clockIn, tz)} – ${s.clockOut ? fmtClock(s.clockOut, tz) : 'now'})` : ''}`
+  }
+  switch (p.code) {
+    case 'not_found':
+      return notFound('Segment')
+    case 'nothing_to_change':
+      return badRequest('Nothing to change: those are the times already on it.')
+    case 'end_before_start':
+      return badRequest('The end must be after the start.', { field: 'clockOut' })
+    case 'too_long':
+      return badRequest('One segment cannot be longer than 24 hours.', { field: 'clockOut' })
+    case 'swallows':
+      return conflict(
+        'swallows_segment',
+        `That would leave no time on ${label(p.neighbourId)}. Fix that one first, or ask your supervisor to take it out.`,
+        { neighbourId: p.neighbourId, side: p.side },
+      )
+    case 'overlap':
+      return conflict('punch_overlap', `That runs into ${label(p.neighbourId)}. Move that one first.`, { overlaps: p.neighbourId })
+  }
+}
+
+export interface OwnTimesActor {
+  person: Person
+  apiKeyId: string | null
+}
+
+/**
+ * A person corrects the start and/or end of one of their own segments. Neighbours
+ * that meet it (a switch) move with it unless keepJoined is false; nothing is allowed
+ * to overlap or swallow another segment.
+ */
+export async function editOwnTimes(actor: OwnTimesActor, punchId: string, change: TimesChange, reason: string, keepJoined = true) {
+  if (!config.selfEditEnabled) throw new ApiError(403, 'self_edit_off', 'Fixing your own time is switched off. Ask your supervisor for a change instead.')
+  const why = reason.trim()
+  if (!why) throw badRequest('Say what happened, so your supervisor knows why the time changed.', { field: 'reason' })
+  if (change.clockIn === undefined && change.clockOut === undefined) throw badRequest('Send a new clockIn, clockOut or both.', { field: 'clockIn' })
+  const { person } = actor
+  return prisma.$transaction(async (tx) => {
+    const target = await tx.punch.findFirst({ where: { id: punchId, companyId: person.companyId } })
+    if (!target) throw notFound('Segment')
+    if (target.personId !== person.id) throw forbidden('You can fix your own time only.')
+    await lockPerson(tx, person.id)
+    // "Now" is read only once the lock is held, like every other punch change.
+    const now = new Date()
+    const company = await tx.company.findUniqueOrThrow({ where: { id: person.companyId } })
+    const tz = company.timezone
+    const from = payPeriodStart(localDate(now, tz))
+    for (const at of [change.clockIn, change.clockOut]) {
+      if (at && at.getTime() > now.getTime() + FUTURE_SLACK_MS) throw badRequest('A punch cannot be moved into the future.', { field: at === change.clockIn ? 'clockIn' : 'clockOut' })
+    }
+
+    // The person's segments around this one: everything from a few days before the
+    // pay period started (a long segment can reach into it), plus the open one.
+    const around = await tx.punch.findMany({
+      where: { personId: person.id, OR: [{ clockIn: { gte: startOfLocalDay(addDays(from, -3), tz) } }, { clockOut: null }, { id: target.id }] },
+      include,
+      orderBy: { clockIn: 'asc' },
+    })
+    if (!target.clockOut && change.clockOut && localDate(target.clockIn, tz) === localDate(now, tz)) {
+      throw conflict('still_on_clock', 'You are on the clock on this segment now. Use Clock out on the clock screen to end it.')
+    }
+    const plan = planTimesChange(around, target.id, change, keepJoined)
+    if ('problem' in plan) {
+      const names = new Map(around.map((p) => [p.id, `${p.phase?.name ?? 'the segment'} on ${p.job.name}`]))
+      throw planError(plan.problem, names, tz, new Map(around.map((p) => [p.id, p])))
+    }
+
+    const byId = new Map(around.map((p) => [p.id, p]))
+    const instants: Date[] = []
+    for (const u of plan.updates) {
+      const was = byId.get(u.id)!
+      instants.push(was.clockIn, u.clockIn, ...(was.clockOut ? [was.clockOut] : []), ...(u.clockOut ? [u.clockOut] : []))
+      // Every row that moves, before and after, has to be in the open pay period.
+      for (const at of [was.clockIn, u.clockIn]) {
+        if (localDate(at, tz) < from) {
+          throw conflict('before_pay_period', `You can fix your own time back to ${from}, the start of this pay period. For older time, ask your supervisor for a change.`, { earliest: from })
+        }
+      }
+    }
+    const pending = await tx.changeRequest.findFirst({ where: { punchId: { in: plan.updates.map((u) => u.id) }, status: 'pending' } })
+    if (pending) {
+      throw conflict('request_pending', 'A change you asked for on this time is still waiting for your supervisor. Withdraw it on your week first, then fix the time yourself.', { requestId: pending.id })
+    }
+    // Approved days are locked; a signed week goes back for signing.
+    await touchWeeks(tx, person.companyId, person.id, instants, why)
+
+    const changed: PunchRow[] = []
+    for (const u of plan.updates) {
+      const before = byId.get(u.id)!
+      const after = await tx.punch.update({ where: { id: u.id }, data: { clockIn: u.clockIn, clockOut: u.clockOut }, include })
+      const note = u.why === 'changed' ? why : `${why} (moved with the ${u.why === 'joined_before' ? 'next' : 'previous'} segment)`
+      await tx.punchEdit.create({
+        data: {
+          punchId: u.id,
+          editedById: person.id,
+          editedByKeyId: actor.apiKeyId,
+          reason: note,
+          selfEdit: true,
+          before: JSON.parse(JSON.stringify(auditShape(before))) as Prisma.InputJsonValue,
+          after: JSON.parse(JSON.stringify(auditShape(after))) as Prisma.InputJsonValue,
+        },
+      })
+      await emit(tx, person.companyId, 'punch.edited', { punch: summary(after), reason: note, self: true })
+      changed.push(after)
+    }
+    return { changed, opensGap: plan.opensGap, editableFrom: from }
+  })
+}
+
 // ─── Views ──────────────────────────────────────────────────────────────────
 
 const shopFence = (c: Company): Fence | null =>
@@ -553,6 +681,8 @@ export async function personState(person: Person) {
     lastSegment: open ? null : lastToday,
     // Time fixes waiting for a supervisor; the clock screen marks the segment they are on.
     pendingChanges,
+    // First day the person may fix their own time on (null = switched off).
+    selfEditFrom: selfEditFrom(now, company.timezone),
     asOf: now,
   }
 }

@@ -47,7 +47,8 @@ route(
       role: 'tech | lead | manager | payroll | admin | division_admin (admin and division_admin need a signed-in admin or a key with people:roles). A division admin may set tech or lead only',
       division: 'The group inside the company this person belongs to, e.g. "Stage Forge"; empty for none. Needs a signed-in admin or a key with people:roles. A division admin adds people to their own division and cannot move them',
       active: 'false to stop the person signing in or punching',
-      password: 'Set an initial password (signed-in admins only)',
+      password: 'Set an initial password (signed-in admins only). They must change it at first sign-in unless mustChangePassword is false',
+      mustChangePassword: 'true or false: whether they must pick a new password at their next sign-in (signed-in admins only)',
       workerType: 'employee (W-2) | contractor (1099). Only with CONTRACTORS_ENABLED=true',
       workerTypeFrom: 'YYYY-MM-DD the worker type starts (company time). A change defaults to today',
     },
@@ -112,6 +113,14 @@ route(
       if (pw.length < 10) throw badRequest('The password needs at least 10 characters.', { field: 'password' })
       passwordHash = await bcrypt.hash(pw, 12)
     }
+    // A password an admin chose is known to the admin, so the person picks their own
+    // at first sign-in. An admin may also flag or unflag someone without a new password.
+    let mustChangePassword: boolean | undefined = passwordHash ? true : undefined
+    if (req.body?.mustChangePassword !== undefined) {
+      if (!isAdmin) throw forbidden('Only a signed-in admin can change whether someone must change their password.')
+      if (typeof req.body.mustChangePassword !== 'boolean') throw badRequest('mustChangePassword must be true or false.', { field: 'mustChangePassword' })
+      mustChangePassword = req.body.mustChangePassword
+    }
 
     // W-2 or 1099 (services/workerType.ts).
     let worker: { workerType: string; workerTypeFrom: string | null; priorWorkerType: string | null } | undefined
@@ -136,7 +145,7 @@ route(
       const saved = existing
         ? await tx.person.update({
             where: { id: existing.id },
-            data: { name: name || undefined, initials, role, division, active, passwordHash, ...worker },
+            data: { name: name || undefined, initials, role, division, active, passwordHash, mustChangePassword, ...worker },
           })
         : await tx.person.create({
             data: {
@@ -148,6 +157,7 @@ route(
               division: division ?? '',
               active: active ?? true,
               passwordHash,
+              mustChangePassword,
               ...worker,
             },
           })

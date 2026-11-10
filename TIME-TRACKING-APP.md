@@ -333,6 +333,11 @@ Scopes: `punch:read`, `punch:write:any`, `jobs:read`, `jobs:write`, `people:read
 `leave:write`, `leave:approve`, `expenses:read`, `expenses:write`, `expenses:approve`,
 `webhooks:manage`.
 
+First sign-in terms (2026-11-04, off unless `TERMS_GATE_ENABLED=true`): a person's
+session can only sign in, call `/auth/me` and `/terms/*` until they have accepted the
+Privacy Policy, the EULA and the AIC Platform Terms in `legal/`; everything else answers
+`403 terms_required`. API keys are never held. See the README.
+
 Idempotency: every POST accepts an `Idempotency-Key` header. Repeating a request with the
 same key returns the original result. This is what makes offline sync and retried
 one-click punches safe.
@@ -353,6 +358,9 @@ Punching
 | GET | `/punches/{id}` | One segment with its edit history |
 | PATCH | `/punches/{id}` | Correct a segment. Reason required; writes a PunchEdit |
 | POST | `/punches` | Add a missed segment after the fact. Reason required |
+| PATCH | `/me/punches/{id}` | Fix your own segment's start or end, back to the start of the open pay period. Reason required; counts at once, marked as a self edit (§4e) |
+| GET | `/edits` | Times people fixed themselves: `status=waiting` (default), `reviewed` or `all` |
+| POST | `/edits/reviewed` | Mark self edits as looked at. Body: `ids`. Managers, admins, payroll |
 
 Reference data
 
@@ -703,3 +711,15 @@ Art's decisions (2026-11-02):
 - **The office checks every tech-added client** under Manage > Jobs > "New clients added by techs". There it can edit the name, the code (e.g. the real service ticket) and the contact, then mark it checked. Each add also emits a `job.added_by_tech` event for GED / AccountEdge to pick up later.
 
 API: `POST /me/jobs` (any signed-in person), `GET /jobs?added=review|all`, `PATCH /jobs/:id` with `reviewed`. Job now has `clientName`, `contactName`, `contactPhone`, `contactEmail`, `addedById`, `reviewedAt`. Run `npx prisma db push` after pulling.
+
+## 4e. Fixing your own time (built 2026-11-10)
+
+Jake asked for a way to go back and clean up a day; Art approved (2026-11-09): "Build it that way".
+
+- **A tech fixes their own segments** back to the **start of the open pay period** (semimonthly: the 1st or the 16th), through today, on days not yet approved. Week > tap a segment, or **Fix times** next to the day. The day opens in order: fix one segment, **Save and next** steps to the next switch, until the day is right. A reason is required and is kept while stepping.
+- **No approval first.** The fix counts at once. Every change writes a `PunchEdit` with the old and new times, the reason and `selfEdit = true`. The segment shows "fixed by you" on the tech's week and "fixed by them" to a supervisor.
+- **Switches stay joined.** Where one segment ends exactly when the next starts (a job or phase switch), moving that time moves both sides ("Move the segment before/after with it", on by default). A move that would run over a whole neighbouring segment, overlap one, end before it starts, or run past 24 hours is refused. Unticking the box can open an off-the-clock gap on purpose; the day shows it.
+- **Older time, job or phase changes, and missing days** still go through a change request that a supervisor approves (§6, `CHANGE_REQUEST_DAYS`).
+- **Review** lists "Times techs fixed themselves" with before → after and the reason. Managers, admins and payroll press **Looks right** or **Mark all looked at** (not on their own fixes, unless admin). The week sheet shows "N fixed by them" per person. An unreviewed fix does not hold up approving the week.
+- Switch: `SELF_EDIT_ENABLED` (default on; `false` sends every fix back through change requests). `GET /auth/config` reports it as `features.selfEdit`.
+- Schema: `PunchEdit.selfEdit`, `reviewedById`, `reviewedAt` (new columns only). Run `npx prisma db push` after pulling; `deploy.sh` does.

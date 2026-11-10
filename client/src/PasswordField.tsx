@@ -1,16 +1,75 @@
 import { useState } from 'react'
-import { IconButton, InputAdornment, SvgIcon, TextField, type TextFieldProps } from '@mui/material'
+import {
+  Box,
+  Button,
+  Checkbox,
+  Collapse,
+  FormControlLabel,
+  IconButton,
+  InputAdornment,
+  Slider,
+  Stack,
+  SvgIcon,
+  TextField,
+  Typography,
+  type TextFieldProps,
+} from '@mui/material'
+import {
+  clampLength,
+  copyText,
+  DEFAULT_OPTIONS,
+  generatePassword,
+  loadOptions,
+  MAX_LENGTH,
+  MIN_LENGTH,
+  saveOptions,
+  type PasswordOptions,
+} from './passwordGen'
+
+type Props = Omit<TextFieldProps, 'type'> & {
+  // Show Generate and Copy buttons under the box. Generate makes a strong random
+  // password, hands it to onGenerate, and shows it in plain text so it can be read out.
+  onGenerate?: (password: string) => void
+}
+
+const MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace'
 
 // A password box with an eye button to show or hide what was typed.
-export default function PasswordField(props: Omit<TextFieldProps, 'type'>) {
+export default function PasswordField({ onGenerate, ...props }: Props) {
   const [shown, setShown] = useState(false)
-  return (
+  const [copied, setCopied] = useState<'yes' | 'no' | null>(null)
+  const [optionsOpen, setOptionsOpen] = useState(false)
+  const [opts, setOpts] = useState<PasswordOptions>(() => (onGenerate ? loadOptions() : DEFAULT_OPTIONS))
+  const value = typeof props.value === 'string' ? props.value : ''
+
+  const generate = (o: PasswordOptions = opts) => {
+    if (!onGenerate) return
+    setShown(true)
+    setCopied(null)
+    onGenerate(generatePassword(o))
+  }
+  // Changing an option remembers it and makes a new password with it, as the vault does.
+  const setOpt = (o: PasswordOptions) => {
+    const next = { ...o, length: clampLength(o.length) }
+    setOpts(next)
+    saveOptions(next)
+    generate(next)
+  }
+  const copy = async () => {
+    const ok = await copyText(value)
+    setCopied(ok ? 'yes' : 'no')
+    window.setTimeout(() => setCopied(null), 2500)
+  }
+
+  const field = (
     <TextField
       {...props}
       type={shown ? 'text' : 'password'}
       slotProps={{
         ...props.slotProps,
+        htmlInput: { spellCheck: false, autoCapitalize: 'none', autoCorrect: 'off' },
         input: {
+          sx: onGenerate && shown ? { fontFamily: MONO, letterSpacing: '0.04em' } : undefined,
           endAdornment: (
             <InputAdornment position="end">
               <IconButton
@@ -33,5 +92,64 @@ export default function PasswordField(props: Omit<TextFieldProps, 'type'>) {
         },
       }}
     />
+  )
+
+  if (!onGenerate) return field
+  const toggle = (k: 'upper' | 'lower' | 'digits' | 'special' | 'avoidAmbiguous', label: string) => (
+    <FormControlLabel
+      sx={{ mr: 1.5 }}
+      control={<Checkbox size="small" checked={opts[k]} onChange={(e) => setOpt({ ...opts, [k]: e.target.checked })} />}
+      label={<Typography variant="body2">{label}</Typography>}
+    />
+  )
+  return (
+    <Box>
+      {field}
+      <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 0.75, flexWrap: 'wrap' }}>
+        <Button size="small" variant="outlined" onClick={() => generate()}>
+          {value ? 'Regenerate' : 'Generate password'}
+        </Button>
+        <Button size="small" onClick={() => void copy()} disabled={!value} color={copied === 'no' ? 'error' : 'primary'}>
+          {copied === 'yes' ? 'Copied' : copied === 'no' ? 'Copy failed, select it by hand' : 'Copy'}
+        </Button>
+        <Button size="small" color="inherit" onClick={() => setOptionsOpen((o) => !o)} aria-expanded={optionsOpen}>
+          Options {optionsOpen ? '▴' : '▾'}
+        </Button>
+      </Stack>
+      <Collapse in={optionsOpen} unmountOnExit>
+        <Box sx={{ mt: 1, p: 1.5, borderRadius: 1, border: 1, borderColor: 'divider' }}>
+          <Stack direction="row" spacing={2} alignItems="center">
+            <Typography variant="body2" sx={{ minWidth: 52 }}>
+              Length
+            </Typography>
+            <Slider
+              size="small"
+              min={MIN_LENGTH}
+              max={MAX_LENGTH}
+              value={Number.isFinite(opts.length) ? opts.length : MIN_LENGTH}
+              onChange={(_, v) => setOpts({ ...opts, length: v as number })}
+              onChangeCommitted={(_, v) => setOpt({ ...opts, length: v as number })}
+              aria-label="Password length"
+            />
+            <TextField
+              size="small"
+              type="number"
+              value={Number.isFinite(opts.length) ? opts.length : ''}
+              onChange={(e) => setOpts({ ...opts, length: Number(e.target.value) })}
+              onBlur={() => setOpt({ ...opts, length: clampLength(opts.length) })}
+              slotProps={{ htmlInput: { min: MIN_LENGTH, max: MAX_LENGTH, 'aria-label': 'Password length' } }}
+              sx={{ width: 76, flexShrink: 0 }}
+            />
+          </Stack>
+          <Box sx={{ mt: 0.5 }}>
+            {toggle('upper', 'A-Z')}
+            {toggle('lower', 'a-z')}
+            {toggle('digits', '0-9')}
+            {toggle('special', '!@#$%^&*')}
+          </Box>
+          {toggle('avoidAmbiguous', 'Avoid ambiguous characters (0 O o 1 I l)')}
+        </Box>
+      </Collapse>
+    </Box>
   )
 }
