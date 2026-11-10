@@ -155,7 +155,7 @@ async function own(person: Person, id: string): Promise<RecurringExpense> {
 
 // ─── Changes from the person ────────────────────────────────────────────────
 
-export async function listRecurring(companyId: string, personId?: string, includeStopped = false) {
+export async function listRecurring(companyId: string, personId?: string | { in: string[] }, includeStopped = false) {
   return prisma.recurringExpense.findMany({
     where: { companyId, personId, ...(includeStopped ? {} : { status: { not: 'stopped' } }) },
     include: recurringInclude,

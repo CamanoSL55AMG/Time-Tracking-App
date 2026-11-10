@@ -51,10 +51,15 @@ export const APPROVE = 'timesheets:approve'
  *  clock-out). Managers, admins and payroll (Art, 2026-11-04); not crew leads. */
 export const FIX_APPROVE = 'requests:approve'
 
-export const ROLES = ['tech', 'lead', 'manager', 'payroll', 'admin'] as const
+export const ROLES = ['tech', 'lead', 'manager', 'payroll', 'admin', 'division_admin'] as const
 export type Role = (typeof ROLES)[number]
+/** An admin for one division (Person.division), e.g. Stage Forge. See auth/division.ts. */
+export const DIVISION_ADMIN: Role = 'division_admin'
+export const ROLE_LIST = 'tech, lead, manager, payroll, admin or division_admin'
 
 const TECH = [SELF, 'jobs:read']
+/** What a division admin keeps on an endpoint that does not enforce the division limit. */
+export const UNLIMITED_SAFE_SCOPES: ReadonlySet<string> = new Set(TECH)
 // Leave (Art, 2026-11-07): crew leads see who is off but don't decide; managers,
 // admins and payroll approve; payroll and admins also keep the balances
 // (adjustments, opening-balance import, policies, accrual runs).
@@ -67,6 +72,12 @@ export const ROLE_SCOPES: Record<Role, string[]> = {
   manager: MANAGER,
   payroll: [SELF, 'jobs:read', 'punch:read', 'people:read', 'reports:read', APPROVE, FIX_APPROVE, 'expenses:read', 'expenses:approve', 'payroll:read', 'leave:read', 'leave:approve', 'leave:write'],
   admin: [...MANAGER, KEYS_MANAGE, 'payroll:read', 'leave:write'],
+  // Division admin (Art, 2026-11-10): reviews, corrects and approves time, fixes, expenses
+  // and leave, and keeps the roster, for their own division only. Company-wide things stay
+  // with managers and admins: jobs, phases, settings (jobs:write), the change feed, the
+  // schedule push, keys, payroll and leave balances. Every one of these scopes reaches
+  // other people, so it only counts on routes declared `division: true` (api.ts).
+  division_admin: [...LEAD, APPROVE, FIX_APPROVE, 'punch:write:any', 'people:write', 'reports:read', 'expenses:read', 'expenses:approve', 'leave:approve'],
 }
 
 /** What the AIC Terminal (GED) key may do. link-ged creates the key with these;

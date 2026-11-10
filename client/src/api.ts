@@ -47,7 +47,9 @@ export interface Person {
   email: string
   name: string
   initials: string
-  role: 'tech' | 'lead' | 'manager' | 'payroll' | 'admin'
+  role: 'tech' | 'lead' | 'manager' | 'payroll' | 'admin' | 'division_admin'
+  /** The group inside the company, e.g. "Stage Forge". A division_admin sees only their own. */
+  division?: string
   active: boolean
   /** employee = W-2, contractor = 1099 (only used when the server has CONTRACTORS_ENABLED). */
   workerType?: WorkerType
@@ -739,10 +741,13 @@ export const api = {
 
   people: () => http.get<{ data: Person[] }>('/people').then((r) => r.data.data),
   /** The roster plus whether 1099 contractors are turned on (CONTRACTORS_ENABLED). */
-  roster: () => http.get<{ data: Person[]; contractorsEnabled?: boolean }>('/people').then((r) => ({ people: r.data.data, contractorsEnabled: Boolean(r.data.contractorsEnabled) })),
+  roster: () =>
+    http
+      .get<{ data: Person[]; contractorsEnabled?: boolean; divisions?: string[] }>('/people')
+      .then((r) => ({ people: r.data.data, contractorsEnabled: Boolean(r.data.contractorsEnabled), divisions: r.data.divisions ?? [] })),
   savePerson: (
     email: string,
-    body: { name?: string; initials?: string; role?: string; active?: boolean; password?: string; workerType?: WorkerType; workerTypeFrom?: string | null },
+    body: { name?: string; initials?: string; role?: string; division?: string; active?: boolean; password?: string; workerType?: WorkerType; workerTypeFrom?: string | null },
   ) =>
     http.put<{ created: boolean; person: Person }>(`/people/by-email/${encodeURIComponent(email)}`, body).then((r) => r.data),
 

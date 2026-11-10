@@ -191,7 +191,7 @@ export default function App() {
           <Menu anchorEl={menuAt} open={Boolean(menuAt)} onClose={() => setMenuAt(null)}>
             <MenuItem disabled sx={{ opacity: '1 !important' }}>
               <Typography variant="body2" color="text.secondary">
-                {person.email} · {person.role}
+                {person.email} · {person.role === 'division_admin' ? `${person.division || 'division'} admin` : person.role}
               </Typography>
             </MenuItem>
             {showLeave && (

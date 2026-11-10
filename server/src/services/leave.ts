@@ -495,12 +495,12 @@ export async function cancelLeaveRequest(actor: LeaveActor, scopes: Set<string>,
   })
 }
 
-export async function listLeaveRequests(companyId: string, opts: { status?: string; personId?: string; from?: string; to?: string; limit?: number }) {
+export async function listLeaveRequests(companyId: string, opts: { status?: string; personId?: string; personIds?: string[]; from?: string; to?: string; limit?: number }) {
   const rows = await prisma.leaveRequest.findMany({
     where: {
       companyId,
       status: opts.status || undefined,
-      personId: opts.personId || undefined,
+      personId: opts.personId || (opts.personIds ? { in: opts.personIds } : undefined),
       ...(opts.from ? { endDate: { gte: opts.from } } : {}),
       ...(opts.to ? { startDate: { lte: opts.to } } : {}),
     },

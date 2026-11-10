@@ -833,6 +833,152 @@ try {
     for (const e of [lvEmail, leadEmail]) await call('PUT', `/people/by-email/${encodeURIComponent(e)}`, { token: admin, body: { active: false } })
   }
 
+  // Division admins (e.g. the Stage Forge admin): one division's people only, enforced
+  // on the server. The crew member from the timesheet checks above stands in for
+  // "someone in the rest of the company".
+  {
+    const div = `Smoke Division ${stamp}`
+    const daEmail = `smoke-div-admin-${stamp}@example.invalid`
+    const inEmail = `smoke-div-tech-${stamp}@example.invalid`
+    const newEmail = `smoke-div-new-${stamp}@example.invalid`
+    const daPw = `pw-${randomBytes(9).toString('base64url')}`
+    const put = (email, token, body) => call('PUT', `/people/by-email/${encodeURIComponent(email)}`, { token, body })
+
+    r = await put(daEmail, admin, { name: 'Smoke Division Admin', role: 'division_admin', password: daPw })
+    check('a division admin needs a division', r.status === 400, JSON.stringify(r.json))
+    r = await put(daEmail, key, { name: 'Smoke Division Admin', role: 'division_admin', division: div })
+    check('a key without people:roles cannot make a division admin', r.status === 403)
+    r = await put(daEmail, admin, { name: 'Smoke Division Admin', role: 'division_admin', division: `  ${div}  `, password: daPw })
+    check('an admin makes a division admin', r.status === 200 && r.json?.person?.role === 'division_admin' && r.json?.person?.division === div, JSON.stringify(r.json))
+    const daId = r.json?.person?.id
+    r = await put(inEmail, admin, { name: 'Smoke Division Tech', division: div })
+    const inId = r.json?.person?.id
+    check('an admin puts a person in a division', r.status === 200 && r.json?.person?.division === div)
+    r = await put(crewEmail, key, { division: div })
+    check('a key without people:roles cannot move someone into a division', r.status === 403)
+
+    // The division tech works a day two weeks ago, so there is time inside the division.
+    const d0 = new Date(t0.getTime() - 7 * 86_400_000)
+    const asIn = { 'X-Act-As': inEmail }
+    r = await call('POST', '/punches/in', { token: key, headers: asIn, body: { jobId, at: d0.toISOString() } })
+    const inPunch = r.json?.punch?.id
+    await call('POST', '/punches/out', { token: key, headers: asIn, body: { at: new Date(d0.getTime() + 4 * 3_600_000).toISOString() } })
+    const divWeek = ymd(d0)
+
+    r = await call('POST', '/auth/login', { body: { email: daEmail, password: daPw } })
+    const da = r.json?.token
+    const daScopes = r.json?.person?.scopes ?? []
+    check(
+      'the division admin signs in without company-wide powers',
+      r.status === 200 && Boolean(da) && ['punch:read', 'people:write', 'timesheets:approve'].every((s) => daScopes.includes(s)) && !['jobs:write', 'keys:manage', 'payroll:read', 'leave:write', 'events:read'].some((s) => daScopes.includes(s)),
+      JSON.stringify(daScopes),
+    )
+
+    r = await call('GET', '/people', { token: da })
+    const seen = (r.json?.data ?? []).map((p) => p.id).sort()
+    check('the roster is the division only', r.status === 200 && JSON.stringify(seen) === JSON.stringify([daId, inId].sort()) && JSON.stringify(r.json?.divisions) === JSON.stringify([div]), JSON.stringify(r.json?.data?.map((p) => p.email)))
+    r = await call('GET', '/people', { token: admin })
+    check('a full admin still sees everyone, and the division names', r.status === 200 && [daId, inId, crewId].every((id) => r.json.data.some((p) => p.id === id)) && r.json?.divisions?.includes(div))
+
+    r = await call('GET', `/timesheets?week=${lastWeek}`, { token: da })
+    check('the week sheet leaves out the rest of the company', r.status === 200 && !JSON.stringify(r.json).includes(crewId), JSON.stringify(r.json?.rows?.map((x) => x.person.email)))
+    r = await call('GET', `/timesheets?week=${divWeek}`, { token: da })
+    check('the week sheet shows the division', r.status === 200 && r.json?.rows?.some((x) => x.person.id === inId))
+    r = await call('GET', `/timesheets/${crewId}?week=${lastWeek}`, { token: da })
+    check("someone else's week is not found", r.status === 404)
+    r = await call('GET', `/timesheets/${inId}?week=${divWeek}`, { token: da })
+    check("a division member's week opens", r.status === 200 && r.json?.person?.id === inId)
+
+    r = await call('GET', '/punches?limit=500', { token: da })
+    check('punches are the division only', r.status === 200 && r.json?.data?.length > 0 && r.json.data.every((p) => p.personId === inId || p.personId === daId))
+    r = await call('GET', `/punches?personId=${crewId}`, { token: da })
+    check("asking for someone else's punches is not found", r.status === 404)
+    r = await call('GET', `/punches/${oldId}`, { token: da })
+    check("someone else's punch is not found", r.status === 404)
+    r = await call('PATCH', `/punches/${oldId}`, { token: da, body: { notes: 'x', reason: 'should not be allowed' } })
+    check("someone else's punch cannot be corrected", r.status === 404)
+    r = await call('PATCH', `/punches/${inPunch}`, { token: da, body: { notes: 'checked', reason: 'smoke: division admin correction' } })
+    check("a division member's punch can be corrected", r.status === 200 && r.json?.punch?.notes === 'checked', JSON.stringify(r.json?.error ?? ''))
+
+    r = await call('GET', `/reports/hours?from=${divWeek}&to=${ymd(new Date())}&groupBy=person`, { token: da })
+    check('the hours report is the division only', r.status === 200 && r.json?.rows?.length > 0 && r.json.rows.every((x) => x.personId === inId || x.personId === daId), JSON.stringify(r.json?.rows))
+    r = await call('GET', `/reports/hours?from=${lastWeek}&personId=${crewId}`, { token: da })
+    check("the hours report refuses someone else's id", r.status === 404)
+    r = await call('GET', `/reports/exceptions?from=${lastWeek}&to=${ymd(new Date())}`, { token: da })
+    check('exceptions are the division only', r.status === 200 && r.json.data.every((x) => x.personId === inId || x.personId === daId))
+    r = await call('GET', '/board', { token: da })
+    check('the board is the division only', r.status === 200 && r.json.rows.every((x) => x.personId === inId || x.personId === daId))
+    r = await call('GET', '/requests', { token: da })
+    check('change requests are the division only', r.status === 200 && r.json.data.every((x) => x.person.id === inId || x.person.id === daId))
+    r = await call('GET', '/expenses', { token: da })
+    check('expenses are the division only', r.status === 200 && r.json.data.every((x) => x.personId === inId || x.personId === daId))
+
+    r = await call('POST', '/timesheets/approve', { token: da, body: { personIds: [crewId], week: lastWeek } })
+    check("someone else's week cannot be approved", r.status === 404)
+    r = await call('POST', '/timesheets/reopen', { token: da, body: { personId: crewId, week: lastWeek, reason: 'should not be allowed' } })
+    check("someone else's week cannot be reopened", r.status === 404)
+    r = await call('POST', '/timesheets/approve', { token: da, body: { personIds: [inId], week: divWeek } })
+    check("a division member's week can be approved", r.status === 200 && r.json?.approved === 1, JSON.stringify(r.json))
+    r = await call('POST', '/crew/out', { token: da, body: { personIds: [crewId] } })
+    check('a crew punch does not reach outside the division', r.status === 200 && r.json?.results?.[0]?.code === 'not_found', JSON.stringify(r.json))
+
+    for (const [what, method, path, body] of [
+      ['the change feed', 'GET', '/events'],
+      ['integration keys', 'GET', '/api-keys'],
+      ['the payroll periods', 'GET', '/payroll/periods'],
+      ['service billing', 'GET', `/reports/service-billing?from=${lastWeek}`],
+      ['the billing rules', 'PATCH', '/company/service-billing', { travelHours: 0.5 }],
+      ['adding a phase', 'POST', '/phases', { name: 'Smoke never created' }],
+      ['the schedule push', 'PUT', `/assignments/${lastWeek}`, { source: 'smoke-div', assignments: [] }],
+    ]) {
+      r = await call(method, path, { token: da, body })
+      check(`a division admin is refused ${what}`, r.status === 403, `${r.status} ${JSON.stringify(r.json?.error ?? '')}`)
+    }
+
+    r = await put(newEmail, da, { name: 'Smoke Division Hire', division: 'Somewhere else' })
+    check('a division admin cannot add someone to another division', r.status === 403)
+    r = await put(newEmail, da, { name: 'Smoke Division Hire' })
+    check('a division admin adds a person, who joins the division', r.status === 200 && r.json?.created === true && r.json?.person?.division === div && r.json?.person?.role === 'tech', JSON.stringify(r.json))
+    r = await put(newEmail, da, { role: 'lead' })
+    check('a division admin can make a crew lead', r.status === 200 && r.json?.person?.role === 'lead')
+    for (const role of ['manager', 'payroll', 'admin', 'division_admin']) {
+      r = await put(newEmail, da, { role })
+      check(`a division admin cannot make a ${role}`, r.status === 403)
+    }
+    r = await put(newEmail, da, { password: daPw })
+    check('a division admin cannot set a password', r.status === 403)
+    r = await put(crewEmail, da, { name: 'Renamed' })
+    check('a division admin cannot change someone outside the division', r.status === 403)
+    r = await put(daEmail, da, { active: false })
+    check('a division admin cannot switch off a division admin', r.status === 403)
+    r = await put(daEmail, admin, { division: '' })
+    check('the division cannot be taken off a division admin', r.status === 400)
+
+    if (leaveOn) {
+      r = await call('GET', '/leave/balances', { token: da })
+      check('leave balances are the division only', r.status === 200 && r.json?.people?.length > 0 && r.json.people.every((p) => [daId, inId].includes(p.id) || p.email === newEmail), JSON.stringify(r.json?.people?.map((p) => p.email)))
+      r = await call('GET', `/people/${crewId}/leave/balances`, { token: da })
+      check("someone else's leave balance is not found", r.status === 404)
+      r = await call('GET', '/leave/requests', { token: da })
+      check('leave requests are the division only', r.status === 200 && r.json.data.every((x) => x.person.id !== crewId))
+      const leaveType = (await call('GET', '/leave/types', { token: da })).json?.data?.[0]?.id
+      r = await call('POST', '/leave/requests', { token: da, body: { personId: crewId, leaveTypeId: leaveType, startDate: ymd(new Date(Date.now() + 30 * 86_400_000)), approve: true } })
+      check('a division admin cannot record leave for someone outside the division', r.status === 404, JSON.stringify(r.json))
+      for (const [what, method, path, body] of [
+        ['leave settings', 'GET', '/leave/settings'],
+        ['the leave ledger', 'GET', '/leave/ledger'],
+        ['a balance adjustment', 'POST', '/leave/adjustments', { personId: inId, leaveTypeId: leaveType, hours: 8, note: 'should not be allowed' }],
+      ]) {
+        r = await call(method, path, { token: da, body })
+        check(`a division admin is refused ${what}`, r.status === 403, `${r.status} ${JSON.stringify(r.json?.error ?? '')}`)
+      }
+    }
+
+    for (const e of [newEmail, inEmail, daEmail]) await put(e, admin, { active: false })
+    r = await call('GET', '/people', { token: da })
+    check('a deactivated division admin is signed out', r.status === 401)
+  }
+
   // Clean up.
   await call('PUT', `/people/by-email/${encodeURIComponent(testEmail)}`, { token: key, body: { active: false } })
   await call('PUT', `/people/by-email/${encodeURIComponent(crewEmail)}`, { token: key, body: { active: false } })

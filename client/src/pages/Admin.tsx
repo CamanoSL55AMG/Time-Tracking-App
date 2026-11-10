@@ -36,14 +36,14 @@ export default function AdminPage({ me }: { me: Person }) {
     <Stack spacing={2}>
       <Tabs value={section} onChange={(_, v: Section) => setSection(v)} variant="scrollable" allowScrollButtonsMobile>
         <Tab value="people" label="People" />
-        <Tab value="jobs" label="Jobs" />
+        {canEditJobs && <Tab value="jobs" label="Jobs" />}
         {canEditJobs && <Tab value="phases" label="Phases" />}
         {canEditJobs && <Tab value="expenses" label="Expenses" />}
         {canEditJobs && <Tab value="billing" label="Service billing" />}
         {isAdmin && <Tab value="keys" label="API keys" />}
       </Tabs>
-      {section === 'people' && <People isAdmin={isAdmin} />}
-      {section === 'jobs' && <Jobs />}
+      {section === 'people' && <People isAdmin={isAdmin} me={me} />}
+      {section === 'jobs' && canEditJobs && <Jobs />}
       {section === 'phases' && canEditJobs && <Phases />}
       {section === 'expenses' && canEditJobs && <ExpenseSetup />}
       {section === 'billing' && canEditJobs && <Billing />}
@@ -81,19 +81,47 @@ const Row = ({ children, dim }: { children: ReactNode; dim?: boolean }) => (
 
 // ─── People ─────────────────────────────────────────────────────────────────
 
-const ROLES: Person['role'][] = ['tech', 'lead', 'manager', 'payroll', 'admin']
+const ROLES: Person['role'][] = ['tech', 'lead', 'manager', 'payroll', 'admin', 'division_admin']
+const ROLE_LABEL: Record<Person['role'], string> = { tech: 'tech', lead: 'lead', manager: 'manager', payroll: 'payroll', admin: 'admin', division_admin: 'division admin' }
+const DIVISION_LIST_ID = 'logbook-divisions'
 
 // W-2 employee or 1099 contractor. Shown only when the server has CONTRACTORS_ENABLED.
 const WORKER_LABEL: Record<WorkerType, string> = { employee: 'W-2', contractor: '1099' }
 const WORKER_TEXT: Record<WorkerType, string> = { employee: 'W-2 employee', contractor: '1099 contractor' }
 
-function People({ isAdmin }: { isAdmin: boolean }) {
+function People({ isAdmin, me }: { isAdmin: boolean; me: Person }) {
   const { data: roster, error, setError, load } = useLoader(api.roster)
   const data = roster?.people
-  const contractors = roster?.contractorsEnabled ?? false
+  // A division admin (e.g. Stage Forge) keeps their own roster: the server sends only
+  // their division, and lets them add people to it and make them tech or lead.
+  const myDivision = me.role === 'division_admin' ? me.division ?? '' : null
+  const limited = myDivision !== null
+  const contractors = (roster?.contractorsEnabled ?? false) && !limited
+  const divisions = roster?.divisions ?? []
+  const roleChoices = ROLES.filter((r) => (limited ? r === 'tech' || r === 'lead' : isAdmin || (r !== 'admin' && r !== 'division_admin')))
   const [adding, setAdding] = useState(false)
-  const [form, setForm] = useState({ email: '', name: '', initials: '', role: 'tech', password: '', workerType: 'employee' as WorkerType })
+  const [form, setForm] = useState({ email: '', name: '', initials: '', role: 'tech', division: '', password: '', workerType: 'employee' as WorkerType })
   const [busy, setBusy] = useState(false)
+  const [access, setAccess] = useState<{ person: Person; role: Person['role']; division: string } | null>(null)
+  // Who may open the role dialog for this person: an admin for anyone; a division admin for their techs and leads.
+  const canSetAccess = (p: Person) => (isAdmin ? true : limited ? p.role === 'tech' || p.role === 'lead' : false)
+
+  const saveAccess = async () => {
+    if (!access) return
+    setBusy(true)
+    try {
+      await api.savePerson(access.person.email, {
+        ...(access.role !== access.person.role ? { role: access.role } : {}),
+        ...(isAdmin && access.division.trim() !== (access.person.division ?? '') ? { division: access.division.trim() } : {}),
+      })
+      setAccess(null)
+      await load()
+    } catch (err) {
+      setError(errorText(err))
+    } finally {
+      setBusy(false)
+    }
+  }
   const [payAs, setPayAs] = useState<{ person: Person; workerType: WorkerType; from: string } | null>(null)
 
   const savePayAs = async () => {
@@ -117,11 +145,12 @@ function People({ isAdmin }: { isAdmin: boolean }) {
         name: form.name.trim(),
         initials: form.initials.trim(),
         role: form.role,
+        ...(isAdmin && form.division.trim() ? { division: form.division.trim() } : {}),
         password: form.password || undefined,
         ...(contractors ? { workerType: form.workerType } : {}),
       })
       setAdding(false)
-      setForm({ email: '', name: '', initials: '', role: 'tech', password: '', workerType: 'employee' })
+      setForm({ email: '', name: '', initials: '', role: 'tech', division: '', password: '', workerType: 'employee' })
       await load()
     } catch (err) {
       setError(errorText(err))
@@ -141,8 +170,18 @@ function People({ isAdmin }: { isAdmin: boolean }) {
   return (
     <Stack spacing={1.5}>
       {error && <Alert severity="error">{error}</Alert>}
+      {limited && (
+        <Alert severity="info">
+          {myDivision ? `You manage the ${myDivision} roster. People you add join ${myDivision}.` : 'Your account has no division set yet. Ask an admin to set it.'}
+        </Alert>
+      )}
+      <datalist id={DIVISION_LIST_ID}>
+        {divisions.map((d) => (
+          <option key={d} value={d} />
+        ))}
+      </datalist>
       <Box>
-        <Button variant="contained" onClick={() => setAdding(true)}>
+        <Button variant="contained" onClick={() => setAdding(true)} disabled={limited && !myDivision}>
           Add person
         </Button>
       </Box>
@@ -166,7 +205,17 @@ function People({ isAdmin }: { isAdmin: boolean }) {
               aria-label={`${p.name} is paid as ${WORKER_TEXT[p.workerType ?? 'employee']}. Change`}
             />
           )}
-          <Chip size="small" label={p.role} />
+          {!limited && p.division && <Chip size="small" variant="outlined" label={p.division} />}
+          {canSetAccess(p) ? (
+            <Chip
+              size="small"
+              label={ROLE_LABEL[p.role] ?? p.role}
+              onClick={() => setAccess({ person: p, role: p.role, division: p.division ?? '' })}
+              aria-label={`${p.name} is a ${ROLE_LABEL[p.role] ?? p.role}${p.division ? ` in ${p.division}` : ''}. Change`}
+            />
+          ) : (
+            <Chip size="small" label={ROLE_LABEL[p.role] ?? p.role} />
+          )}
           <Switch checked={p.active} onChange={() => void toggle(p)} inputProps={{ 'aria-label': `${p.name} active` }} />
         </Row>
       ))}
@@ -179,12 +228,21 @@ function People({ isAdmin }: { isAdmin: boolean }) {
             <TextField label="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
             <TextField label="Initials" value={form.initials} onChange={(e) => setForm({ ...form, initials: e.target.value })} helperText="As written on the job calendar" />
             <TextField select label="Role" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
-              {ROLES.filter((r) => isAdmin || r !== 'admin').map((r) => (
+              {roleChoices.map((r) => (
                 <MenuItem key={r} value={r}>
-                  {r}
+                  {ROLE_LABEL[r]}
                 </MenuItem>
               ))}
             </TextField>
+            {isAdmin && (
+              <TextField
+                label="Division"
+                value={form.division}
+                onChange={(e) => setForm({ ...form, division: e.target.value })}
+                inputProps={{ list: DIVISION_LIST_ID, maxLength: 80 }}
+                helperText={form.role === 'division_admin' ? 'Required: a division admin sees and manages only this division' : 'Optional, e.g. Stage Forge. Leave blank for none'}
+              />
+            )}
             {contractors && (
               <TextField select label="Paid as" value={form.workerType} onChange={(e) => setForm({ ...form, workerType: e.target.value as WorkerType })}>
                 {(['employee', 'contractor'] as const).map((t) => (
@@ -207,8 +265,48 @@ function People({ isAdmin }: { isAdmin: boolean }) {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setAdding(false)}>Cancel</Button>
-          <Button variant="contained" onClick={save} disabled={busy || !form.email.includes('@') || !form.name.trim() || (form.password.length > 0 && form.password.length < 10)}>
+          <Button
+            variant="contained"
+            onClick={save}
+            disabled={busy || !form.email.includes('@') || !form.name.trim() || (form.password.length > 0 && form.password.length < 10) || (form.role === 'division_admin' && !form.division.trim())}
+          >
             Add
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={Boolean(access)} onClose={() => setAccess(null)} fullWidth maxWidth="xs">
+        <DialogTitle>{access?.person.name}: role{isAdmin ? ' and division' : ''}</DialogTitle>
+        <DialogContent>
+          <Stack spacing={2} sx={{ pt: 1 }}>
+            <TextField select label="Role" value={access?.role ?? 'tech'} onChange={(e) => access && setAccess({ ...access, role: e.target.value as Person['role'] })}>
+              {roleChoices.map((r) => (
+                <MenuItem key={r} value={r}>
+                  {ROLE_LABEL[r]}
+                </MenuItem>
+              ))}
+            </TextField>
+            {isAdmin && (
+              <TextField
+                label="Division"
+                value={access?.division ?? ''}
+                onChange={(e) => access && setAccess({ ...access, division: e.target.value })}
+                inputProps={{ list: DIVISION_LIST_ID, maxLength: 80 }}
+                helperText="e.g. Stage Forge. Leave blank for none"
+              />
+            )}
+            {access?.role === 'division_admin' && (
+              <Typography variant="body2" color="text.secondary">
+                A division admin reviews, corrects and approves time, fixes, expenses and time off, and keeps the roster, for the people in{' '}
+                {access.division.trim() || 'their division'} only. Jobs, phases, settings, API keys, payroll and leave balances stay with managers and admins.
+              </Typography>
+            )}
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setAccess(null)}>Cancel</Button>
+          <Button variant="contained" onClick={saveAccess} disabled={busy || (access?.role === 'division_admin' && !access.division.trim())}>
+            Save
           </Button>
         </DialogActions>
       </Dialog>
@@ -840,7 +938,7 @@ function Keys() {
     <Stack spacing={1.5}>
       {error && <Alert severity="error">{error}</Alert>}
       <Typography variant="body2" color="text.secondary">
-        One key per app that links to Time Tracking. A key can do only what its scopes allow, and can be revoked without touching the others.{' '}
+        One key per app that links to Logbook. A key can do only what its scopes allow, and can be revoked without touching the others.{' '}
         <a href="/api/v1/docs" target="_blank" rel="noreferrer">
           API reference
         </a>

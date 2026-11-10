@@ -1,4 +1,4 @@
-# Logbook (Time Tracking)
+# Logbook
 
 Logbook, the AIC Terminal time tracking module. Standalone time tracking: a phone-first punch clock that records the job and the phase
 of the day, a live Tower board, and a versioned API that other apps (GED, Project Report,

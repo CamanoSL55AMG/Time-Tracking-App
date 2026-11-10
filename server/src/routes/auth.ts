@@ -21,6 +21,7 @@ export const publicPerson = (p: Person) => ({
   name: p.name,
   initials: p.initials,
   role: p.role,
+  division: p.division,
   active: p.active,
   workerType: p.workerType,
   workerTypeFrom: p.workerTypeFrom,
@@ -136,17 +137,17 @@ route(
     } catch (err) {
       return fail(err instanceof Error ? err.message : 'The Dashboard sign-in failed.')
     }
-    if (!who.apps.includes(config.ssoAudience)) return fail('Your Dashboard account does not include Time Tracking. Ask your administrator to add it.')
+    if (!who.apps.includes(config.ssoAudience)) return fail('Your Dashboard account does not include Logbook. Ask your administrator to add it.')
 
     let person = await prisma.person.findUnique({ where: { email: who.email } })
     if (!person) {
       const companies = await prisma.company.findMany({ take: 2 })
-      if (!config.ssoAutoProvision || companies.length !== 1) return fail(`No Time Tracking account exists for ${who.email}. Ask an admin to add you.`)
+      if (!config.ssoAutoProvision || companies.length !== 1) return fail(`No Logbook account exists for ${who.email}. Ask an admin to add you.`)
       person = await prisma.person.create({
         data: { companyId: companies[0].id, email: who.email, name: str(who.name, 200) || who.email, role: ROLE_FROM_DASHBOARD[who.role] ?? 'tech' },
       })
     }
-    if (!person.active) return fail('This Time Tracking account is switched off. Ask an admin.')
+    if (!person.active) return fail('This Logbook account is switched off. Ask an admin.')
     // The session token travels in the address fragment, which never reaches a server.
     res.redirect(302, `${config.appUrl}/sso#session=${encodeURIComponent(session(person).token)}`)
   },
@@ -177,7 +178,7 @@ route(
       const domainOk = Boolean(config.googleAllowedDomain) && (hd === config.googleAllowedDomain || email.endsWith(`@${config.googleAllowedDomain}`))
       const companies = domainOk ? await prisma.company.findMany({ take: 2 }) : []
       if (!domainOk || companies.length !== 1) {
-        throw unauthorized(`No Time Tracking account exists for ${email}. Ask an admin to add you.`)
+        throw unauthorized(`No Logbook account exists for ${email}. Ask an admin to add you.`)
       }
       person = await prisma.person.create({ data: { companyId: companies[0].id, email, name: str(name, 200) || email, role: 'tech' } })
     }
@@ -211,9 +212,9 @@ route(
     const lower = email.toLowerCase()
     let person = await prisma.person.findUnique({ where: { email: lower } })
     if (!person) {
-      if (!config.ssoAutoProvision) throw unauthorized('No Time Tracking account exists for this email.')
+      if (!config.ssoAutoProvision) throw unauthorized('No Logbook account exists for this email.')
       const companies = await prisma.company.findMany({ take: 2 })
-      if (companies.length !== 1) throw unauthorized('No Time Tracking account exists for this email.')
+      if (companies.length !== 1) throw unauthorized('No Logbook account exists for this email.')
       person = await prisma.person.create({
         data: { companyId: companies[0].id, email: lower, name: str(name, 200) || lower, role: 'tech' },
       })
@@ -225,7 +226,7 @@ route(
 
 route(
   authRouter,
-  { method: 'get', path: '/auth/me', tag: 'Sign-in', summary: 'Who the caller is and what they may do.', access: [] },
+  { method: 'get', path: '/auth/me', tag: 'Sign-in', summary: 'Who the caller is and what they may do.', access: [], division: true },
   async (req) => {
     const auth = requireAuth(req)
     return {

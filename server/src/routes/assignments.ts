@@ -4,6 +4,7 @@ import { prisma } from '../db.js'
 import { requiredStr, route, str } from '../api.js'
 import { badRequest } from '../errors.js'
 import { requireScope } from '../auth/middleware.js'
+import { personIdFilter } from '../auth/division.js'
 import { isYmd } from '../lib/time.js'
 
 // The day's schedule, pushed in by another app (GED reads the shared job calendar).
@@ -99,13 +100,13 @@ route(
 
 route(
   assignmentsRouter,
-  { method: 'get', path: '/assignments/:date', tag: 'Schedule', summary: "One day's schedule for everyone.", access: ['punch:read'] },
+  { method: 'get', path: '/assignments/:date', tag: 'Schedule', summary: "One day's schedule for everyone.", access: ['punch:read'], division: true },
   async (req) => {
     const auth = requireScope(req, 'punch:read')
     const date = requiredStr(req.params.date, 'date', 10)
     if (!isYmd(date)) throw badRequest('date must be YYYY-MM-DD.', { field: 'date' })
     const rows = await prisma.assignment.findMany({
-      where: { companyId: auth.companyId, date },
+      where: { companyId: auth.companyId, date, personId: await personIdFilter(auth) },
       include: { job: true, person: { select: { id: true, name: true, email: true } } },
       orderBy: [{ shopTime: 'asc' }, { createdAt: 'asc' }],
     })

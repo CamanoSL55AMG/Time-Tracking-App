@@ -31,6 +31,7 @@ import {
   type ImportInput,
   type LeaveActor,
 } from '../services/leave.js'
+import { assertVisible, peopleWhere, visiblePeople } from '../auth/division.js'
 
 // Leave: §7 of TIME-TRACKING-APP.md. Every endpoint answers 403 leave_off unless
 // LEAVE_ENABLED=true. People see and ask for their own leave; crew leads see who is
@@ -45,6 +46,13 @@ const actorOf = (auth: Auth): LeaveActor => ({ companyId: auth.companyId, person
 function leaveAuth(req: Request, ...anyOf: string[]): Auth {
   requireLeaveOn()
   return anyOf.length ? requireScope(req, ...anyOf) : requireAuth(req)
+}
+
+/** A division admin reaches a leave request by id only when it is for someone in their division. */
+async function assertLeaveRequestVisible(auth: Auth, id: string): Promise<void> {
+  if (auth.division === null) return
+  const r = await prisma.leaveRequest.findFirst({ where: { id, companyId: auth.companyId }, select: { personId: true } })
+  await assertVisible(auth, r?.personId, 'Leave request')
 }
 
 const num = (v: unknown) => (v === undefined || v === null || v === '' ? undefined : Number(v))
@@ -233,15 +241,17 @@ route(
     tag: 'Leave',
     summary: "Everyone's balances, hire date and the policy each person is on.",
     access: ['leave:read'],
+    division: true,
   },
   async (req) => {
     const auth = leaveAuth(req, 'leave:read')
     const { types } = await ensureLeaveSetup(auth.companyId)
     const company = await prisma.company.findUniqueOrThrow({ where: { id: auth.companyId } })
     const today = localDate(new Date(), company.timezone)
+    const ids = await visiblePeople(auth)
     const [people, balances, profiles, assigned] = await Promise.all([
-      prisma.person.findMany({ where: { companyId: auth.companyId, active: true }, orderBy: { name: 'asc' } }),
-      balancesFor(auth.companyId, undefined, today),
+      prisma.person.findMany({ where: { ...peopleWhere(auth), active: true }, orderBy: { name: 'asc' } }),
+      balancesFor(auth.companyId, ids ? [...ids] : undefined, today),
       prisma.leaveProfile.findMany({ where: { companyId: auth.companyId } }),
       prisma.personLeavePolicy.findMany({ where: { companyId: auth.companyId, effectiveFrom: { lte: today }, OR: [{ effectiveTo: null }, { effectiveTo: { gte: today } }] } }),
     ])
@@ -265,10 +275,11 @@ route(
 
 route(
   leaveRouter,
-  { method: 'get', path: '/people/:id/leave/balances', tag: 'Leave', summary: "One person's balance per leave type.", access: ['leave:read', SELF] },
+  { method: 'get', path: '/people/:id/leave/balances', tag: 'Leave', summary: "One person's balance per leave type.", access: ['leave:read', SELF], division: true },
   async (req) => {
     const auth = leaveAuth(req, 'leave:read', SELF)
     if (!auth.scopes.has('leave:read') && auth.person?.id !== req.params.id) throw forbidden('You can see your own balances only.')
+    await assertVisible(auth, req.params.id)
     const person = await prisma.person.findFirst({ where: { id: req.params.id, companyId: auth.companyId } })
     if (!person) throw notFound('Person')
     return { data: await balancesFor(auth.companyId, [person.id]) }
@@ -315,6 +326,7 @@ route(
       'Ask for time off. Approvers can also record leave for someone else (personId), e.g. a state family-leave period, and approve it at once (approve: true). ' +
       'No reason is asked for; for sick leave none is kept.',
     access: [SELF, 'leave:approve'],
+    division: true,
     status: 201,
     body: {
       personId: 'Whose leave. Default: you',
@@ -333,6 +345,7 @@ route(
     const b = req.body ?? {}
     const personId = str(b.personId, 80) || auth.person?.id
     if (!personId) throw badRequest('personId is required with an API key.', { field: 'personId' })
+    await assertVisible(auth, personId)
     const days = Array.isArray(b.days) ? (b.days as { date: unknown; hours: unknown }[]).map((d) => ({ date: str(d.date, 10), hours: Number(d.hours) })) : undefined
     const created = await createLeaveRequest(
       actorOf(auth),
@@ -361,14 +374,19 @@ route(
     tag: 'Leave',
     summary: 'Leave requests, filterable. pending lists the oldest first.',
     access: ['leave:read'],
+    division: true,
     query: { status: 'pending | approved | denied | cancelled', personId: 'One person', from: 'Leave on or after YYYY-MM-DD', to: 'Leave on or before YYYY-MM-DD', limit: 'Default 200' },
   },
   async (req) => {
     const auth = leaveAuth(req, 'leave:read')
+    const personId = str(req.query.personId, 80) || undefined
+    if (personId) await assertVisible(auth, personId)
+    const ids = await visiblePeople(auth)
     return {
       data: await listLeaveRequests(auth.companyId, {
         status: str(req.query.status, 20) || undefined,
-        personId: str(req.query.personId, 80) || undefined,
+        personId,
+        personIds: ids ? [...ids] : undefined,
         from: str(req.query.from, 10) || undefined,
         to: str(req.query.to, 10) || undefined,
         limit: limitOf(req.query.limit, 200, 1000),
@@ -387,9 +405,11 @@ for (const decision of ['approve', 'deny'] as const) {
       summary: decision === 'approve' ? 'Approve a request: the hours come off the balance. Not your own.' : 'Turn a request down. A note saying why is required.',
       access: ['leave:approve'],
       body: { note: decision === 'approve' ? 'Optional' : 'Why (required)' },
+      division: true,
     },
     async (req) => {
       const auth = leaveAuth(req, 'leave:approve')
+      await assertLeaveRequestVisible(auth, req.params.id)
       const u = await decideLeaveRequest(actorOf(auth), req.params.id, decision, str(req.body?.note, 300))
       return { request: (await viewRequests([u]))[0] }
     },
@@ -405,9 +425,11 @@ route(
     summary: 'Withdraw your own request (or approved leave that has not started). Approvers can cancel approved leave; the hours go back on the balance.',
     access: [SELF, 'leave:approve'],
     body: { note: 'Optional' },
+    division: true,
   },
   async (req) => {
     const auth = leaveAuth(req, SELF, 'leave:approve')
+    await assertLeaveRequestVisible(auth, req.params.id)
     const u = await cancelLeaveRequest(actorOf(auth), auth.scopes, req.params.id, str(req.body?.note, 300))
     return { request: (await viewRequests([u]))[0] }
   },

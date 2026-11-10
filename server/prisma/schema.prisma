@@ -60,7 +60,11 @@ model Person {
   email        String   @unique
   name         String
   initials     String   @default("")
-  role         String   @default("tech") // tech | lead | manager | payroll | admin
+  role         String   @default("tech") // tech | lead | manager | payroll | admin | division_admin
+  // The group inside the company this person belongs to, e.g. "Stage Forge". Empty =
+  // none. A division_admin sees and manages only the people in their own division
+  // (auth/division.ts); every other role ignores it.
+  division     String   @default("")
   passwordHash String?
   active       Boolean  @default(true)
   // Salaried / exempt: the payroll export sends all of their hours as regular.
@@ -85,6 +89,7 @@ model Person {
   jobsAdded   Job[]        @relation("JobAddedBy")
 
   @@index([companyId, active])
+  @@index([companyId, division])
 }
 
 model Job {

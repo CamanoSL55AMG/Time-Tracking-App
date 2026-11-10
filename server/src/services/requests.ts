@@ -176,9 +176,9 @@ export async function viewRequests(rows: ChangeRequest[]) {
   }))
 }
 
-export async function listRequests(companyId: string, opts: { status?: string; personId?: string; weekStart?: string; limit?: number }) {
+export async function listRequests(companyId: string, opts: { status?: string; personId?: string; personIds?: string[]; weekStart?: string; limit?: number }) {
   const rows = await prisma.changeRequest.findMany({
-    where: { companyId, status: opts.status || undefined, personId: opts.personId || undefined, weekStart: opts.weekStart || undefined },
+    where: { companyId, status: opts.status || undefined, personId: opts.personId || (opts.personIds ? { in: opts.personIds } : undefined), weekStart: opts.weekStart || undefined },
     orderBy: { createdAt: opts.status === 'pending' ? 'asc' : 'desc' },
     take: opts.limit ?? 100,
   })

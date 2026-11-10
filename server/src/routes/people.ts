@@ -4,7 +4,8 @@ import { prisma } from '../db.js'
 import { bool, route, str } from '../api.js'
 import { badRequest, conflict, forbidden } from '../errors.js'
 import { requireScope } from '../auth/middleware.js'
-import { isRole, KEYS_MANAGE, PEOPLE_ROLES } from '../auth/apiKeys.js'
+import { DIVISION_ADMIN, isRole, KEYS_MANAGE, PEOPLE_ROLES, ROLE_LIST } from '../auth/apiKeys.js'
+import { cleanDivision, isLimited, isVisible, peopleWhere } from '../auth/division.js'
 import { emit } from '../services/events.js'
 import { publicPerson } from './auth.js'
 import { config } from '../config.js'
@@ -16,14 +17,18 @@ export const peopleRouter = Router()
 
 route(
   peopleRouter,
-  { method: 'get', path: '/people', tag: 'People', summary: 'The roster.', access: ['people:read'], query: { active: 'true or false' } },
+  { method: 'get', path: '/people', tag: 'People', summary: 'The roster. A division admin gets their own division only.', access: ['people:read'], query: { active: 'true or false' }, division: true },
   async (req) => {
     const auth = requireScope(req, 'people:read')
     const people = await prisma.person.findMany({
-      where: { companyId: auth.companyId, active: bool(req.query.active) },
+      where: { ...peopleWhere(auth), active: bool(req.query.active) },
       orderBy: { name: 'asc' },
     })
-    return { data: people.map(publicPerson), contractorsEnabled: config.contractorsEnabled }
+    // Division names already in use, for the picker. A division admin is told only their own.
+    const divisions = isLimited(auth)
+      ? [auth.division].filter((d): d is string => Boolean(d))
+      : (await prisma.person.findMany({ where: { companyId: auth.companyId, division: { not: '' } }, select: { division: true }, distinct: ['division'], orderBy: { division: 'asc' } })).map((p) => p.division)
+    return { data: people.map(publicPerson), contractorsEnabled: config.contractorsEnabled, divisions }
   },
 )
 
@@ -35,10 +40,12 @@ route(
     tag: 'People',
     summary: 'Create or update a person by email. Safe to repeat.',
     access: ['people:write'],
+    division: true,
     body: {
       name: 'Display name',
       initials: 'Initials as written on the job calendar',
-      role: 'tech | lead | manager | payroll | admin (admin needs a signed-in admin or a key with people:roles)',
+      role: 'tech | lead | manager | payroll | admin | division_admin (admin and division_admin need a signed-in admin or a key with people:roles). A division admin may set tech or lead only',
+      division: 'The group inside the company this person belongs to, e.g. "Stage Forge"; empty for none. Needs a signed-in admin or a key with people:roles. A division admin adds people to their own division and cannot move them',
       active: 'false to stop the person signing in or punching',
       password: 'Set an initial password (signed-in admins only)',
       workerType: 'employee (W-2) | contractor (1099). Only with CONTRACTORS_ENABLED=true',
@@ -58,13 +65,39 @@ route(
     if (existing && existing.companyId !== auth.companyId) throw forbidden('That email belongs to another company.')
 
     const role = req.body?.role === undefined ? undefined : String(req.body.role)
-    if (role !== undefined && !isRole(role)) throw badRequest('role must be tech, lead, manager, payroll or admin.', { field: 'role' })
-    // Only a signed-in admin hands out or takes away the admin role.
-    if (!mayManageAdmins && (role === 'admin' || (existing?.role === 'admin' && role !== undefined))) {
-      throw forbidden('Only a signed-in admin can change who is an admin.')
+    if (role !== undefined && !isRole(role)) throw badRequest(`role must be ${ROLE_LIST}.`, { field: 'role' })
+    // Only a signed-in admin hands out or takes away the admin and division admin roles.
+    const privileged = (r: string | undefined) => r === 'admin' || r === DIVISION_ADMIN
+    if (!mayManageAdmins && (privileged(role) || (privileged(existing?.role) && role !== undefined))) {
+      throw forbidden('Only a signed-in admin can change who is an admin or a division admin.')
     }
     const active = bool(req.body?.active)
-    if (!mayManageAdmins && existing?.role === 'admin' && active === false) throw forbidden('Only a signed-in admin can deactivate an admin.')
+    if (!mayManageAdmins && privileged(existing?.role) && active === false) throw forbidden('Only a signed-in admin can deactivate an admin or a division admin.')
+
+    // Division. Who is in which division decides what a division admin sees, so only
+    // those who may manage admins set it. A division admin (Art, 2026-11-10) keeps their
+    // own roster: adds people (always into their division), switches them on and off,
+    // and makes them tech or lead. Nothing else, and nobody outside the division.
+    const limited = isLimited(auth)
+    let division = req.body?.division === undefined ? undefined : cleanDivision(req.body.division)
+    if (limited) {
+      if (!auth.division) throw forbidden('Your account has no division set. Ask an admin.')
+      if (existing && !(await isVisible(auth, existing.id))) throw forbidden('That email is already in Logbook outside your division. Ask an admin.')
+      if (division !== undefined && division !== auth.division) throw forbidden('You can add people to your own division only.')
+      if (role !== undefined && role !== 'tech' && role !== 'lead') throw forbidden('You can make someone a tech or a crew lead. Ask an admin for any other role.')
+      if (existing && existing.role !== 'tech' && existing.role !== 'lead' && (role !== undefined || active !== undefined)) {
+        throw forbidden('You can change techs and crew leads only.')
+      }
+      if (req.body?.workerType !== undefined || req.body?.workerTypeFrom !== undefined) throw forbidden('How someone is paid is set by payroll or an admin.')
+      division = existing ? undefined : auth.division
+    } else if (division !== undefined && division !== (existing?.division ?? '') && !mayManageAdmins) {
+      throw forbidden('Only a signed-in admin can change which division someone is in.')
+    }
+    const roleAfter = role ?? existing?.role ?? 'tech'
+    const divisionAfter = division ?? existing?.division ?? ''
+    if (roleAfter === DIVISION_ADMIN && !divisionAfter && (role !== undefined || division !== undefined)) {
+      throw badRequest('A division admin needs a division. Set the division first.', { field: 'division' })
+    }
 
     // Never leave the company without an admin who can sign in.
     if (existing?.role === 'admin' && existing.active && ((role !== undefined && role !== 'admin') || active === false)) {
@@ -103,7 +136,7 @@ route(
       const saved = existing
         ? await tx.person.update({
             where: { id: existing.id },
-            data: { name: name || undefined, initials, role, active, passwordHash, ...worker },
+            data: { name: name || undefined, initials, role, division, active, passwordHash, ...worker },
           })
         : await tx.person.create({
             data: {
@@ -112,12 +145,13 @@ route(
               name: name || email,
               initials: initials ?? '',
               role: role ?? 'tech',
+              division: division ?? '',
               active: active ?? true,
               passwordHash,
               ...worker,
             },
           })
-      await emit(tx, auth.companyId, 'person.upserted', { person: { id: saved.id, email: saved.email, name: saved.name, role: saved.role, active: saved.active, workerType: saved.workerType } })
+      await emit(tx, auth.companyId, 'person.upserted', { person: { id: saved.id, email: saved.email, name: saved.name, role: saved.role, division: saved.division, active: saved.active, workerType: saved.workerType } })
       return saved
     })
     return { created: !existing, person: publicPerson(person) }

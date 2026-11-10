@@ -4,6 +4,7 @@ import { limitOf, openApiDocument, optionalDate, registry, requiredStr, route, s
 import { badRequest, notFound } from '../errors.js'
 import { requireScope } from '../auth/middleware.js'
 import { generateKey, isScope, KEYS_MANAGE, SCOPES } from '../auth/apiKeys.js'
+import { assertVisible, visiblePeople } from '../auth/division.js'
 import { GROUPS, hoursReport, type Group } from '../services/reports.js'
 import { serviceBilling } from '../services/serviceBilling.js'
 import { addDays, dayBounds, isYmd, startOfLocalDay } from '../lib/time.js'
@@ -34,9 +35,13 @@ route(
       personId: 'Only this person',
       jobId: 'Only this job',
     },
+    division: true,
   },
   async (req) => {
     const auth = requireScope(req, 'reports:read')
+    const personId = str(req.query.personId, 80) || undefined
+    if (personId) await assertVisible(auth, personId)
+    const ids = await visiblePeople(auth)
     const company = await prisma.company.findUniqueOrThrow({ where: { id: auth.companyId } })
     const tz = company.timezone
     const fromRaw = str(req.query.from, 40)
@@ -59,7 +64,8 @@ route(
       from,
       to,
       groupBy: groupBy as Group[],
-      personId: str(req.query.personId, 80) || undefined,
+      personId,
+      personIds: ids ? [...ids] : undefined,
       jobId: str(req.query.jobId, 80) || undefined,
     })
   },
@@ -267,13 +273,15 @@ systemRouter.get('/docs', (_req, res) => {
                 .map(([k, v]) => `<tr><td><code>${esc(k)}</code></td><td>${esc(v)}</td></tr>`)
                 .join('')}</table>`
             : ''
-        const access = r.access === 'public' ? 'No sign-in needed' : r.access.length ? `Needs one of: <code>${r.access.map(esc).join('</code>, <code>')}</code>` : 'Any signed-in caller'
+        const access =
+          (r.access === 'public' ? 'No sign-in needed' : r.access.length ? `Needs one of: <code>${r.access.map(esc).join('</code>, <code>')}</code>` : 'Any signed-in caller') +
+          (r.division && r.access !== 'public' && r.access.length ? '. A division admin gets their own division only' : '')
         return `<article><h3><span class="m ${r.method}">${r.method.toUpperCase()}</span> <code>/api/v1${esc(r.path)}</code></h3><p>${esc(r.summary)}</p><p class="a">${access}</p>${list('Query', r.query)}${list('Body', r.body)}</article>`
       })
       .join('')
-  res.type('html').send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Time Tracking API</title>
+  res.type('html').send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Logbook API</title>
 <style>body{font:15px/1.5 system-ui,sans-serif;max-width:860px;margin:0 auto;padding:24px 16px;color:#1c2330}h1{margin:0 0 4px}h2{margin:36px 0 8px;border-bottom:1px solid #d8dde6;padding-bottom:4px}article{border:1px solid #d8dde6;border-radius:8px;padding:12px 16px;margin:12px 0}h3{margin:0;font-size:15px}h4{margin:12px 0 4px;font-size:13px;color:#566}table{border-collapse:collapse;width:100%}td{border-top:1px solid #eef0f4;padding:4px 8px 4px 0;vertical-align:top;font-size:14px}td:first-child{white-space:nowrap;width:1%}code{font:13px ui-monospace,Consolas,monospace;background:#f2f4f8;padding:1px 4px;border-radius:4px}.m{display:inline-block;min-width:54px;text-align:center;font:600 12px ui-monospace,monospace;padding:2px 6px;border-radius:4px;color:#fff;background:#566}.get{background:#1f6feb}.post{background:#1a7f37}.put{background:#9a6700}.patch{background:#8250df}.delete{background:#cf222e}.a{color:#566;font-size:13px;margin:4px 0}p{margin:6px 0}</style></head><body>
-<h1>Time Tracking API</h1>
+<h1>Logbook API</h1>
 <p>Version 1. Machine-readable description: <a href="openapi.json">openapi.json</a></p>
 <p>Send <code>Authorization: Bearer &lt;token&gt;</code>: a session token from <code>/auth/login</code>, or an integration key (<code>tt_live_…</code>). An integration acts for a person by adding <code>X-Act-As: person@company.com</code> (needs <code>punch:write:any</code>). POST requests accept an <code>Idempotency-Key</code> header; repeating one returns the first result. Errors are <code>{ "error": { "code", "message", "details" } }</code> with a matching HTTP status. Limits are reported in <code>RateLimit-*</code> headers.</p>
 ${tags.map(section).join('')}

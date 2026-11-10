@@ -2,6 +2,7 @@ import type { Request, RequestHandler, Response, Router } from 'express'
 import type { Prisma } from '@prisma/client'
 import { prisma } from './db.js'
 import { badRequest } from './errors.js'
+import { UNLIMITED_SAFE_SCOPES } from './auth/apiKeys.js'
 
 // Every endpoint is declared once, through route(). That single declaration both
 // mounts the handler and feeds the OpenAPI document, so the published API
@@ -19,6 +20,12 @@ export interface RouteDoc {
   query?: Record<string, string>
   body?: Record<string, string>
   status?: number
+  /**
+   * true: the handler keeps a division admin inside their division (auth/division.ts).
+   * Left out, a division admin calls the endpoint with a tech's scopes only, so an
+   * endpoint that was never taught about divisions cannot show them the whole company.
+   */
+  division?: boolean
 }
 
 export const registry: RouteDoc[] = []
@@ -37,6 +44,11 @@ async function run(doc: RouteDoc, handler: Handler, req: Request, res: Response)
   const status = doc.status ?? 200
   const idemKey = doc.method === 'post' ? String(req.headers['idempotency-key'] ?? '').trim() : ''
   const companyId = req.auth?.companyId
+
+  // Deny by default for division admins: see RouteDoc.division.
+  if (req.auth && req.auth.division !== null && !doc.division) {
+    req.auth.scopes = new Set([...req.auth.scopes].filter((s) => UNLIMITED_SAFE_SCOPES.has(s)))
+  }
 
   if (idemKey && companyId) {
     if (idemKey.length > 200) throw badRequest('Idempotency-Key is too long (200 characters at most).')
@@ -111,6 +123,7 @@ export function openApiDocument(serverUrl: string) {
       parameters,
       security: r.access === 'public' ? [] : [{ bearer: [] }],
       'x-scopes': r.access === 'public' ? [] : r.access,
+      'x-division-limited': Boolean(r.division),
       responses: {
         [String(r.status ?? 200)]: { description: 'Success', content: { 'application/json': { schema: { type: 'object' } } } },
         default: { description: 'Error', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
@@ -133,7 +146,7 @@ export function openApiDocument(serverUrl: string) {
   return {
     openapi: '3.0.3',
     info: {
-      title: 'Time Tracking API',
+      title: 'Logbook API',
       version: '1.0.0',
       description:
         'Punches, jobs, people and reports. Authenticate with `Authorization: Bearer <token>`: a session token from /auth/login, or an integration key (tt_live_…). ' +

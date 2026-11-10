@@ -1,4 +1,4 @@
-# CLAUDE.md — Time Tracking
+# CLAUDE.md — Logbook
 
 Context for AI coding agents. The product plan is `TIME-TRACKING-APP.md`; read its
 phases before adding features.
@@ -35,3 +35,7 @@ as GED; do not use `prisma migrate dev`).
 8. Breaking API changes go to `/api/v2`. v1 keeps working.
 9. All client HTTP goes through `client/src/api.ts`.
 10. When behaviour changes, add or update a check in `server/scripts/smoke.mjs`.
+11. An endpoint that shows or changes other people's data declares `division: true` in
+    `route()` and keeps a division admin inside their division with the helpers in
+    `server/src/auth/division.ts`. Without the flag a division admin is given a tech's
+    scopes on that endpoint, so forgetting it fails closed.

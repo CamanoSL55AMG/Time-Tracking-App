@@ -174,17 +174,19 @@ export async function personWeek(companyId: string, personId: string, rawWeek?: 
 }
 
 /** Everyone's week at a glance, for the approver. */
-export async function weekSheet(companyId: string, rawWeek?: string) {
+/** personIds: only these people (a division admin's division). Left out: the whole company. */
+export async function weekSheet(companyId: string, rawWeek?: string, personIds?: string[]) {
+  const only = personIds ? { in: personIds } : undefined
   const company = await prisma.company.findUniqueOrThrow({ where: { id: companyId } })
   const weekStart = resolveWeek(company, rawWeek)
   const { days, start, end } = weekBounds(weekStart, company.timezone)
   const now = new Date()
   const [segments, sheets, people, exceptions, pendingRows] = await Promise.all([
-    prisma.punch.findMany({ where: { companyId, clockIn: { gte: start, lt: end } }, select: { personId: true, clockIn: true, clockOut: true } }),
-    prisma.timesheet.findMany({ where: { companyId, weekStart } }),
-    prisma.person.findMany({ where: { companyId }, select: { id: true, name: true, email: true, active: true, role: true } }),
-    findExceptions(companyId, { from: start, to: end }),
-    prisma.changeRequest.findMany({ where: { companyId, weekStart, status: 'pending' }, select: { personId: true } }),
+    prisma.punch.findMany({ where: { companyId, personId: only, clockIn: { gte: start, lt: end } }, select: { personId: true, clockIn: true, clockOut: true } }),
+    prisma.timesheet.findMany({ where: { companyId, personId: only, weekStart } }),
+    prisma.person.findMany({ where: { companyId, id: only }, select: { id: true, name: true, email: true, active: true, role: true } }),
+    findExceptions(companyId, { from: start, to: end, personIds }),
+    prisma.changeRequest.findMany({ where: { companyId, personId: only, weekStart, status: 'pending' }, select: { personId: true } }),
   ])
   const pendingBy = new Map<string, number>()
   for (const p of pendingRows) pendingBy.set(p.personId, (pendingBy.get(p.personId) ?? 0) + 1)

@@ -5,6 +5,7 @@ import { limitOf, optionalDate, route, str } from '../api.js'
 import { badRequest, forbidden, notFound } from '../errors.js'
 import { requireAuth, requirePerson, requireScope, type Auth } from '../auth/middleware.js'
 import { SELF } from '../auth/apiKeys.js'
+import { assertVisible, onlyVisible, personIdFilter } from '../auth/division.js'
 import { parseGeo } from '../lib/geo.js'
 import { config } from '../config.js'
 import { boardWithLeave } from '../services/leave.js'
@@ -122,11 +123,14 @@ route(
       limit: 'Page size, 100 by default, 500 at most',
       cursor: 'nextCursor from the previous page',
     },
+    division: true,
   },
   async (req) => {
     const auth = requireScope(req, 'punch:read', SELF)
     const all = auth.scopes.has('punch:read')
-    const personId = all ? str(req.query.personId, 80) || undefined : requirePerson(auth).id
+    const asked = all ? str(req.query.personId, 80) || undefined : requirePerson(auth).id
+    if (all && asked) await assertVisible(auth, asked)
+    const personId = asked ?? (await personIdFilter(auth))
     const from = optionalDate(req.query.from, 'from')
     const to = optionalDate(req.query.to, 'to')
     const where: Prisma.PunchWhereInput = {
@@ -153,7 +157,7 @@ route(
 
 route(
   punchesRouter,
-  { method: 'get', path: '/punches/:id', tag: 'Punching', summary: 'One segment with its edit history.', access: ['punch:read', SELF] },
+  { method: 'get', path: '/punches/:id', tag: 'Punching', summary: 'One segment with its edit history.', access: ['punch:read', SELF], division: true },
   async (req) => {
     const auth = requireScope(req, 'punch:read', SELF)
     const punch = await prisma.punch.findFirst({
@@ -162,6 +166,7 @@ route(
     })
     if (!punch) throw notFound('Punch')
     if (!auth.scopes.has('punch:read') && punch.personId !== auth.person?.id) throw forbidden('That is not your punch.')
+    await assertVisible(auth, punch.personId, 'Punch')
     return { punch }
   },
 )
@@ -174,6 +179,7 @@ route(
     tag: 'Punching',
     summary: 'Correct a segment. The change and the reason are kept in its history.',
     access: ['punch:write:any'],
+    division: true,
     body: {
       reason: 'Why the change is being made (required)',
       clockIn: 'New start',
@@ -185,6 +191,10 @@ route(
   },
   async (req) => {
     const auth = requireScope(req, 'punch:write:any')
+    if (auth.division !== null) {
+      const target = await prisma.punch.findFirst({ where: { id: req.params.id, companyId: auth.companyId }, select: { personId: true } })
+      await assertVisible(auth, target?.personId, 'Punch')
+    }
     const b = (req.body ?? {}) as Record<string, unknown>
     if (b.clockOut !== undefined && b.clockOut !== null && !String(b.clockOut)) throw badRequest('clockOut must be a date-time or null.')
     const punch = await editPunch(
@@ -211,12 +221,15 @@ route(
     tag: 'Views',
     summary: "Tower board: everyone's current job and phase today. With LEAVE_ENABLED, people on approved leave today are marked off (and listed even if they never punched).",
     access: ['punch:read'],
+    division: true,
   },
   async (req) => {
-    const companyId = requireScope(req, 'punch:read').companyId
-    const b = await board(companyId)
+    const auth = requireScope(req, 'punch:read')
+    const companyId = auth.companyId
+    const whole = await board(companyId)
+    const b = { ...whole, rows: await onlyVisible(auth, whole.rows, (r) => r.personId) }
     if (!config.leaveEnabled) return b
-    return boardWithLeave(companyId, b, (p) => ({
+    const withLeave = await boardWithLeave(companyId, b, (p) => ({
       personId: p.id,
       name: p.name,
       email: p.email,
@@ -234,6 +247,8 @@ route(
       atShop: null,
       atSite: null,
     }))
+    // People on leave are added to the board by boardWithLeave: keep to the division again.
+    return { ...withLeave, rows: await onlyVisible(auth, withLeave.rows, (r) => r.personId) }
   },
 )
 

@@ -5,6 +5,8 @@ import { bool, requiredStr, route, str } from '../api.js'
 import { badRequest, notFound } from '../errors.js'
 import { requirePerson, requireScope } from '../auth/middleware.js'
 import { SELF } from '../auth/apiKeys.js'
+import { assertVisible, personIdFilter } from '../auth/division.js'
+import type { Auth } from '../auth/middleware.js'
 import { isYmd } from '../lib/time.js'
 import {
   addExpense,
@@ -243,9 +245,10 @@ route(
 
 route(
   expensesRouter,
-  { method: 'get', path: '/expenses/:id/receipt', tag: 'Expenses', summary: 'The receipt file itself (not JSON). Yours, or anyone’s with expenses:read.', access: [SELF, 'expenses:read'] },
+  { method: 'get', path: '/expenses/:id/receipt', tag: 'Expenses', summary: 'The receipt file itself (not JSON). Yours, or anyone’s with expenses:read.', access: [SELF, 'expenses:read'], division: true },
   async (req, res) => {
     const auth = requireScope(req, SELF, 'expenses:read')
+    await assertExpenseVisible(auth, req.params.id)
     const { file, type } = await receiptFile(auth.companyId, req.params.id, { personId: auth.person?.id ?? null, canReadAll: auth.scopes.has('expenses:read') })
     res.type(type)
     res.setHeader('Cache-Control', 'private, max-age=300')
@@ -264,16 +267,19 @@ route(
     summary: 'Expenses with totals. Accounting reads approved lines from here.',
     access: ['expenses:read'],
     query: { status: 'draft | submitted | approved | rejected', personId: 'Only this person', jobId: 'Only this job', from: 'YYYY-MM-DD', to: 'YYYY-MM-DD, inclusive' },
+    division: true,
   },
   async (req) => {
     const auth = requireScope(req, 'expenses:read')
     const status = str(req.query.status, 20)
     if (status && !['draft', 'submitted', 'approved', 'rejected'].includes(status)) throw badRequest('status must be draft, submitted, approved or rejected.', { field: 'status' })
+    const onePerson = str(req.query.personId, 80) || undefined
+    if (onePerson) await assertVisible(auth, onePerson)
     const rows = await prisma.expense.findMany({
       where: {
         companyId: auth.companyId,
         status: status || { not: 'draft' },
-        personId: str(req.query.personId, 80) || undefined,
+        personId: onePerson ?? (await personIdFilter(auth)),
         jobId: str(req.query.jobId, 80) || undefined,
         ...rangeWhere(req.query),
       },
@@ -295,9 +301,11 @@ for (const decision of ['approve', 'reject'] as const) {
       summary: decision === 'approve' ? 'Approve an expense. Nobody approves their own.' : 'Reject an expense, saying why. The person can fix it and it comes back.',
       access: ['expenses:approve'],
       body: { note: decision === 'approve' ? 'Optional note' : 'Why it is rejected (required)' },
+      division: true,
     },
     async (req) => {
       const auth = requireScope(req, 'expenses:approve')
+      await assertExpenseVisible(auth, req.params.id)
       const e = await decideExpense({ companyId: auth.companyId, personId: auth.person?.id ?? null }, req.params.id, decision, str(req.body?.note, 500))
       return { expense: shape(e) }
     },
@@ -332,6 +340,13 @@ const RECURRING_BODY = {
   dayOfMonth: '1-31: the day each month the line is added (a short month uses its last day)',
   endMonth: 'YYYY-MM, the last month; null or empty for no end',
 }
+/** A division admin reaches an expense by id only when it belongs to someone in their division. */
+async function assertExpenseVisible(auth: Auth, id: string): Promise<void> {
+  if (auth.division === null) return
+  const e = await prisma.expense.findFirst({ where: { id, companyId: auth.companyId }, select: { personId: true } })
+  await assertVisible(auth, e?.personId, 'Expense')
+}
+
 const made = (lines: Awaited<ReturnType<typeof runRecurring>>) => lines.map(shape)
 
 route(
@@ -396,10 +411,12 @@ for (const action of ['pause', 'resume', 'stop'] as const) {
 
 route(
   expensesRouter,
-  { method: 'get', path: '/recurring-expenses', tag: 'Expenses', summary: 'Everyone’s monthly repeats.', access: ['expenses:read'], query: { personId: 'Only this person', all: 'true to include stopped ones' } },
+  { method: 'get', path: '/recurring-expenses', tag: 'Expenses', summary: 'Everyone’s monthly repeats.', access: ['expenses:read'], query: { personId: 'Only this person', all: 'true to include stopped ones' }, division: true },
   async (req) => {
     const auth = requireScope(req, 'expenses:read')
-    const rows = await listRecurring(auth.companyId, str(req.query.personId, 80) || undefined, req.query.all === 'true')
+    const onePerson = str(req.query.personId, 80) || undefined
+    if (onePerson) await assertVisible(auth, onePerson)
+    const rows = await listRecurring(auth.companyId, onePerson ?? (await personIdFilter(auth)), req.query.all === 'true')
     return { data: rows.map(shapeRecurring) }
   },
 )

@@ -259,7 +259,18 @@ deploy    Dockerfile + docker-compose, same as the other add-ons
 - **Sign-in.** Three ways: GED one-click (the existing `v1.<payload>.<hmac>` add-on token,
   audience `time_tracking`), the app's own email + password for companies without GED, and
   name + PIN in kiosk mode.
-- **Roles.** `tech`, `lead`, `manager`, `payroll`, `admin`.
+- **Roles.** `tech`, `lead`, `manager`, `payroll`, `admin`, `division_admin`.
+- **Divisions (built 2026-11-10).** A person can belong to a division (`Person.division`,
+  e.g. "Stage Forge"). A `division_admin` sees and manages only the people in their own
+  division: roster, week sheets, punches and corrections, fix requests, expenses, time-off
+  requests and balances, the board and the hours report. They add people (who join the
+  division), switch them on and off, and make them tech or lead. Company-wide things stay
+  with managers and admins: jobs, phases, settings, the change feed, API keys, payroll and
+  leave balances/policies. Full admins and managers still see everyone. Only a signed-in
+  admin (or a key with `people:roles`) sets a division or makes a division admin.
+  Enforced on the server: a route that handles other people's data declares
+  `division: true`; on any other route a division admin has a tech's scopes
+  (`server/src/auth/division.ts`).
 - **GPS.** A position is recorded only at the moment of a punch. No background tracking.
   Staff are told this in writing before rollout.
 

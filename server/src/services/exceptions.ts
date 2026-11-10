@@ -25,7 +25,7 @@ const isTravel = (key: string | undefined) => Boolean(key && /travel|drive/i.tes
 const timeOf = (d: Date, tz: string) => d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: tz })
 const dayOf = (d: Date, tz: string) => d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: tz })
 
-export async function findExceptions(companyId: string, opts: { from: Date; to: Date; personId?: string }): Promise<TimeException[]> {
+export async function findExceptions(companyId: string, opts: { from: Date; to: Date; personId?: string; personIds?: string[] }): Promise<TimeException[]> {
   const company = await prisma.company.findUniqueOrThrow({ where: { id: companyId } })
   const tz = company.timezone
   const now = new Date()
@@ -34,7 +34,7 @@ export async function findExceptions(companyId: string, opts: { from: Date; to: 
   const punches = await prisma.punch.findMany({
     where: {
       companyId,
-      personId: opts.personId,
+      personId: opts.personId ?? (opts.personIds ? { in: opts.personIds } : undefined),
       // Segments starting in the range, plus anything still open from before it.
       OR: [{ clockIn: { gte: opts.from, lt: opts.to } }, { clockOut: null, clockIn: { lt: opts.to } }],
     },

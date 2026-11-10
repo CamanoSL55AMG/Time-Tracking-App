@@ -32,7 +32,7 @@ const categoryOf = (phase: { laborCategory: string } | null): string => phase?.l
 
 export async function hoursReport(
   companyId: string,
-  opts: { from: Date; to: Date; groupBy: Group[]; personId?: string; jobId?: string },
+  opts: { from: Date; to: Date; groupBy: Group[]; personId?: string; jobId?: string; /** Only these people (a division admin's division). */ personIds?: string[] },
 ) {
   if (opts.to.getTime() <= opts.from.getTime()) throw badRequest('to must be after from.')
   const company = await prisma.company.findUniqueOrThrow({ where: { id: companyId } })
@@ -40,7 +40,7 @@ export async function hoursReport(
     where: {
       companyId,
       clockIn: { gte: opts.from, lt: opts.to },
-      personId: opts.personId,
+      personId: opts.personId ?? (opts.personIds ? { in: opts.personIds } : undefined),
       jobId: opts.jobId,
     },
     include: { job: true, phase: true, person: true },

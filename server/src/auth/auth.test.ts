@@ -2,7 +2,9 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createHmac } from 'node:crypto'
 import { signSsoToken, verifySsoToken, type SsoPayload } from './ssoToken.js'
-import { generateKey, hashKey, isScope, looksLikeKey, ROLE_SCOPES, FIX_APPROVE, KEYS_MANAGE, SELF, PEOPLE_ROLES, GED_KEY_SCOPES } from './apiKeys.js'
+import { generateKey, hashKey, isScope, looksLikeKey, ROLE_SCOPES, FIX_APPROVE, KEYS_MANAGE, SELF, PEOPLE_ROLES, GED_KEY_SCOPES, UNLIMITED_SAFE_SCOPES, isRole } from './apiKeys.js'
+import { cleanDivision, peopleWhere } from './division.js'
+import type { Auth } from './middleware.js'
 
 const secret = 'test-secret-test-secret-test-secret'
 const now = 1_800_000_000
@@ -77,4 +79,37 @@ test('the AIC Terminal key can set Logbook roles; no signed-in role gets that sc
   assert.ok(GED_KEY_SCOPES.includes(PEOPLE_ROLES))
   assert.ok(GED_KEY_SCOPES.every(isScope))
   for (const scopes of Object.values(ROLE_SCOPES)) assert.ok(!scopes.includes(PEOPLE_ROLES))
+})
+
+// ─── Division admins ────────────────────────────────────────────────────────
+
+const authOf = (division: string | null): Auth => ({ companyId: 'c1', via: 'session', scopes: new Set(), person: { id: 'me' } as Auth['person'], apiKeyId: null, division })
+
+test('a division admin reviews and approves but holds nothing company-wide', () => {
+  assert.equal(isRole('division_admin'), true)
+  const s = ROLE_SCOPES.division_admin
+  for (const want of ['punch:read', 'people:read', 'people:write', 'punch:write:any', 'timesheets:approve', FIX_APPROVE, 'expenses:approve', 'leave:approve', 'reports:read']) {
+    assert.equal(s.includes(want), true, want)
+  }
+  for (const never of ['jobs:write', KEYS_MANAGE, 'payroll:read', 'leave:write', 'events:read', 'assignments:write', PEOPLE_ROLES]) {
+    assert.equal(s.includes(never), false, never)
+  }
+})
+
+test('on an endpoint that does not enforce the division a division admin is left with a tech\'s scopes', () => {
+  const left = ROLE_SCOPES.division_admin.filter((s) => UNLIMITED_SAFE_SCOPES.has(s)).sort()
+  assert.deepEqual(left, [...ROLE_SCOPES.tech].sort())
+})
+
+test('who a caller may see', () => {
+  assert.deepEqual(peopleWhere(authOf(null)), { companyId: 'c1' })
+  assert.deepEqual(peopleWhere(authOf('Stage Forge')), { companyId: 'c1', OR: [{ id: 'me' }, { division: 'Stage Forge' }] })
+  // No division set must never mean "everyone without a division".
+  assert.deepEqual(peopleWhere(authOf('')), { companyId: 'c1', id: 'me' })
+})
+
+test('division names are tidied before they are stored', () => {
+  assert.equal(cleanDivision('  Stage   Forge '), 'Stage Forge')
+  assert.equal(cleanDivision(undefined), '')
+  assert.equal(cleanDivision(42), '')
 })

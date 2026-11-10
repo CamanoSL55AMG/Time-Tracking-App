@@ -3,7 +3,7 @@ import type { Person } from '@prisma/client'
 import { prisma } from '../db.js'
 import { config } from '../config.js'
 import { forbidden, unauthorized, ApiError } from '../errors.js'
-import { hashKey, isRole, looksLikeKey, ROLE_SCOPES, SELF } from './apiKeys.js'
+import { DIVISION_ADMIN, hashKey, isRole, looksLikeKey, ROLE_SCOPES, SELF } from './apiKeys.js'
 import { verifySession } from './session.js'
 
 // Who is calling. A request is either a signed-in person (session token) or an
@@ -16,6 +16,14 @@ export interface Auth {
   /** The person this request is about: the signed-in user, or the X-Act-As target. */
   person: Person | null
   apiKeyId: string | null
+  /**
+   * null: the caller sees the whole company. A string: a division admin, limited to the
+   * people whose Person.division equals it (plus themselves). An empty string is a
+   * division admin with no division set, who sees nobody but themselves.
+   */
+  division: string | null
+  /** Filled by auth/division.ts on first use: the people a limited caller may see. */
+  visiblePeople?: Set<string>
 }
 
 declare global {
@@ -55,7 +63,7 @@ async function resolve(req: Request): Promise<Auth | null> {
       if (!person) throw new ApiError(404, 'act_as_unknown', `No active person with email ${actAs}.`)
       scopes.add(SELF)
     }
-    return { companyId: key.companyId, via: 'key', scopes, person, apiKeyId: key.id }
+    return { companyId: key.companyId, via: 'key', scopes, person, apiKeyId: key.id, division: null }
   }
 
   const claims = verifySession(token)
@@ -63,7 +71,8 @@ async function resolve(req: Request): Promise<Auth | null> {
   const person = await prisma.person.findUnique({ where: { id: claims.sub } })
   if (!person || !person.active || person.companyId !== claims.cid) throw unauthorized('This account is not active.')
   const role = isRole(person.role) ? person.role : 'tech'
-  return { companyId: person.companyId, via: 'session', scopes: new Set(ROLE_SCOPES[role]), person, apiKeyId: null }
+  const division = role === DIVISION_ADMIN ? person.division.trim() : null
+  return { companyId: person.companyId, via: 'session', scopes: new Set(ROLE_SCOPES[role]), person, apiKeyId: null, division }
 }
 
 /** Attach req.auth when credentials are present. Does not reject anonymous requests. */

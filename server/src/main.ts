@@ -83,9 +83,9 @@ if (fs.existsSync(path.join(publicDir, 'index.html'))) {
   // In development the app is served by Vite, not by this server. Say where it is
   // instead of Express's bare "Cannot GET /".
   app.get('/', (_req, res) => {
-    res.type('html').send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Time Tracking API</title>
+    res.type('html').send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Logbook API</title>
 <style>body{font:16px/1.5 system-ui,sans-serif;max-width:560px;margin:48px auto;padding:0 16px;color:#1c2330}code{background:#f2f4f8;padding:1px 5px;border-radius:4px}a{color:#1f6feb}</style></head><body>
-<h1>Time Tracking API is running</h1>
+<h1>Logbook API is running</h1>
 <p>This port is the API. The app itself is at <a href="http://localhost:5195">http://localhost:5195</a> while <code>dev-web.cmd</code> is running.</p>
 <p>To serve the app from this port instead, run <code>build.bat</code> and restart the server.</p>
 <p>API reference: <a href="/api/v1/docs">/api/v1/docs</a></p>
@@ -119,7 +119,7 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
 })
 
 const server = app.listen(config.port, () => {
-  console.log(`Time Tracking API on http://localhost:${config.port}  (docs: /api/v1/docs)`)
+  console.log(`Logbook API on http://localhost:${config.port}  (docs: /api/v1/docs)`)
   startTowerSwitch()
   startRecurringExpenses(config.recurringCheckMinutes)
 })
