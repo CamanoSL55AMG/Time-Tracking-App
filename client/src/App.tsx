@@ -251,7 +251,7 @@ export default function App() {
         </Toolbar>
       </AppBar>
 
-      <Container maxWidth={current === 'clock' || current === 'week' || current === 'expenses' ? 'sm' : 'md'} sx={{ py: 2 }}>
+      <Container maxWidth={current === 'clock' || current === 'expenses' ? 'sm' : 'md'} sx={{ py: 2 }}>
         {current === 'clock' && <PunchPage canCrew={can('punch:crew')} meId={person.id} meName={person.name} />}
         {current === 'week' && <WeekPage />}
         {current === 'expenses' && <ExpensesPage />}
