@@ -152,16 +152,16 @@ export default function DayFix({
                     display: 'flex',
                     gap: 1,
                     px: 1,
-                    py: 0.25,
+                    py: 0.75,
                     borderRadius: 1,
                     bgcolor: row.s.id === seg.id ? 'action.selected' : undefined,
                     '&:hover': { bgcolor: 'action.hover' },
                   }}
                 >
-                  <Typography variant="caption" sx={{ width: 118, flexShrink: 0, fontVariantNumeric: 'tabular-nums', fontWeight: row.s.id === seg.id ? 700 : 400 }}>
+                  <Typography variant="body2" sx={{ width: 120, flexShrink: 0, fontVariantNumeric: 'tabular-nums', fontWeight: row.s.id === seg.id ? 700 : 400 }}>
                     {fmtTime(row.s.clockIn)} – {row.s.clockOut ? fmtTime(row.s.clockOut) : 'now'}
                   </Typography>
-                  <Typography variant="caption" noWrap sx={{ flex: 1, minWidth: 0, fontWeight: row.s.id === seg.id ? 700 : 400 }}>
+                  <Typography variant="body2" noWrap sx={{ flex: 1, minWidth: 0, fontWeight: row.s.id === seg.id ? 700 : 400 }}>
                     {row.s.phase?.short ?? '—'} · {row.s.job.name}
                   </Typography>
                 </Box>
