@@ -215,10 +215,10 @@ export default function App() {
               divider and the company. Phones keep Logbook under the logo. */}
           <Box sx={{ flex: 1, display: 'flex', alignItems: 'center', gap: '14px', minWidth: 0 }}>
             <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '3px', flexShrink: 0 }}>
-              <Box component="img" src="/brand/aicpnw-logo.png" alt="AICPNW" sx={{ height: { xs: 20, sm: 24 }, width: 'auto', display: 'block' }} />
-              <Box component="span" sx={{ display: { xs: 'none', md: 'block' }, fontSize: 9, fontWeight: 500, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#cdd7e6', lineHeight: 1, whiteSpace: 'nowrap' }}>
-                Advanced Integration Consultants
-              </Box>
+              {/* The name line is an SVG spaced to the logo's exact width, so it stays
+                  within AICPNW (Art, 2026-11-11); the logo is 30px tall while it shows. */}
+              <Box component="img" src="/brand/aicpnw-logo.png" alt="AICPNW" sx={{ height: { xs: 20, sm: 24, md: 30 }, width: 'auto', display: 'block' }} />
+              <Box component="img" src="/brand/aicpnw-name-line.svg" alt="Advanced Integration Consultants" sx={{ display: { xs: 'none', md: 'block' }, width: 159, height: 'auto' }} />
               <Box component="span" sx={{ display: { xs: 'block', md: 'none' }, fontSize: { xs: 10, sm: 11 }, fontWeight: 600, letterSpacing: '0.16em', textTransform: 'uppercase', color: '#c9d1d7', lineHeight: 1, whiteSpace: 'nowrap' }}>
                 Logbook
               </Box>
