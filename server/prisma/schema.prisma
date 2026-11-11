@@ -66,6 +66,12 @@ model Person {
   // While true, a signed-in session can only read /auth/me and change its own
   // password (auth/middleware.ts passwordChangeGate). Cleared by that change.
   mustChangePassword Boolean @default(false)
+  // "Forgot password?" (auth/passwordReset.ts): only the SHA-256 of the emailed one-time
+  // token is kept. Cleared when the link is used; the link expires at resetExpiresAt.
+  // resetSentAt holds back a second email to the same address for a few minutes.
+  resetTokenHash String?   @unique
+  resetExpiresAt DateTime?
+  resetSentAt    DateTime?
   active       Boolean  @default(true)
   // Salaried / exempt: the payroll export sends all of their hours as regular.
   overtimeExempt Boolean @default(false)

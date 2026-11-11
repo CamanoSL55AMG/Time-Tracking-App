@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   Alert,
-  AppBar,
   Badge,
   BottomNavigation,
   BottomNavigationAction,
@@ -18,12 +17,13 @@ import {
   Paper,
   Stack,
   SvgIcon,
-  Toolbar,
   Typography,
 } from '@mui/material'
 import { api, errorText, getToken, setPasswordChangeHandler, setSignedOutHandler, setTermsRequiredHandler, setToken, type Person } from './api'
+import BrandBar from './BrandBar'
 import Login from './pages/Login'
 import FirstPassword from './pages/FirstPassword'
+import ResetPassword from './pages/ResetPassword'
 import PasswordField from './PasswordField'
 import PunchPage from './pages/Punch'
 import BoardPage from './pages/Board'
@@ -75,6 +75,12 @@ export default function App() {
   const [companyName, setCompanyName] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [bootError, setBootError] = useState('')
+  // The "Forgot password?" email opens /reset-password#token=…; the token is taken once
+  // and the address bar cleared, so it doesn't stay in the history.
+  const [resetToken, setResetToken] = useState<string | null>(() =>
+    window.location.pathname === '/reset-password' ? (new URLSearchParams(window.location.hash.slice(1)).get('token') ?? '') : null,
+  )
+  const [signInInfo, setSignInInfo] = useState('')
   const [tab, setTab] = useState<Tab>('clock')
   const [menuAt, setMenuAt] = useState<HTMLElement | null>(null)
   const [pwOpen, setPwOpen] = useState(false)
@@ -143,7 +149,7 @@ export default function App() {
       const sso = url.pathname === '/sso' ? url.searchParams.get('token') : null
       const dashSession = url.pathname === '/sso' ? new URLSearchParams(url.hash.slice(1)).get('session') : null
       const signinError = url.searchParams.get('signin_error')
-      if (url.pathname === '/sso' || signinError) window.history.replaceState(null, '', '/')
+      if (url.pathname === '/sso' || url.pathname === '/reset-password' || signinError) window.history.replaceState(null, '', '/')
       if (dashSession) setToken(dashSession)
       if (signinError) setBootError(signinError)
       try {
@@ -173,13 +179,28 @@ export default function App() {
       </Box>
     )
   }
+  if (resetToken !== null)
+    return (
+      <ResetPassword
+        token={resetToken}
+        onDone={(message) => {
+          setResetToken(null)
+          if (person) {
+            // Signed in on this device already: pick up the cleared "must change password".
+            api.me().then((me) => me.person && setPerson(me.person), () => undefined)
+          } else if (message) setSignInInfo(message)
+        }}
+      />
+    )
   // Every fresh sign-in starts at the Install / Service / Office / Shop screen.
   if (!person)
     return (
       <Login
         notice={bootError}
+        info={signInInfo}
         onSignedIn={(p) => {
           writeMode(null)
+          setSignInInfo('')
           setTermsOk(false)
           setPerson(p)
         }}
@@ -207,72 +228,47 @@ export default function App() {
 
   return (
     <Box sx={{ minHeight: '100dvh', pb: 'calc(72px + env(safe-area-inset-bottom))' }}>
-      <AppBar position="sticky" color="primary" elevation={0} sx={{ background: 'linear-gradient(90deg, #0f2537 0%, #173550 60%, #1d5a6e 100%)', boxShadow: '0 1px 0 rgba(0,0,0,.2)' }}>
-        <Toolbar sx={{ gap: 1, minHeight: { xs: 54, sm: 54 } }}>
-          {/* Same header as AIC Accounting (Art, 2026-11-09) with the standard
-              AICPNW logo: the company name, Advanced Integration Consultants,
-              under the chrome logo (Art, 2026-11-10), then a divider, LOGBOOK, a
-              divider and the company. Phones keep Logbook under the logo. */}
-          <Box sx={{ flex: 1, display: 'flex', alignItems: 'center', gap: '14px', minWidth: 0 }}>
-            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '3px', flexShrink: 0 }}>
-              <Box component="img" src="/brand/aicpnw-logo.png" alt="AICPNW" sx={{ height: { xs: 20, sm: 24 }, width: 'auto', display: 'block' }} />
-              <Box component="span" sx={{ display: { xs: 'none', md: 'block' }, fontSize: 9, fontWeight: 500, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#cdd7e6', lineHeight: 1, whiteSpace: 'nowrap' }}>
-                Advanced Integration Consultants
-              </Box>
-              <Box component="span" sx={{ display: { xs: 'block', md: 'none' }, fontSize: { xs: 10, sm: 11 }, fontWeight: 600, letterSpacing: '0.16em', textTransform: 'uppercase', color: '#c9d1d7', lineHeight: 1, whiteSpace: 'nowrap' }}>
-                Logbook
-              </Box>
-            </Box>
-            <Box component="span" sx={{ display: { xs: 'none', md: 'inline' }, flexShrink: 0, fontSize: 12, fontWeight: 700, letterSpacing: '0.16em', textTransform: 'uppercase', color: '#e6ecf2', pl: '14px', borderLeft: '1px solid rgba(255,255,255,.22)', lineHeight: '24px', whiteSpace: 'nowrap' }}>
-              Logbook
-            </Box>
-            {companyName && (
-              <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' }, fontSize: 14, opacity: 0.7, pl: '14px', borderLeft: '1px solid rgba(255,255,255,.22)', lineHeight: '24px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>
-                {companyName}
-              </Box>
-            )}
-          </Box>
-          <Button color="inherit" onClick={(e) => setMenuAt(e.currentTarget)} sx={{ fontWeight: 600 }}>
-            {person.name}
-          </Button>
-          <Menu anchorEl={menuAt} open={Boolean(menuAt)} onClose={() => setMenuAt(null)}>
-            <MenuItem disabled sx={{ opacity: '1 !important' }}>
-              <Typography variant="body2" color="text.secondary">
-                {person.email} · {person.role}
-              </Typography>
-            </MenuItem>
-            {showLeave && (
-              <MenuItem
-                onClick={() => {
-                  setMenuAt(null)
-                  setTab('leave')
-                }}
-              >
-                Time off
-              </MenuItem>
-            )}
-            {showPayroll && (
-              <MenuItem
-                onClick={() => {
-                  setMenuAt(null)
-                  setTab('payroll')
-                }}
-              >
-                Payroll report
-              </MenuItem>
-            )}
+      <BrandBar companyName={companyName}>
+        <Button color="inherit" onClick={(e) => setMenuAt(e.currentTarget)} sx={{ fontWeight: 600 }}>
+          {person.name}
+        </Button>
+        <Menu anchorEl={menuAt} open={Boolean(menuAt)} onClose={() => setMenuAt(null)}>
+          <MenuItem disabled sx={{ opacity: '1 !important' }}>
+            <Typography variant="body2" color="text.secondary">
+              {person.email} · {person.role}
+            </Typography>
+          </MenuItem>
+          {showLeave && (
             <MenuItem
               onClick={() => {
                 setMenuAt(null)
-                setPwOpen(true)
+                setTab('leave')
               }}
             >
-              Change password
+              Time off
             </MenuItem>
-            <MenuItem onClick={signOut}>Sign out</MenuItem>
-          </Menu>
-        </Toolbar>
-      </AppBar>
+          )}
+          {showPayroll && (
+            <MenuItem
+              onClick={() => {
+                setMenuAt(null)
+                setTab('payroll')
+              }}
+            >
+              Payroll report
+            </MenuItem>
+          )}
+          <MenuItem
+            onClick={() => {
+              setMenuAt(null)
+              setPwOpen(true)
+            }}
+          >
+            Change password
+          </MenuItem>
+          <MenuItem onClick={signOut}>Sign out</MenuItem>
+        </Menu>
+      </BrandBar>
 
       <Container maxWidth={current === 'clock' || current === 'expenses' ? 'sm' : 'md'} sx={{ py: 2 }}>
         {current === 'clock' && <PunchPage canCrew={can('punch:crew')} meId={person.id} meName={person.name} />}

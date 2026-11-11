@@ -23,6 +23,16 @@ server/   Express + TypeScript + Prisma + PostgreSQL — the API at /api/v1     
   set up are not flagged; to flag one, set them a new password with the box ticked
   (or send `mustChangePassword: true` to `PUT /people/by-email/:email` as a signed-in admin).
   From the server console: `npm run reset-password -- --email <address> --must-change`.
+- **Forgot password?** on the sign-in page (built 2026-11-11): asks for the email and
+  always gives the same answer, whether or not that email has an account. An active
+  account gets an email with a one-time link (`/reset-password#token=…`) that expires in
+  60 minutes; it opens a "Choose a new password" screen (same 10-character rule, eye
+  button and generator as the first-password screen). Using it sets the password, clears
+  "must change password" and kills the link; it signs no one out. Only the SHA-256 of the
+  token is stored, one email per address per 5 minutes, and the endpoints share the
+  sign-in throttle (10 per device per 15 minutes). Email goes out through Gmail SMTP
+  (`GMAIL_USER`, `GMAIL_APP_PASSWORD`, the same pair as GED); without them nothing is
+  sent and the server log says so. The link starts from `APP_URL`.
 - **Sign in with Dashboard**: GED is the sign-in service for every add-on
   (`DASHBOARD-SIGN-IN.md` in the GED repo). Set up with GED's `npm run oidc:client`.
 - Clock in, Next phase, Switch job, Clock out. Each punch is stamped with the phone's

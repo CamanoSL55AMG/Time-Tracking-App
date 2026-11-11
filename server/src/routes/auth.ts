@@ -12,6 +12,8 @@ import { verifyGoogleIdToken } from '../auth/googleIdToken.js'
 import { dashboardConfigured, finishSignIn, startUrl } from '../auth/dashboard.js'
 import { isRole, ROLE_SCOPES } from '../auth/apiKeys.js'
 import { OFF_MESSAGE, switchState } from '../services/tower.js'
+import { mailerConfigured, sendMail } from '../lib/mailer.js'
+import { FORGOT_SENT, MIN_PASSWORD_LENGTH, RESET_LINK_BAD, requestPasswordReset, resetPassword, type ResetStore } from '../auth/passwordReset.js'
 
 export const authRouter = Router()
 
@@ -35,10 +37,10 @@ const failures = new Map<string, { first: number; count: number }>()
 const WINDOW_MS = 15 * 60_000
 const MAX_FAILURES = 10
 
-function checkLockout(key: string): void {
+function checkLockout(key: string, message = 'Too many failed sign-ins. Wait 15 minutes and try again.'): void {
   const f = failures.get(key)
   if (f && Date.now() - f.first < WINDOW_MS && f.count >= MAX_FAILURES) {
-    throw new ApiError(429, 'too_many_attempts', 'Too many failed sign-ins. Wait 15 minutes and try again.')
+    throw new ApiError(429, 'too_many_attempts', message)
   }
 }
 function recordFailure(key: string): void {
@@ -72,6 +74,98 @@ route(
     }
     failures.delete(key)
     return session(person)
+  },
+)
+
+// ─── Forgot password ────────────────────────────────────────────────────────
+// The sign-in page's "Forgot password?" emails a one-time link (auth/passwordReset.ts).
+// The answer is the same whether or not the address has an account, and the lookup,
+// token and email happen after it has gone, so neither words nor timing tell.
+
+const resetStore: ResetStore = {
+  findByEmail: (email) => prisma.person.findUnique({ where: { email } }),
+  findByTokenHash: (tokenHash) => prisma.person.findUnique({ where: { resetTokenHash: tokenHash } }),
+  saveToken: async (id, tokenHash, resetExpiresAt, resetSentAt) => {
+    await prisma.person.update({ where: { id }, data: { resetTokenHash: tokenHash, resetExpiresAt, resetSentAt } })
+  },
+  consume: async (id, tokenHash, now, passwordHash) => {
+    // One conditional update: a second use of the same link (even at the same moment) changes nothing.
+    const r = await prisma.person.updateMany({
+      where: { id, resetTokenHash: tokenHash, resetExpiresAt: { gt: now }, active: true },
+      data: { passwordHash, mustChangePassword: false, resetTokenHash: null, resetExpiresAt: null },
+    })
+    return r.count === 1
+  },
+  clearToken: async (id) => {
+    await prisma.person.update({ where: { id }, data: { resetTokenHash: null, resetExpiresAt: null } })
+  },
+}
+
+/** Where the emailed link points: APP_URL when it is set, else the address this request came in on. */
+// The emailed link must point at this app's own public address. Building it from
+// the request's Host header would let a forged header aim the link at another
+// site, so in production only APP_URL is used; without it no reset email goes out.
+function resetOrigin(): string {
+  if (config.appUrlConfigured) return config.appUrlConfigured
+  return config.isProduction ? '' : config.appUrl
+}
+
+const TOO_MANY_RESETS = 'Too many requests from this device. Wait 15 minutes and try again.'
+
+route(
+  authRouter,
+  {
+    method: 'post',
+    path: '/auth/forgot-password',
+    tag: 'Sign-in',
+    summary: 'Email a one-time link to choose a new password. Always gives the same answer, whether or not the email has an account.',
+    access: 'public',
+    body: { email: 'Email address' },
+  },
+  async (req, res) => {
+    const email = requiredStr(req.body?.email, 'email', 320).toLowerCase()
+    if (!/^[^\s@]+@[^\s@]+$/.test(email)) throw badRequest('Enter your email address.', { field: 'email' })
+    // The sign-in throttle, per device: every ask counts, whatever the email.
+    const key = `forgot|${req.ip}`
+    checkLockout(key, TOO_MANY_RESETS)
+    recordFailure(key)
+    const origin = resetOrigin()
+    res.status(200).json({ ok: true, message: FORGOT_SENT })
+    // After the answer has gone: look up, make the token, send.
+    setImmediate(() => {
+      if (!origin) {
+        console.warn('[auth] forgot-password: APP_URL is not set, so no reset link was emailed')
+        return
+      }
+      requestPasswordReset({ store: resetStore, mailerConfigured, send: (mail) => sendMail(mail) }, email, origin).catch((err: unknown) =>
+        console.error('[auth] forgot-password email failed:', err instanceof Error ? err.message : err),
+      )
+    })
+  },
+)
+
+route(
+  authRouter,
+  {
+    method: 'post',
+    path: '/auth/reset-password',
+    tag: 'Sign-in',
+    summary: 'Choose a new password with the one-time link from "Forgot password?". The link then stops working.',
+    access: 'public',
+    body: { token: 'The token from the emailed link', password: `New password, at least ${MIN_PASSWORD_LENGTH} characters` },
+  },
+  async (req) => {
+    const token = requiredStr(req.body?.token, 'token', 200)
+    const password = typeof req.body?.password === 'string' ? req.body.password : ''
+    const key = `reset|${req.ip}`
+    checkLockout(key, TOO_MANY_RESETS)
+    const result = await resetPassword({ store: resetStore, hashPassword: (pw) => bcrypt.hash(pw, 12) }, token, password)
+    if (!result.ok) {
+      if (result.reason === 'weak_password') throw badRequest(`The new password needs at least ${MIN_PASSWORD_LENGTH} characters.`, { field: 'password' })
+      recordFailure(key)
+      throw new ApiError(400, 'reset_link_invalid', RESET_LINK_BAD)
+    }
+    return { ok: true }
   },
 )
 

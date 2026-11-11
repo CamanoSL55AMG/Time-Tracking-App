@@ -57,6 +57,13 @@ try {
   r = await call('POST', '/auth/login', { body: { email, password: 'definitely-wrong-password' } })
   check('wrong password is refused', r.status === 401)
 
+  // "Forgot password?": an unknown address gets the same plain 200 as any other (no email
+  // is sent for it). A known address is not tried here, so a smoke run never emails anyone.
+  r = await call('POST', '/auth/forgot-password', { body: { email: testEmail } })
+  check('forgot password answers the same for an unknown email', r.status === 200 && /^If that email has/.test(r.json?.message ?? ''), JSON.stringify(r.json))
+  r = await call('POST', '/auth/reset-password', { body: { token: randomBytes(32).toString('base64url'), password: 'smoke-reset-password' } })
+  check('a made-up reset link is refused', r.status === 400 && r.json?.error?.code === 'reset_link_invalid', JSON.stringify(r.json))
+
   r = await call('POST', '/auth/login', { body: { email, password } })
   check('admin signs in', r.status === 200 && Boolean(r.json?.token), JSON.stringify(r.json))
   const admin = r.json?.token

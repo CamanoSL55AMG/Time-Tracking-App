@@ -138,7 +138,7 @@ test('gate: API keys and anonymous calls are never held', () => {
 })
 
 test('gate: exempt paths pass for a person with documents pending', () => {
-  for (const p of ['/auth/me', '/auth/login', '/auth/sso', '/auth/google', '/auth/config', '/auth/dashboard/start', '/auth/dashboard/callback', '/terms/status', '/terms/accept', '/terms/documents/logbook-eula', '/auth/password', '/health', '/AUTH/ME/', '/terms/status/']) {
+  for (const p of ['/auth/me', '/auth/login', '/auth/sso', '/auth/google', '/auth/config', '/auth/dashboard/start', '/auth/dashboard/callback', '/terms/status', '/terms/accept', '/terms/documents/logbook-eula', '/auth/password', '/auth/forgot-password', '/auth/reset-password', '/health', '/AUTH/ME/', '/terms/status/']) {
     assert.equal(isExemptPath(p), true, p)
     assert.equal(gateDecision({ enabled: true, via: 'session', path: p, manifestOk: true, pendingCount: 2 }), 'pass', p)
   }

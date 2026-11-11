@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { Alert, Box, Button, Divider, Paper, Stack, TextField, Typography } from '@mui/material'
+import { Alert, Box, Button, Divider, Link, Stack, TextField, Typography } from '@mui/material'
 import { api, errorText, setToken, type Person } from '../api'
 import PasswordField from '../PasswordField'
+import { SignInShell } from '../BrandBar'
 
 const GSI_SRC = 'https://accounts.google.com/gsi/client'
 
@@ -21,11 +22,15 @@ function loadGsi(): Promise<void> {
   })
 }
 
-export default function Login({ notice, onSignedIn }: { notice?: string; onSignedIn: (p: Person) => void }) {
+export default function Login({ notice, info, onSignedIn }: { notice?: string; info?: string; onSignedIn: (p: Person) => void }) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState(notice ?? '')
   const [busy, setBusy] = useState(false)
+  // "Forgot password?": the same card asks for the email, then shows the server's answer
+  // (always the same words, whether or not the email has an account).
+  const [forgot, setForgot] = useState(false)
+  const [forgotSent, setForgotSent] = useState('')
   const [googleClientId, setGoogleClientId] = useState<string | null>(null)
   const [dashboard, setDashboard] = useState(false)
   const [switchedOff, setSwitchedOff] = useState<string | null>(null)
@@ -95,52 +100,107 @@ export default function Login({ notice, onSignedIn }: { notice?: string; onSigne
     }
   }
 
-  return (
-    <Box sx={{ minHeight: '100dvh', display: 'grid', placeItems: 'center', p: 2, bgcolor: 'primary.main' }}>
-      <Paper sx={{ p: 3, width: '100%', maxWidth: 380 }}>
-        <form onSubmit={submit}>
+  const sendLink = async (e: FormEvent) => {
+    e.preventDefault()
+    setBusy(true)
+    setError('')
+    try {
+      const r = await api.forgotPassword(email.trim())
+      setForgotSent(r.message)
+    } catch (err) {
+      setError(errorText(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+  const showForgot = (on: boolean) => {
+    setForgot(on)
+    setForgotSent('')
+    setError('')
+  }
+
+  if (forgot) {
+    return (
+      <SignInShell maxWidth={380}>
+        <form onSubmit={sendLink}>
           <Stack spacing={2}>
             <Box>
               <Typography variant="h5" sx={{ fontWeight: 700 }}>
-                Logbook
+                Forgot password
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                AIC Terminal time tracking. Sign in to clock in.
+                Enter your email. If it has a Logbook account, we'll email you a link to choose a new password.
               </Typography>
             </Box>
-            {switchedOff && <Alert severity="warning">{switchedOff}</Alert>}
-            {dashboard && (
-              <>
-                {/* One sign-in for the Dashboard and every add-on (GED's DASHBOARD-SIGN-IN.md) */}
-                <Button variant="contained" size="large" href="/api/v1/auth/dashboard/start" sx={{ py: 1.25 }}>
-                  Sign in with Dashboard
-                </Button>
-                <Divider>
-                  <Typography variant="caption" color="text.secondary">
-                    {googleClientId ? 'or' : 'or with a password'}
-                  </Typography>
-                </Divider>
-              </>
-            )}
-            {googleClientId && (
-              <>
-                <Box ref={googleBox} sx={{ display: 'flex', justifyContent: 'center', minHeight: 44 }} />
-                <Divider>
-                  <Typography variant="caption" color="text.secondary">
-                    or with a password
-                  </Typography>
-                </Divider>
-              </>
-            )}
-            <TextField label="Email" type="email" autoComplete="username" inputMode="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoFocus={!googleClientId} />
-            <PasswordField label="Password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+            <TextField label="Email" type="email" autoComplete="username" inputMode="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoFocus disabled={Boolean(forgotSent)} />
+            {forgotSent && <Alert severity="success">{forgotSent}</Alert>}
             {error && <Alert severity="error">{error}</Alert>}
-            <Button type="submit" variant={dashboard ? 'outlined' : 'contained'} size="large" disabled={busy || !email || !password}>
-              {busy ? 'Signing in…' : 'Sign in'}
+            {!forgotSent && (
+              <Button type="submit" variant="contained" size="large" disabled={busy || !email.trim()}>
+                {busy ? 'Sending…' : 'Email me a link'}
+              </Button>
+            )}
+            <Button color="inherit" onClick={() => showForgot(false)}>
+              Back to sign in
             </Button>
           </Stack>
         </form>
-      </Paper>
-    </Box>
+      </SignInShell>
+    )
+  }
+
+  return (
+    <SignInShell maxWidth={380}>
+      <form onSubmit={submit}>
+        <Stack spacing={2}>
+          <Box>
+            <Typography variant="h5" sx={{ fontWeight: 700 }}>
+              Logbook
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              AIC Terminal time tracking. Sign in to clock in.
+            </Typography>
+          </Box>
+          {switchedOff && <Alert severity="warning">{switchedOff}</Alert>}
+          {info && !error && <Alert severity="success">{info}</Alert>}
+          {dashboard && (
+            <>
+              {/* One sign-in for the Dashboard and every add-on (GED's DASHBOARD-SIGN-IN.md) */}
+              <Button variant="contained" size="large" href="/api/v1/auth/dashboard/start" sx={{ py: 1.25 }}>
+                Sign in with Dashboard
+              </Button>
+              <Divider>
+                <Typography variant="caption" color="text.secondary">
+                  {googleClientId ? 'or' : 'or with a password'}
+                </Typography>
+              </Divider>
+            </>
+          )}
+          {googleClientId && (
+            <>
+              <Box ref={googleBox} sx={{ display: 'flex', justifyContent: 'center', minHeight: 44 }} />
+              <Divider>
+                <Typography variant="caption" color="text.secondary">
+                  or with a password
+                </Typography>
+              </Divider>
+            </>
+          )}
+          <TextField label="Email" type="email" autoComplete="username" inputMode="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoFocus={!googleClientId} />
+          <Box>
+            <PasswordField label="Password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required fullWidth />
+            <Box sx={{ textAlign: 'right', mt: 0.5 }}>
+              <Link component="button" type="button" variant="body2" onClick={() => showForgot(true)}>
+                Forgot password?
+              </Link>
+            </Box>
+          </Box>
+          {error && <Alert severity="error">{error}</Alert>}
+          <Button type="submit" variant={dashboard ? 'outlined' : 'contained'} size="large" disabled={busy || !email || !password}>
+            {busy ? 'Signing in…' : 'Sign in'}
+          </Button>
+        </Stack>
+      </form>
+    </SignInShell>
   )
 }
