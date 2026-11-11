@@ -155,6 +155,8 @@ const EXEMPT = new Set([
   '/auth/sso',
   '/auth/me',
   '/auth/password',
+  '/auth/forgot-password',
+  '/auth/reset-password',
   '/terms/status',
   '/terms/accept',
 ])

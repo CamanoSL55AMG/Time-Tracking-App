@@ -29,6 +29,20 @@ same way as the other apps, pointing at `http://localhost:5400`. Put that addres
 Google", set `GOOGLE_CLIENT_ID` and add the address to the client's Authorized
 JavaScript origins.
 
+## Forgot password email
+
+"Forgot password?" on the sign-in page emails a one-time link. Add the same Gmail pair
+GED uses to `server/.env` (copy the two lines from GED's `server/.env`), check `APP_URL`
+is the public HTTPS address, then `sudo systemctl restart logbook`:
+
+```
+GMAIL_USER=
+GMAIL_APP_PASSWORD=
+```
+
+Without them the page still answers normally, nothing is sent, and
+`journalctl -u logbook` shows a warning each time it is used.
+
 ## Control Tower switch
 
 Logbook can be turned on and off per company in AIC Control Tower (Manifest → Logbook).

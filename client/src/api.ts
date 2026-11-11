@@ -8,9 +8,13 @@ export const setToken = (t: string | null) => (t ? localStorage.setItem(TOKEN_KE
 
 export const http = axios.create({ baseURL: '/api/v1', timeout: 20_000 })
 
+// "Forgot password?" and the emailed link work signed out: an old session left in
+// this browser must not get in their way (an expired one would be refused first).
+const ANONYMOUS = new Set(['/auth/forgot-password', '/auth/reset-password'])
+
 http.interceptors.request.use((cfg) => {
   const t = getToken()
-  if (t) cfg.headers.Authorization = `Bearer ${t}`
+  if (t && !ANONYMOUS.has(String(cfg.url ?? ''))) cfg.headers.Authorization = `Bearer ${t}`
   return cfg
 })
 
@@ -718,6 +722,10 @@ export const api = {
   google: (credential: string) => http.post<{ token: string; person: Person }>('/auth/google', { credential }).then((r) => r.data),
   me: () => http.get<{ person: Person | null; scopes: string[] }>('/auth/me').then((r) => r.data),
   changePassword: (current: string, next: string) => http.post('/auth/password', { current, next }).then((r) => r.data),
+  /** Always the same answer, whether or not the email has an account. */
+  forgotPassword: (email: string) => http.post<{ ok: true; message: string }>('/auth/forgot-password', { email }).then((r) => r.data),
+  /** Choose a new password with the token from the emailed link. */
+  resetPassword: (token: string, password: string) => http.post<{ ok: true }>('/auth/reset-password', { token, password }).then((r) => r.data),
   termsStatus: () => http.get<TermsStatus>('/terms/status').then((r) => r.data),
   termsDocument: (id: string) => http.get<TermsDocument>(`/terms/documents/${encodeURIComponent(id)}`).then((r) => r.data),
   acceptTerms: (documentId: string, version: string) => http.post<TermsStatus>('/terms/accept', { documentId, version }).then((r) => r.data),

@@ -77,6 +77,15 @@ export const config = {
   termsGateEnabled: isOn(process.env.TERMS_GATE_ENABLED),
   // Folder holding manifest.json and the documents. Empty = <repo>/legal.
   termsDir: (process.env.TERMS_DIR ?? '').trim(),
+  // APP_URL as set in .env (empty when it was left out). The "Forgot password?" email
+  // builds its link from this; without it, from the address the request came in on.
+  appUrlConfigured: ((process.env.APP_URL ?? '').trim()).replace(/\/+$/, ''),
+  // Outgoing email (lib/mailer.ts): Gmail SMTP with a Google App Password, the same
+  // mail identity as GED. Both empty = no email is sent (the "Forgot password?" link
+  // still answers the same way, and the server logs a warning).
+  gmailUser: (process.env.GMAIL_USER ?? '').trim(),
+  gmailAppPassword: (process.env.GMAIL_APP_PASSWORD ?? '').replace(/\s+/g, ''),
+  mailFromName: (process.env.MAIL_FROM_NAME ?? '').trim() || 'Logbook',
 }
 
 /** Refuse to start with a missing or weak signing secret. */

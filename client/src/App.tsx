@@ -24,6 +24,7 @@ import {
 import { api, errorText, getToken, setPasswordChangeHandler, setSignedOutHandler, setTermsRequiredHandler, setToken, type Person } from './api'
 import Login from './pages/Login'
 import FirstPassword from './pages/FirstPassword'
+import ResetPassword from './pages/ResetPassword'
 import PasswordField from './PasswordField'
 import PunchPage from './pages/Punch'
 import BoardPage from './pages/Board'
@@ -73,6 +74,12 @@ export default function App() {
   const [person, setPerson] = useState<Person | null>(null)
   const [loading, setLoading] = useState(true)
   const [bootError, setBootError] = useState('')
+  // The "Forgot password?" email opens /reset-password#token=…; the token is taken once
+  // and the address bar cleared, so it doesn't stay in the history.
+  const [resetToken, setResetToken] = useState<string | null>(() =>
+    window.location.pathname === '/reset-password' ? (new URLSearchParams(window.location.hash.slice(1)).get('token') ?? '') : null,
+  )
+  const [signInInfo, setSignInInfo] = useState('')
   const [tab, setTab] = useState<Tab>('clock')
   const [menuAt, setMenuAt] = useState<HTMLElement | null>(null)
   const [pwOpen, setPwOpen] = useState(false)
@@ -134,7 +141,7 @@ export default function App() {
       const sso = url.pathname === '/sso' ? url.searchParams.get('token') : null
       const dashSession = url.pathname === '/sso' ? new URLSearchParams(url.hash.slice(1)).get('session') : null
       const signinError = url.searchParams.get('signin_error')
-      if (url.pathname === '/sso' || signinError) window.history.replaceState(null, '', '/')
+      if (url.pathname === '/sso' || url.pathname === '/reset-password' || signinError) window.history.replaceState(null, '', '/')
       if (dashSession) setToken(dashSession)
       if (signinError) setBootError(signinError)
       try {
@@ -164,13 +171,28 @@ export default function App() {
       </Box>
     )
   }
+  if (resetToken !== null)
+    return (
+      <ResetPassword
+        token={resetToken}
+        onDone={(message) => {
+          setResetToken(null)
+          if (person) {
+            // Signed in on this device already: pick up the cleared "must change password".
+            api.me().then((me) => me.person && setPerson(me.person), () => undefined)
+          } else if (message) setSignInInfo(message)
+        }}
+      />
+    )
   // Every fresh sign-in starts at the Install / Service / Office / Shop screen.
   if (!person)
     return (
       <Login
         notice={bootError}
+        info={signInInfo}
         onSignedIn={(p) => {
           writeMode(null)
+          setSignInInfo('')
           setTermsOk(false)
           setPerson(p)
         }}
