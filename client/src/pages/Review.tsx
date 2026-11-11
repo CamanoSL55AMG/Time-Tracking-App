@@ -22,7 +22,7 @@ import {
   TextField,
   Typography,
 } from '@mui/material'
-import { api, errorText, fmtDay, fmtTime, type PersonWeek, type WeekSegment, type WeekSheet, type WeekSheetRow } from '../api'
+import { api, errorText, fmtDay, fmtTime, type PersonWeek, type SelfEdit, type WeekSegment, type WeekSheet, type WeekSheetRow } from '../api'
 import { ExceptionList, StatusChip, WeekDetail, WeekNav, signOffLine } from './Week'
 import { DecideButtons, RequestCard } from './Requests'
 import { ExpenseApprovals } from './Expenses'
@@ -60,13 +60,16 @@ export default function ReviewPage({
   const [showNotes, setShowNotes] = useState(false)
   // Change requests waiting for a decision, from any week.
   const [requests, setRequests] = useState<ChangeRequest[]>([])
+  // Times people fixed themselves that nobody has looked at yet, from any week.
+  const [selfEdits, setSelfEdits] = useState<SelfEdit[]>([])
 
   const load = useCallback(async (to?: string) => {
     setError('')
     try {
-      const [s, reqs] = await Promise.all([api.weekSheet(to), api.pendingRequests()])
+      const [s, reqs, fixed] = await Promise.all([api.weekSheet(to), api.pendingRequests(), api.selfEdits('waiting').catch(() => [] as SelfEdit[])])
       setSheet(s)
       setRequests(reqs)
+      setSelfEdits(fixed)
       onWaitingChange?.(reqs.length)
       setPicked(new Set())
     } catch (err) {
@@ -164,6 +167,19 @@ export default function ReviewPage({
         </Stack>
       )}
 
+      {selfEdits.length > 0 && (
+        <SelfEditList
+          edits={selfEdits}
+          canMark={canDecideFixes}
+          meId={meId}
+          onDone={(n) => {
+            setNotice(`Marked ${n} as looked at.`)
+            void load(sheet.weekStart)
+          }}
+          onError={setError}
+        />
+      )}
+
       <TeamOpenItems />
 
       {notice && (
@@ -241,6 +257,7 @@ export default function ReviewPage({
                         <StatusChip status={r.status} />
                       )}
                       {r.pendingRequests > 0 && <Chip size="small" color="warning" variant="outlined" label={`${r.pendingRequests} change${r.pendingRequests === 1 ? '' : 's'} waiting`} />}
+                      {(r.editsToReview ?? 0) > 0 && <Chip size="small" color="info" variant="outlined" label={`${r.editsToReview} fixed by them`} />}
                     </Stack>
                   </TableCell>
                 </TableRow>
@@ -592,5 +609,83 @@ function ServiceBillingPanel({ from, to }: { from: string; to: string }) {
         </Paper>
       )}
     </Box>
+  )
+}
+
+const span = (t: { clockIn: string; clockOut: string | null } | null) => (t ? `${fmtTime(t.clockIn)} – ${t.clockOut ? fmtTime(t.clockOut) : 'open'}` : '—')
+
+/** Times techs fixed themselves. They already count; this is the look-over (Art 2026-11-09). */
+function SelfEditList({
+  edits,
+  canMark,
+  meId,
+  onDone,
+  onError,
+}: {
+  edits: SelfEdit[]
+  canMark: boolean
+  meId?: string
+  onDone: (n: number) => void
+  onError: (msg: string) => void
+}) {
+  const [working, setWorking] = useState(false)
+  // A non-admin can't mark their own fixes; the server refuses, so don't offer it.
+  const markable = edits.filter((e) => e.person.id !== meId)
+  const mark = async (ids: string[]) => {
+    setWorking(true)
+    try {
+      const r = await api.markEditsReviewed(ids)
+      onDone(r.marked)
+    } catch (err) {
+      onError(errorText(err))
+    } finally {
+      setWorking(false)
+    }
+  }
+  return (
+    <Stack spacing={1}>
+      <Stack direction="row" alignItems="center" spacing={1}>
+        <Typography variant="subtitle2" sx={{ flex: 1 }}>
+          Times techs fixed themselves ({edits.length})
+        </Typography>
+        {canMark && markable.length > 1 && (
+          <Button size="small" disabled={working} onClick={() => void mark(markable.map((e) => e.id))}>
+            Mark all looked at
+          </Button>
+        )}
+      </Stack>
+      <Typography variant="caption" color="text.secondary">
+        These already count. Check they look right; if one doesn't, open the person's week and correct it.
+        {!canMark && ' A manager, admin or payroll marks them looked at.'}
+      </Typography>
+      {edits.map((e) => (
+        <Paper key={e.id} variant="outlined" sx={{ p: 1.25 }}>
+          <Stack direction="row" spacing={1} alignItems="flex-start">
+            <Box sx={{ flex: 1, minWidth: 0 }}>
+              <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                {e.person.name} · {fmtDay(new Date(e.segment.clockIn).toLocaleDateString('en-CA'))}
+              </Typography>
+              <Typography variant="body2" noWrap>
+                {e.segment.phase?.short ?? '—'} · {e.segment.job.name}
+              </Typography>
+              <Typography variant="body2" sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                <Box component="span" sx={{ textDecoration: 'line-through', color: 'text.secondary' }}>
+                  {span(e.before)}
+                </Box>{' '}
+                → {span(e.after)}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                “{e.reason}” · fixed {new Date(e.at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+              </Typography>
+            </Box>
+            {canMark && e.person.id !== meId && (
+              <Button size="small" disabled={working} onClick={() => void mark([e.id])}>
+                Looks right
+              </Button>
+            )}
+          </Stack>
+        </Paper>
+      ))}
+    </Stack>
   )
 }

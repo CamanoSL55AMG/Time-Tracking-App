@@ -99,6 +99,9 @@ model Job {
   name         String
   code         String    @default("") // P-number, service ticket, etc.
   active       Boolean   @default(true)
+  // Jetbuilt stage (PROPOSAL, CONTRACT, INSTALL, REVIEW…), sent across by GED. Empty
+  // for jobs added here. Used with recent punches to fold old projects under Archived.
+  stage        String    @default("")
   siteLat      Float?
   siteLng      Float?
   siteRadiusM  Int?
@@ -225,10 +228,16 @@ model PunchEdit {
   before        Json
   after         Json
   reason        String
+  // The person fixed their own time (no approval first, Art 2026-11-09). It shows as
+  // edited until a supervisor or admin has looked it over.
+  selfEdit      Boolean   @default(false)
+  reviewedById  String?
+  reviewedAt    DateTime?
 
   punch Punch @relation(fields: [punchId], references: [id])
 
   @@index([punchId])
+  @@index([selfEdit, reviewedAt])
 }
 
 // One person's week: the tech signs it, a manager or payroll approves it. An

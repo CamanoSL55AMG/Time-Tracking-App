@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Alert, Box, Button, Chip, CircularProgress, Divider, IconButton, Paper, Stack, Typography } from '@mui/material'
+import { Alert, Box, Button, ButtonBase, Chip, CircularProgress, Collapse, Divider, IconButton, Paper, Stack, Typography } from '@mui/material'
 import { api, errorText, fmtDay, fmtTime, shiftWeek, type PersonWeek, type SheetStatus, type TimeException, type WeekSegment } from '../api'
 import { RequestCard, RequestDialog } from './Requests'
+import DayFix from './DayFix'
 
 // A tech's week: every segment by day, the total, and the Sign button. Signing says
 // "these hours are right"; a manager approves after the week is over, and an
@@ -47,7 +48,27 @@ export function ExceptionList({ items, showName }: { items: TimeException[]; sho
 }
 
 /** Days of one person's week with their segments. */
-export function WeekDetail({ week, onEdit }: { week: PersonWeek; onEdit?: (s: WeekSegment) => void }) {
+/** Days a person may fix themselves: from the start of the open pay period, through today, and not approved yet. */
+export function fixableDay(week: PersonWeek, date: string, today: string) {
+  if (!week.selfEditFrom || date < week.selfEditFrom || date > today) return false
+  if (week.status === 'approved' && date <= (week.approvedThrough ?? week.weekEnd)) return false
+  return true
+}
+
+export function WeekDetail({
+  week,
+  onEdit,
+  onFixDay,
+  mine = false,
+}: {
+  week: PersonWeek
+  /** The tech's own week ("fixed by you"); a supervisor's view says "fixed by them". */
+  mine?: boolean
+  onEdit?: (s: WeekSegment) => void
+  /** Set on the tech's own week: a "Fix times" link on each day they can fix themselves. */
+  onFixDay?: { canFix: (date: string) => boolean; open: (date: string) => void }
+}) {
+  const fixedBySelf = new Map((week.selfEdits ?? []).map((e) => [e.segment.id, e]))
   return (
     <Stack divider={<Divider flexItem />} spacing={1}>
       {week.days.map((d) => (
@@ -55,6 +76,16 @@ export function WeekDetail({ week, onEdit }: { week: PersonWeek; onEdit?: (s: We
           <Stack direction="row" alignItems="baseline">
             <Typography variant="body2" sx={{ fontWeight: 700, flex: 1 }}>
               {fmtDay(d.date)}
+              {onFixDay && d.segments.length > 0 && onFixDay.canFix(d.date) && (
+                <Box
+                  component="button"
+                  type="button"
+                  onClick={() => onFixDay.open(d.date)}
+                  sx={{ all: 'unset', ml: 1, color: 'primary.main', fontWeight: 600, fontSize: '0.75rem', cursor: 'pointer' }}
+                >
+                  Fix times
+                </Box>
+              )}
             </Typography>
             <Typography variant="body2" sx={{ fontVariantNumeric: 'tabular-nums', fontWeight: 700 }} color={d.hours ? 'text.primary' : 'text.disabled'}>
               {h(d.hours)}
@@ -73,13 +104,149 @@ export function WeekDetail({ week, onEdit }: { week: PersonWeek; onEdit?: (s: We
               </Typography>
               <Typography variant="caption" sx={{ flex: 1, minWidth: 0 }} noWrap>
                 {s.phase?.short ?? '—'} · {s.job.name}
-                {s.edited && ' · corrected'}
+                {fixedBySelf.has(s.id) ? (fixedBySelf.get(s.id)!.reviewedAt ? ` · fixed by ${mine ? 'you' : 'them'}, looked at` : ` · fixed by ${mine ? 'you' : 'them'}`) : s.edited && ' · corrected'}
                 {s.source === 'lead' && ' · by crew lead'}
               </Typography>
             </Stack>
           ))}
         </Box>
       ))}
+      <Stack direction="row" alignItems="baseline">
+        <Typography sx={{ fontWeight: 700, flex: 1 }}>Week total</Typography>
+        <Typography sx={{ fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{week.hours.toFixed(2)} h</Typography>
+      </Stack>
+    </Stack>
+  )
+}
+
+// What a day's notes are about, said once for the folded line.
+const noteWord: Record<TimeException['code'], [string, string]> = {
+  away_from_site: ['punch away from the job site', 'punches away from the job site'],
+  away_from_shop: ['punch away from the shop', 'punches away from the shop'],
+  missed_clock_out: ['missed clock-out', 'missed clock-outs'],
+  long_day: ['long day', 'long days'],
+  edited: ['change', 'changes'],
+  sent_late: ['punch sent late', 'punches sent late'],
+}
+
+/** A day's notes folded into one line; tap to see each. Art 2026-11-10: "quieter location notes". */
+function DayNotes({ items }: { items: TimeException[] }) {
+  const [open, setOpen] = useState(false)
+  if (!items.length) return null
+  const counts = new Map<TimeException['code'], number>()
+  items.forEach((x) => counts.set(x.code, (counts.get(x.code) ?? 0) + 1))
+  const summary = [...counts].map(([code, n]) => `${n} ${noteWord[code][n === 1 ? 0 : 1]}`).join(' · ')
+  const problem = items.some((x) => x.severity === 'problem')
+  return (
+    <Box sx={{ mt: 0.5 }}>
+      <ButtonBase
+        onClick={() => setOpen((o) => !o)}
+        sx={{ width: '100%', justifyContent: 'flex-start', textAlign: 'left', borderRadius: 1, px: 1, py: 0.5, color: problem ? 'warning.dark' : 'info.dark' }}
+      >
+        <Typography variant="body2" sx={{ flex: 1 }}>
+          {summary}
+        </Typography>
+        <Typography variant="body2" sx={{ ml: 1, fontWeight: 600 }}>
+          {open ? 'Hide' : 'Show'}
+        </Typography>
+      </ButtonBase>
+      <Collapse in={open}>
+        <Stack spacing={0.5} sx={{ pt: 0.5 }}>
+          {items.map((x, i) => (
+            <Alert key={`${x.punchId ?? x.date}-${x.code}-${i}`} severity={x.severity === 'problem' ? 'warning' : 'info'} sx={{ py: 0 }}>
+              {x.message}
+            </Alert>
+          ))}
+        </Stack>
+      </Collapse>
+    </Box>
+  )
+}
+
+/**
+ * The tech's own week, made for a thumb (Art 2026-11-10: "a bit more user friendly").
+ * Each segment is a big row that opens the fix; each day they can fix has a real button.
+ */
+function MyWeekDays({
+  week,
+  notes,
+  canFix,
+  onTap,
+  onFixDay,
+}: {
+  week: PersonWeek
+  notes: TimeException[]
+  canFix: (date: string) => boolean
+  onTap: (s: WeekSegment) => void
+  onFixDay: (date: string) => void
+}) {
+  const fixedBySelf = new Map((week.selfEdits ?? []).map((e) => [e.segment.id, e]))
+  return (
+    <Stack divider={<Divider flexItem />} spacing={1.5}>
+      {week.days.map((d) => {
+        const fixable = d.segments.length > 0 && canFix(d.date)
+        return (
+          <Box key={d.date}>
+            <Stack direction="row" alignItems="center" spacing={1} sx={{ minHeight: 40 }}>
+              <Typography sx={{ fontWeight: 700, flex: 1 }} color={d.segments.length ? 'text.primary' : 'text.secondary'}>
+                {fmtDay(d.date)}
+              </Typography>
+              {fixable && (
+                <Button variant="outlined" onClick={() => onFixDay(d.date)} sx={{ fontWeight: 700 }}>
+                  Fix my times
+                </Button>
+              )}
+              <Typography sx={{ fontVariantNumeric: 'tabular-nums', fontWeight: 700, minWidth: 48, textAlign: 'right' }} color={d.hours ? 'text.primary' : 'text.disabled'}>
+                {h(d.hours)}
+              </Typography>
+            </Stack>
+            {d.segments.length > 0 && (
+              <Stack spacing={0.5} sx={{ mt: 0.75 }}>
+                {d.segments.map((s) => {
+                  const fixed = fixedBySelf.get(s.id)
+                  const tag = fixed ? 'Fixed by you' : s.edited ? 'Corrected' : s.source === 'lead' ? 'By crew lead' : ''
+                  return (
+                    <ButtonBase
+                      key={s.id}
+                      onClick={() => onTap(s)}
+                      sx={{
+                        width: '100%',
+                        justifyContent: 'flex-start',
+                        textAlign: 'left',
+                        gap: 1.5,
+                        px: 1.5,
+                        py: 1,
+                        minHeight: 52,
+                        borderRadius: 1.5,
+                        border: 1,
+                        borderColor: 'divider',
+                        '&:hover': { bgcolor: 'action.hover' },
+                      }}
+                    >
+                      <Typography sx={{ fontWeight: 700, fontSize: '1.05rem', fontVariantNumeric: 'tabular-nums', width: { xs: 128, sm: 150 }, flexShrink: 0 }}>
+                        {fmtTime(s.clockIn)} – {s.clockOut ? fmtTime(s.clockOut) : 'now'}
+                      </Typography>
+                      <Box sx={{ flex: 1, minWidth: 0 }}>
+                        <Typography sx={{ fontWeight: 600 }} noWrap>
+                          {s.phase?.name ?? 'No phase'}
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary" noWrap>
+                          {s.job.name}
+                        </Typography>
+                      </Box>
+                      {tag && <Chip size="small" variant="outlined" color={fixed ? 'info' : 'default'} label={tag} />}
+                      <Typography color="text.secondary" sx={{ fontSize: '1.4rem', lineHeight: 1 }} aria-hidden>
+                        ›
+                      </Typography>
+                    </ButtonBase>
+                  )
+                })}
+              </Stack>
+            )}
+            <DayNotes items={notes.filter((x) => x.date === d.date)} />
+          </Box>
+        )
+      })}
       <Stack direction="row" alignItems="baseline">
         <Typography sx={{ fontWeight: 700, flex: 1 }}>Week total</Typography>
         <Typography sx={{ fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{week.hours.toFixed(2)} h</Typography>
@@ -105,6 +272,8 @@ export default function WeekPage() {
   // Asking for a change: a segment to fix, or a day to add missing time to.
   const [asking, setAsking] = useState<{ segment?: WeekSegment; day?: string } | null>(null)
   const [sentNote, setSentNote] = useState('')
+  // Fixing your own day: the day, and the segment to start on.
+  const [fixing, setFixing] = useState<{ date: string; startId?: string } | null>(null)
 
   const load = useCallback(async (to?: string) => {
     setError('')
@@ -144,6 +313,8 @@ export default function WeekPage() {
   const canSign = (week.status !== 'approved' || week.partlyApproved) && !week.openSegment && week.hours > 0
   const today = new Date().toLocaleDateString('en-CA')
   const addDay = week.days.some((d) => d.date === today) ? today : week.weekStart
+  const canFix = (date: string) => fixableDay(week, date, today)
+  const notes = week.exceptions.filter((x) => x.code !== 'sent_late')
   const withdraw = async (id: string) => {
     setError('')
     try {
@@ -171,14 +342,27 @@ export default function WeekPage() {
               {line}
             </Typography>
           )}
-          <WeekDetail week={week} onEdit={(s) => setAsking({ segment: s })} />
-          <Typography variant="caption" color="text.secondary">
-            Something wrong? Tap the segment to ask for a change. Forgot to punch?{' '}
-            <Box component="button" type="button" onClick={() => setAsking({ day: addDay })} sx={{ all: 'unset', color: 'primary.main', fontWeight: 600, cursor: 'pointer' }}>
+          <MyWeekDays
+            week={week}
+            notes={notes}
+            canFix={canFix}
+            onTap={(s) => {
+              const date = week.days.find((d) => d.segments.some((x) => x.id === s.id))?.date
+              if (date && canFix(date)) setFixing({ date, startId: s.id })
+              else setAsking({ segment: s })
+            }}
+            onFixDay={(date) => setFixing({ date })}
+          />
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ xs: 'stretch', sm: 'center' }}>
+            <Typography variant="body2" color="text.secondary" sx={{ flex: 1 }}>
+              {week.selfEditFrom
+                ? `Tap a time to fix it. Time before ${fmtDay(week.selfEditFrom, { month: 'short', day: 'numeric' })} goes to your supervisor.`
+                : 'Tap a time to ask your supervisor for a change.'}
+            </Typography>
+            <Button variant="outlined" onClick={() => setAsking({ day: addDay })} sx={{ fontWeight: 700 }}>
               Add missing time
-            </Box>
-            . Your supervisor approves changes before they count.
-          </Typography>
+            </Button>
+          </Stack>
         </Stack>
       </Paper>
 
@@ -208,7 +392,8 @@ export default function WeekPage() {
         </Stack>
       )}
 
-      <ExceptionList items={week.exceptions.filter((x) => x.code !== 'sent_late')} />
+      {/* Notes for days in this week sit under their day; any others stay here. */}
+      <ExceptionList items={notes.filter((x) => !week.days.some((d) => d.date === x.date))} />
       {error && <Alert severity="error">{error}</Alert>}
 
       {week.status !== 'approved' && (
@@ -226,6 +411,16 @@ export default function WeekPage() {
         </Stack>
       )}
 
+      {fixing && (
+        <DayFix
+          date={fixing.date}
+          startId={fixing.startId}
+          today={today}
+          segments={week.days.find((d) => d.date === fixing.date)?.segments ?? []}
+          onClose={() => setFixing(null)}
+          onChanged={() => load(week.weekStart)}
+        />
+      )}
       {asking && (
         <RequestDialog
           segment={asking.segment}

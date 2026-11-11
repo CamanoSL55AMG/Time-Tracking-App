@@ -47,6 +47,10 @@ export const config = {
   // refused whatever this says: a supervisor reopens those and corrects them directly.
   // 21 covers a full semimonthly pay period plus the days until payroll runs.
   changeRequestDays: Math.max(0, num(process.env.CHANGE_REQUEST_DAYS) ?? 21),
+  // A tech fixes their own punch times back to the start of the open pay period,
+  // with no approval first; each change keeps the old times and waits for a
+  // supervisor to look it over (Art, 2026-11-09). On unless SELF_EDIT_ENABLED=false.
+  selfEditEnabled: !/^(0|false|no|off)$/i.test((process.env.SELF_EDIT_ENABLED ?? '').trim()),
   // W-2 employees and 1099 contractors (services/workerType.ts). Off = everyone is an
   // employee, the worker type can't be set, and the payroll export is unchanged.
   contractorsEnabled: /^(1|true|yes|on)$/i.test((process.env.CONTRACTORS_ENABLED ?? '').trim()),

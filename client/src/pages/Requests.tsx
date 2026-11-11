@@ -72,17 +72,21 @@ export function RequestDialog({
   segment,
   day,
   only,
+  direct = false,
   onClose,
   onSent,
 }: {
   segment?: WeekSegment | null
   day?: string
   only?: 'start' | 'end'
+  /** One time on the clock screen, fixed at once instead of asked for (Art, 2026-11-09). */
+  direct?: boolean
   onClose: () => void
-  onSent: (r: ChangeRequest) => void
+  onSent: (r?: ChangeRequest) => void
 }) {
   const adding = !segment
   const oneTime = Boolean(segment && only)
+  const fixNow = direct && oneTime
   const [jobs, setJobs] = useState<Job[]>([])
   const [phases, setPhases] = useState<Phase[]>([])
   const [clockIn, setClockIn] = useState(segment ? toLocalInput(segment.clockIn) : day ? `${day}T07:00` : '')
@@ -112,6 +116,11 @@ export function RequestDialog({
     try {
       const body: RequestBody = { reason }
       const iso = (v: string) => (v ? new Date(v).toISOString() : undefined)
+      if (fixNow) {
+        await api.fixMyTime(segment!.id, only === 'start' ? { clockIn: iso(clockIn), reason } : { clockOut: iso(clockOut), reason })
+        onSent()
+        return
+      }
       if (adding) {
         Object.assign(body, { clockIn: iso(clockIn), clockOut: iso(clockOut), jobId, phaseId: phaseId || undefined, notes: notes || undefined })
       } else {
@@ -141,6 +150,8 @@ export function RequestDialog({
           <Typography variant="body2" color="text.secondary">
             {adding
               ? 'For time you worked but never punched. Your supervisor approves it before it counts.'
+              : fixNow
+                ? `You ${only === 'start' ? `clocked in at ${fmtTime(segment!.clockIn)}` : `clocked out at ${segment!.clockOut ? fmtTime(segment!.clockOut) : '?'}`}. Set the time you really ${only === 'start' ? 'started' : 'stopped'} and say why. It counts right away; your supervisor sees it was changed and from what.`
               : only === 'start'
                 ? `You clocked in at ${fmtTime(segment!.clockIn)}. Set the time you really started and say why. Your supervisor approves it before it counts; until then your hours use ${fmtTime(segment!.clockIn)}.`
                 : only === 'end'
@@ -191,7 +202,7 @@ export function RequestDialog({
       <DialogActions>
         <Button onClick={onClose}>Cancel</Button>
         <Button variant="contained" disabled={sending || !ready} onClick={send}>
-          {sending ? 'Sending…' : 'Send for approval'}
+          {fixNow ? (sending ? 'Saving…' : 'Save') : sending ? 'Sending…' : 'Send for approval'}
         </Button>
       </DialogActions>
     </Dialog>
@@ -251,6 +262,28 @@ export function DecideButtons({ req, onDone }: { req: ChangeRequest; onDone: () 
   )
 }
 
+// Whether the server lets people fix their own time (SELF_EDIT_ENABLED). Asked once per
+// page load; until it answers, the clock screen offers the request as before.
+let selfEditOn: Promise<boolean> | null = null
+export function useSelfEdit(): boolean {
+  const [on, setOn] = useState(false)
+  useEffect(() => {
+    selfEditOn ??= api.features().then(
+      (f) => Boolean(f.selfEdit),
+      () => {
+        selfEditOn = null
+        return false
+      },
+    )
+    let live = true
+    void selfEditOn.then((v) => live && setOn(v))
+    return () => {
+      live = false
+    }
+  }, [])
+  return on
+}
+
 /** A clock-screen segment in the shape the request dialog takes. */
 const asSegment = (p: Punch): WeekSegment => ({
   id: p.id,
@@ -271,11 +304,17 @@ const asSegment = (p: Punch): WeekSegment => ({
 export function FixTimeLine({ punch, side, pending, onSent }: { punch: Punch; side: 'start' | 'end'; pending?: PendingChange[]; onSent: () => void }) {
   const [open, setOpen] = useState(false)
   const [sent, setSent] = useState(false)
-  const waiting = sent || (pending ?? []).some((c) => c.punchId === punch.id)
+  const [fixed, setFixed] = useState(false)
+  const direct = useSelfEdit()
+  const waiting = (sent && !direct) || (pending ?? []).some((c) => c.punchId === punch.id)
   if (side === 'end' && !punch.clockOut) return null
   return (
     <>
-      {waiting ? (
+      {fixed && !waiting ? (
+        <Typography variant="caption" color="success.main" sx={{ display: 'block', fontWeight: 600 }}>
+          Time fixed. Your supervisor will see it was changed.
+        </Typography>
+      ) : waiting ? (
         <Typography variant="caption" color="warning.main" sx={{ display: 'block', fontWeight: 600 }}>
           Time fix sent. Waiting for your supervisor to approve it.
         </Typography>
@@ -291,10 +330,12 @@ export function FixTimeLine({ punch, side, pending, onSent }: { punch: Punch; si
         <RequestDialog
           segment={asSegment(punch)}
           only={side}
+          direct={direct}
           onClose={() => setOpen(false)}
           onSent={() => {
             setOpen(false)
-            setSent(true)
+            if (direct) setFixed(true)
+            else setSent(true)
             onSent()
           }}
         />

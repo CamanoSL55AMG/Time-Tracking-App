@@ -105,6 +105,11 @@ try {
   check('repeat updates the same job', r.status === 200 && r.json?.created === false && r.json?.job?.id === jobId && r.json?.job?.code === `SMK2-${stamp}`)
   r = await call('PUT', `/jobs/by-ref/smoke/${stamp}`, { token: key, body: { siteAddress: '6621 220th St SW, Mountlake Terrace, WA 98043' } })
   check('a job keeps its site address', r.status === 200 && r.json?.job?.siteAddress === '6621 220th St SW, Mountlake Terrace, WA 98043', JSON.stringify(r.json?.job ?? r.json))
+  // Old projects fold under Archived: no won stage and no time lately. A won stage keeps it on top.
+  r = await call('PUT', `/jobs/by-ref/smoke/${stamp}`, { token: key, body: { stage: 'proposal' } })
+  check('a proposal with no time is archived', r.status === 200 && r.json?.job?.stage === 'PROPOSAL' && r.json?.job?.archived === true, JSON.stringify(r.json?.job ?? r.json))
+  r = await call('PUT', `/jobs/by-ref/smoke/${stamp}`, { token: key, body: { stage: 'CONTRACT' } })
+  check('a won project is not archived', r.status === 200 && r.json?.job?.archived === false && r.json?.job?.active === true, JSON.stringify(r.json?.job ?? r.json))
 
   r = await call('PUT', `/people/by-email/${encodeURIComponent(testEmail)}`, { token: key, body: { name: 'Smoke Test', initials: 'ZZ' } })
   check('create person by email', r.status === 200 && r.json?.created === true, JSON.stringify(r.json))
@@ -469,6 +474,80 @@ try {
   r = await call('POST', '/me/requests', { token: key, headers: asB, body: { punchId: oldId, notes: 'too late', reason: 'smoke: approved week' } })
   check('no change requests into an approved week', r.status === 409 && r.json?.error?.code === 'week_approved', JSON.stringify(r.json))
   await call('POST', '/timesheets/reopen', { token: admin, body: { personId: crewId, week: lastWeek, reason: 'smoke: reopen after request checks' } })
+
+  // Fixing your own time (Art, 2026-11-09): a tech moves their own punch times back to
+  // the start of the open pay period with no approval first. A switch moves both sides,
+  // the old times are kept, and the change waits on Review until someone looks at it.
+  {
+    const fixEmail = `smoke-fix-${stamp}@example.invalid`
+    await call('PUT', `/people/by-email/${encodeURIComponent(fixEmail)}`, { token: key, body: { name: 'Smoke Fix' } })
+    const asF = { 'X-Act-As': fixEmail }
+    const M = 60_000
+    const nowMs = Date.now()
+    const today = ymd(new Date(nowMs))
+    const periodStart = `${today.slice(0, 8)}${Number(today.slice(8)) <= 15 ? '01' : '16'}`
+    // A segment from before the pay period, then three switches earlier today.
+    const before = new Date(`${periodStart}T12:00:00Z`).getTime() - 3 * 86_400_000
+    await call('POST', '/punches/in', { token: key, headers: asF, body: { jobId, at: new Date(before).toISOString() } })
+    r = await call('POST', '/punches/out', { token: key, headers: asF, body: { at: new Date(before + 60 * M).toISOString() } })
+    const oldSeg = r.json?.punch?.id
+    const base = nowMs - 4 * 60 * M
+    const inPeriod = ymd(new Date(base)) >= periodStart
+    r = await call('POST', '/punches/in', { token: key, headers: asF, body: { jobId, at: new Date(base).toISOString() } })
+    const segA = r.json?.punch?.id
+    r = await call('POST', '/punches/next', { token: key, headers: asF, body: { at: new Date(base + 60 * M).toISOString() } })
+    const segB = r.json?.punch?.id
+    await call('POST', '/punches/out', { token: key, headers: asF, body: { at: new Date(base + 120 * M).toISOString() } })
+    r = await call('GET', '/me/week', { token: key, headers: asF })
+    const selfOn = !/^(0|false|no|off)$/i.test((process.env.SELF_EDIT_ENABLED ?? '').trim())
+    check('the week says from which day you may fix your own time', r.status === 200 && r.json?.selfEditFrom === (selfOn ? periodStart : null), JSON.stringify(r.json?.selfEditFrom))
+    const moved = new Date(base + 75 * M).toISOString()
+    if (!selfOn) {
+      r = await call('PATCH', `/me/punches/${segB}`, { token: key, headers: asF, body: { clockIn: moved, reason: 'smoke' } })
+      check('fixing your own time is off when SELF_EDIT_ENABLED=false', r.status === 403 && r.json?.error?.code === 'self_edit_off', JSON.stringify(r.json))
+    } else if (!inPeriod) {
+      console.log('SKIP  fixing your own time: four hours ago is in the last pay period; run smoke again later in the day')
+    } else {
+      r = await call('PATCH', `/me/punches/${segB}`, { token: key, headers: asF, body: { clockIn: moved } })
+      check('fixing your own time needs a reason', r.status === 400, JSON.stringify(r.json))
+      r = await call('PATCH', `/me/punches/${segB}`, { token: tech, body: { clockIn: moved, reason: 'not mine' } })
+      check("nobody can fix someone else's time", r.status === 403, JSON.stringify(r.json))
+      r = await call('PATCH', `/me/punches/${segB}`, { token: key, headers: asF, body: { clockIn: new Date(base - 5 * M).toISOString(), reason: 'smoke: too far' } })
+      check('a fix cannot swallow the segment before', r.status === 409 && r.json?.error?.code === 'swallows_segment', JSON.stringify(r.json))
+      r = await call('PATCH', `/me/punches/${segB}`, { token: key, headers: asF, body: { clockIn: moved, reason: 'smoke: switched at quarter past' } })
+      const a = r.json?.changed?.find((p) => p.id === segA)
+      const b = r.json?.changed?.find((p) => p.id === segB)
+      check(
+        'moving a switch moves both sides of it',
+        r.status === 200 && a?.clockOut === moved && b?.clockIn === moved && r.json?.opensGap === false,
+        JSON.stringify(r.json?.error ?? r.json?.changed?.map((p) => [p.id, p.clockIn, p.clockOut])),
+      )
+      r = await call('GET', `/punches/${segA}`, { token: key, headers: asF })
+      const edit = r.json?.punch?.edits?.at(-1)
+      check(
+        'the old time is kept in the history',
+        edit?.selfEdit === true && Math.abs(new Date(edit?.before?.clockOut).getTime() - (base + 60 * M)) < 1000 && edit?.after?.clockOut === moved,
+        JSON.stringify(edit),
+      )
+      r = await call('PATCH', `/me/punches/${oldSeg}`, { token: key, headers: asF, body: { clockOut: new Date(before + 30 * M).toISOString(), reason: 'smoke: old' } })
+      check('time before the pay period is not yours to fix', r.status === 409 && r.json?.error?.code === 'before_pay_period', JSON.stringify(r.json))
+      r = await call('GET', '/edits', { token: tech })
+      check('a tech cannot read the edits list', r.status === 403)
+      r = await call('GET', '/edits', { token: admin })
+      const waiting = (r.json?.data ?? []).filter((e) => e.segment?.id === segA || e.segment?.id === segB)
+      check('the fix waits for a supervisor to look at it', r.status === 200 && waiting.length === 2 && waiting.every((e) => e.reviewedAt === null), JSON.stringify(r.json?.data?.slice(0, 3)))
+      r = await call('GET', '/timesheets', { token: admin })
+      const row = r.json?.rows?.find((x) => x.person.email === fixEmail)
+      check("the week sheet counts each person's fixes to look at", (row?.editsToReview ?? 0) >= 2 && (r.json?.counts?.editsToReview ?? 0) >= 2, JSON.stringify(row))
+      r = await call('POST', '/edits/reviewed', { token: tech, body: { ids: waiting.map((e) => e.id) } })
+      check('a tech cannot mark fixes looked at', r.status === 403)
+      r = await call('POST', '/edits/reviewed', { token: admin, body: { ids: waiting.map((e) => e.id) } })
+      check('a supervisor marks the fixes looked at', r.status === 200 && r.json?.marked === 2, JSON.stringify(r.json))
+      r = await call('GET', '/edits?status=reviewed', { token: admin })
+      check('looked-at fixes keep who looked', r.json?.data?.some((e) => e.id === waiting[0]?.id && e.reviewedBy), JSON.stringify(r.json?.data?.[0]))
+    }
+    await call('PUT', `/people/by-email/${encodeURIComponent(fixEmail)}`, { token: key, body: { active: false } })
+  }
 
   // A tech adds a new client in the field (Service Call or Site Visit), then switches onto it.
   {
