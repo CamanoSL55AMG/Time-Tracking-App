@@ -71,6 +71,8 @@ const AdminIcon = () => (
 
 export default function App() {
   const [person, setPerson] = useState<Person | null>(null)
+  // Company name for the top bar, after the divider (same layout as AIC Accounting).
+  const [companyName, setCompanyName] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [bootError, setBootError] = useState('')
   const [tab, setTab] = useState<Tab>('clock')
@@ -91,6 +93,13 @@ export default function App() {
       () => setLeaveOn(false),
     )
   }, [person])
+  useEffect(() => {
+    if (!person) return
+    api.me().then(
+      (m) => setCompanyName(m.company?.name ?? null),
+      () => setCompanyName(null),
+    )
+  }, [person?.id])
   useEffect(() => {
     if (!approver) {
       setWaitingFixes(0)
@@ -198,16 +207,30 @@ export default function App() {
 
   return (
     <Box sx={{ minHeight: '100dvh', pb: 'calc(72px + env(safe-area-inset-bottom))' }}>
-      <AppBar position="sticky" color="primary" elevation={0}>
-        <Toolbar sx={{ gap: 1 }}>
-          {/* AICPNW chrome logo with the app name under it (same on every AIC app) */}
-          <Box sx={{ flex: 1, display: 'flex', minWidth: 0 }}>
-            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '3px' }}>
+      <AppBar position="sticky" color="primary" elevation={0} sx={{ background: 'linear-gradient(90deg, #0f2537 0%, #173550 60%, #1d5a6e 100%)', boxShadow: '0 1px 0 rgba(0,0,0,.2)' }}>
+        <Toolbar sx={{ gap: 1, minHeight: { xs: 54, sm: 54 } }}>
+          {/* Same header as AIC Accounting (Art, 2026-11-09) with the standard
+              AICPNW logo: the company name, Advanced Integration Consultants,
+              under the chrome logo (Art, 2026-11-10), then a divider, LOGBOOK, a
+              divider and the company. Phones keep Logbook under the logo. */}
+          <Box sx={{ flex: 1, display: 'flex', alignItems: 'center', gap: '14px', minWidth: 0 }}>
+            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '3px', flexShrink: 0 }}>
               <Box component="img" src="/brand/aicpnw-logo.png" alt="AICPNW" sx={{ height: { xs: 20, sm: 24 }, width: 'auto', display: 'block' }} />
-              <Box component="span" sx={{ fontSize: { xs: 10, sm: 11 }, fontWeight: 600, letterSpacing: '0.16em', textTransform: 'uppercase', color: '#c9d1d7', lineHeight: 1, whiteSpace: 'nowrap' }}>
+              <Box component="span" sx={{ display: { xs: 'none', md: 'block' }, fontSize: 9, fontWeight: 500, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#cdd7e6', lineHeight: 1, whiteSpace: 'nowrap' }}>
+                Advanced Integration Consultants
+              </Box>
+              <Box component="span" sx={{ display: { xs: 'block', md: 'none' }, fontSize: { xs: 10, sm: 11 }, fontWeight: 600, letterSpacing: '0.16em', textTransform: 'uppercase', color: '#c9d1d7', lineHeight: 1, whiteSpace: 'nowrap' }}>
                 Logbook
               </Box>
             </Box>
+            <Box component="span" sx={{ display: { xs: 'none', md: 'inline' }, flexShrink: 0, fontSize: 12, fontWeight: 700, letterSpacing: '0.16em', textTransform: 'uppercase', color: '#e6ecf2', pl: '14px', borderLeft: '1px solid rgba(255,255,255,.22)', lineHeight: '24px', whiteSpace: 'nowrap' }}>
+              Logbook
+            </Box>
+            {companyName && (
+              <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' }, fontSize: 14, opacity: 0.7, pl: '14px', borderLeft: '1px solid rgba(255,255,255,.22)', lineHeight: '24px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>
+                {companyName}
+              </Box>
+            )}
           </Box>
           <Button color="inherit" onClick={(e) => setMenuAt(e.currentTarget)} sx={{ fontWeight: 600 }}>
             {person.name}

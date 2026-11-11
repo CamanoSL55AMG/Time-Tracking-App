@@ -290,6 +290,7 @@ try {
   // works one long day a week ago, so that week is over and can be approved.
   const adminMe = await call('GET', '/auth/me', { token: admin })
   const adminId = adminMe.json?.person?.id
+  check('who-am-I names the company for the top bar', typeof adminMe.json?.company?.name === 'string' && adminMe.json.company.name.length > 0, JSON.stringify(adminMe.json?.company))
   const crewEmail = `smoke-${stamp}-b@example.invalid`
   r = await call('PUT', `/people/by-email/${encodeURIComponent(crewEmail)}`, { token: key, body: { name: 'Smoke Crew', initials: 'ZY' } })
   const crewId = r.json?.person?.id
