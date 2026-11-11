@@ -1,4 +1,4 @@
-import { Router, type Request } from 'express'
+import { Router } from 'express'
 import bcrypt from 'bcryptjs'
 import type { Person } from '@prisma/client'
 import { prisma } from '../db.js'
@@ -102,11 +102,12 @@ const resetStore: ResetStore = {
 }
 
 /** Where the emailed link points: APP_URL when it is set, else the address this request came in on. */
-function appOrigin(req: Request): string {
+// The emailed link must point at this app's own public address. Building it from
+// the request's Host header would let a forged header aim the link at another
+// site, so in production only APP_URL is used; without it no reset email goes out.
+function resetOrigin(): string {
   if (config.appUrlConfigured) return config.appUrlConfigured
-  const proto = String(req.get('x-forwarded-proto') ?? req.protocol).split(',')[0].trim() || 'https'
-  const host = String(req.get('x-forwarded-host') ?? req.get('host') ?? '').split(',')[0].trim()
-  return host ? `${proto}://${host}` : config.appUrl
+  return config.isProduction ? '' : config.appUrl
 }
 
 const TOO_MANY_RESETS = 'Too many requests from this device. Wait 15 minutes and try again.'
@@ -128,10 +129,14 @@ route(
     const key = `forgot|${req.ip}`
     checkLockout(key, TOO_MANY_RESETS)
     recordFailure(key)
-    const origin = appOrigin(req)
+    const origin = resetOrigin()
     res.status(200).json({ ok: true, message: FORGOT_SENT })
     // After the answer has gone: look up, make the token, send.
     setImmediate(() => {
+      if (!origin) {
+        console.warn('[auth] forgot-password: APP_URL is not set, so no reset link was emailed')
+        return
+      }
       requestPasswordReset({ store: resetStore, mailerConfigured, send: (mail) => sendMail(mail) }, email, origin).catch((err: unknown) =>
         console.error('[auth] forgot-password email failed:', err instanceof Error ? err.message : err),
       )
