@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { Alert, Box, Button, Divider, Link, Paper, Stack, TextField, Typography } from '@mui/material'
+import { Alert, Box, Button, Divider, Link, Stack, TextField, Typography } from '@mui/material'
 import { api, errorText, setToken, type Person } from '../api'
 import PasswordField from '../PasswordField'
+import { SignInShell } from '../BrandBar'
 
 const GSI_SRC = 'https://accounts.google.com/gsi/client'
 
@@ -120,90 +121,86 @@ export default function Login({ notice, info, onSignedIn }: { notice?: string; i
 
   if (forgot) {
     return (
-      <Box sx={{ minHeight: '100dvh', display: 'grid', placeItems: 'center', p: 2, bgcolor: 'primary.main' }}>
-        <Paper sx={{ p: 3, width: '100%', maxWidth: 380 }}>
-          <form onSubmit={sendLink}>
-            <Stack spacing={2}>
-              <Box>
-                <Typography variant="h5" sx={{ fontWeight: 700 }}>
-                  Forgot password
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  Enter your email. If it has a Logbook account, we'll email you a link to choose a new password.
-                </Typography>
-              </Box>
-              <TextField label="Email" type="email" autoComplete="username" inputMode="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoFocus disabled={Boolean(forgotSent)} />
-              {forgotSent && <Alert severity="success">{forgotSent}</Alert>}
-              {error && <Alert severity="error">{error}</Alert>}
-              {!forgotSent && (
-                <Button type="submit" variant="contained" size="large" disabled={busy || !email.trim()}>
-                  {busy ? 'Sending…' : 'Email me a link'}
-                </Button>
-              )}
-              <Button color="inherit" onClick={() => showForgot(false)}>
-                Back to sign in
+      <SignInShell maxWidth={380}>
+        <form onSubmit={sendLink}>
+          <Stack spacing={2}>
+            <Box>
+              <Typography variant="h5" sx={{ fontWeight: 700 }}>
+                Forgot password
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                Enter your email. If it has a Logbook account, we'll email you a link to choose a new password.
+              </Typography>
+            </Box>
+            <TextField label="Email" type="email" autoComplete="username" inputMode="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoFocus disabled={Boolean(forgotSent)} />
+            {forgotSent && <Alert severity="success">{forgotSent}</Alert>}
+            {error && <Alert severity="error">{error}</Alert>}
+            {!forgotSent && (
+              <Button type="submit" variant="contained" size="large" disabled={busy || !email.trim()}>
+                {busy ? 'Sending…' : 'Email me a link'}
               </Button>
-            </Stack>
-          </form>
-        </Paper>
-      </Box>
+            )}
+            <Button color="inherit" onClick={() => showForgot(false)}>
+              Back to sign in
+            </Button>
+          </Stack>
+        </form>
+      </SignInShell>
     )
   }
 
   return (
-    <Box sx={{ minHeight: '100dvh', display: 'grid', placeItems: 'center', p: 2, bgcolor: 'primary.main' }}>
-      <Paper sx={{ p: 3, width: '100%', maxWidth: 380 }}>
-        <form onSubmit={submit}>
-          <Stack spacing={2}>
-            <Box>
-              <Typography variant="h5" sx={{ fontWeight: 700 }}>
-                Logbook
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                AIC Terminal time tracking. Sign in to clock in.
-              </Typography>
+    <SignInShell maxWidth={380}>
+      <form onSubmit={submit}>
+        <Stack spacing={2}>
+          <Box>
+            <Typography variant="h5" sx={{ fontWeight: 700 }}>
+              Logbook
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              AIC Terminal time tracking. Sign in to clock in.
+            </Typography>
+          </Box>
+          {switchedOff && <Alert severity="warning">{switchedOff}</Alert>}
+          {info && !error && <Alert severity="success">{info}</Alert>}
+          {dashboard && (
+            <>
+              {/* One sign-in for the Dashboard and every add-on (GED's DASHBOARD-SIGN-IN.md) */}
+              <Button variant="contained" size="large" href="/api/v1/auth/dashboard/start" sx={{ py: 1.25 }}>
+                Sign in with Dashboard
+              </Button>
+              <Divider>
+                <Typography variant="caption" color="text.secondary">
+                  {googleClientId ? 'or' : 'or with a password'}
+                </Typography>
+              </Divider>
+            </>
+          )}
+          {googleClientId && (
+            <>
+              <Box ref={googleBox} sx={{ display: 'flex', justifyContent: 'center', minHeight: 44 }} />
+              <Divider>
+                <Typography variant="caption" color="text.secondary">
+                  or with a password
+                </Typography>
+              </Divider>
+            </>
+          )}
+          <TextField label="Email" type="email" autoComplete="username" inputMode="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoFocus={!googleClientId} />
+          <Box>
+            <PasswordField label="Password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required fullWidth />
+            <Box sx={{ textAlign: 'right', mt: 0.5 }}>
+              <Link component="button" type="button" variant="body2" onClick={() => showForgot(true)}>
+                Forgot password?
+              </Link>
             </Box>
-            {switchedOff && <Alert severity="warning">{switchedOff}</Alert>}
-            {info && !error && <Alert severity="success">{info}</Alert>}
-            {dashboard && (
-              <>
-                {/* One sign-in for the Dashboard and every add-on (GED's DASHBOARD-SIGN-IN.md) */}
-                <Button variant="contained" size="large" href="/api/v1/auth/dashboard/start" sx={{ py: 1.25 }}>
-                  Sign in with Dashboard
-                </Button>
-                <Divider>
-                  <Typography variant="caption" color="text.secondary">
-                    {googleClientId ? 'or' : 'or with a password'}
-                  </Typography>
-                </Divider>
-              </>
-            )}
-            {googleClientId && (
-              <>
-                <Box ref={googleBox} sx={{ display: 'flex', justifyContent: 'center', minHeight: 44 }} />
-                <Divider>
-                  <Typography variant="caption" color="text.secondary">
-                    or with a password
-                  </Typography>
-                </Divider>
-              </>
-            )}
-            <TextField label="Email" type="email" autoComplete="username" inputMode="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoFocus={!googleClientId} />
-            <Box>
-              <PasswordField label="Password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required fullWidth />
-              <Box sx={{ textAlign: 'right', mt: 0.5 }}>
-                <Link component="button" type="button" variant="body2" onClick={() => showForgot(true)}>
-                  Forgot password?
-                </Link>
-              </Box>
-            </Box>
-            {error && <Alert severity="error">{error}</Alert>}
-            <Button type="submit" variant={dashboard ? 'outlined' : 'contained'} size="large" disabled={busy || !email || !password}>
-              {busy ? 'Signing in…' : 'Sign in'}
-            </Button>
-          </Stack>
-        </form>
-      </Paper>
-    </Box>
+          </Box>
+          {error && <Alert severity="error">{error}</Alert>}
+          <Button type="submit" variant={dashboard ? 'outlined' : 'contained'} size="large" disabled={busy || !email || !password}>
+            {busy ? 'Signing in…' : 'Sign in'}
+          </Button>
+        </Stack>
+      </form>
+    </SignInShell>
   )
 }

@@ -1,7 +1,8 @@
 import { useState, type FormEvent } from 'react'
-import { Alert, Box, Button, Paper, Stack, Typography } from '@mui/material'
+import { Alert, Box, Button, Stack, Typography } from '@mui/material'
 import { api, errorText } from '../api'
 import PasswordField from '../PasswordField'
+import { SignInShell } from '../BrandBar'
 
 // Opened from the "Forgot password?" email: /reset-password#token=… (the token rides in
 // the address fragment, so it never reaches a server log). Looks like FirstPassword:
@@ -32,43 +33,41 @@ export default function ResetPassword({ token, onDone }: { token: string; onDone
   }
 
   return (
-    <Box sx={{ minHeight: '100dvh', display: 'grid', placeItems: 'center', p: 2, bgcolor: 'primary.main' }}>
-      <Paper sx={{ p: 3, width: '100%', maxWidth: 420 }}>
-        <form onSubmit={submit}>
-          <Stack spacing={2}>
-            <Box>
-              <Typography variant="h5" sx={{ fontWeight: 700 }}>
-                Choose a new password
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                Pick a new Logbook password. This link works once.
-              </Typography>
-            </Box>
-            {!token && <Alert severity="error">This link is not complete. Ask for a new one from the sign-in page.</Alert>}
-            <PasswordField
-              label="New password"
-              autoComplete="new-password"
-              value={next}
-              onChange={(e) => setNext(e.target.value)}
-              onGenerate={(pw) => {
-                setNext(pw)
-                setAgain(pw)
-              }}
-              helperText="At least 10 characters. Save a generated one in your password manager first"
-              required
-              autoFocus
-            />
-            <PasswordField label="New password again" autoComplete="new-password" value={again} onChange={(e) => setAgain(e.target.value)} required />
-            {(problem || error) && <Alert severity={error ? 'error' : 'warning'}>{error || problem}</Alert>}
-            <Button type="submit" variant="contained" size="large" disabled={!ready}>
-              {busy ? 'Saving…' : 'Save new password'}
-            </Button>
-            <Button color="inherit" onClick={() => onDone()}>
-              Back to sign in
-            </Button>
-          </Stack>
-        </form>
-      </Paper>
-    </Box>
+    <SignInShell maxWidth={420}>
+      <form onSubmit={submit}>
+        <Stack spacing={2}>
+          <Box>
+            <Typography variant="h5" sx={{ fontWeight: 700 }}>
+              Choose a new password
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              Pick a new Logbook password. This link works once.
+            </Typography>
+          </Box>
+          {!token && <Alert severity="error">This link is not complete. Ask for a new one from the sign-in page.</Alert>}
+          <PasswordField
+            label="New password"
+            autoComplete="new-password"
+            value={next}
+            onChange={(e) => setNext(e.target.value)}
+            onGenerate={(pw) => {
+              setNext(pw)
+              setAgain(pw)
+            }}
+            helperText="At least 10 characters. Save a generated one in your password manager first"
+            required
+            autoFocus
+          />
+          <PasswordField label="New password again" autoComplete="new-password" value={again} onChange={(e) => setAgain(e.target.value)} required />
+          {(problem || error) && <Alert severity={error ? 'error' : 'warning'}>{error || problem}</Alert>}
+          <Button type="submit" variant="contained" size="large" disabled={!ready}>
+            {busy ? 'Saving…' : 'Save new password'}
+          </Button>
+          <Button color="inherit" onClick={() => onDone()}>
+            Back to sign in
+          </Button>
+        </Stack>
+      </form>
+    </SignInShell>
   )
 }
