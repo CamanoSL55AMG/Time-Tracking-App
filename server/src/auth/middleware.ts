@@ -6,6 +6,7 @@ import { forbidden, unauthorized, ApiError } from '../errors.js'
 import { hashKey, isRole, looksLikeKey, ROLE_SCOPES, SELF } from './apiKeys.js'
 import { verifySession } from './session.js'
 import { passwordChangeBlocks } from './passwordChange.js'
+import { normalizeDivision } from './division.js'
 
 // Who is calling. A request is either a signed-in person (session token) or an
 // integration (API key), optionally acting for a person via X-Act-As.
@@ -17,6 +18,9 @@ export interface Auth {
   /** The person this request is about: the signed-in user, or the X-Act-As target. */
   person: Person | null
   apiKeyId: string | null
+  /** Set for a signed-in division admin: the one division they may see and manage
+   *  (auth/division.ts). Null for everyone else, API keys included. */
+  division: string | null
 }
 
 declare global {
@@ -56,7 +60,7 @@ async function resolve(req: Request): Promise<Auth | null> {
       if (!person) throw new ApiError(404, 'act_as_unknown', `No active person with email ${actAs}.`)
       scopes.add(SELF)
     }
-    return { companyId: key.companyId, via: 'key', scopes, person, apiKeyId: key.id }
+    return { companyId: key.companyId, via: 'key', scopes, person, apiKeyId: key.id, division: null }
   }
 
   const claims = verifySession(token)
@@ -64,7 +68,8 @@ async function resolve(req: Request): Promise<Auth | null> {
   const person = await prisma.person.findUnique({ where: { id: claims.sub } })
   if (!person || !person.active || person.companyId !== claims.cid) throw unauthorized('This account is not active.')
   const role = isRole(person.role) ? person.role : 'tech'
-  return { companyId: person.companyId, via: 'session', scopes: new Set(ROLE_SCOPES[role]), person, apiKeyId: null }
+  const division = role === 'division_admin' ? normalizeDivision(person.division) : null
+  return { companyId: person.companyId, via: 'session', scopes: new Set(ROLE_SCOPES[role]), person, apiKeyId: null, division }
 }
 
 /** Attach req.auth when credentials are present. Does not reject anonymous requests. */

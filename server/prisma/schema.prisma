@@ -60,7 +60,11 @@ model Person {
   email        String   @unique
   name         String
   initials     String   @default("")
-  role         String   @default("tech") // tech | lead | manager | payroll | admin
+  role         String   @default("tech") // tech | lead | manager | payroll | admin | division_admin
+  // The part of the company the person works in, e.g. "Sound Services". Free text,
+  // compared without case. A division_admin sees and manages only the people whose
+  // division matches theirs. Empty = no division.
+  division     String   @default("")
   passwordHash String?
   // Set when an admin creates the person with a password or sets a new one for them.
   // While true, a signed-in session can only read /auth/me and change its own
@@ -90,6 +94,7 @@ model Person {
   termsAcceptances TermsAcceptance[]
 
   @@index([companyId, active])
+  @@index([companyId, division])
 }
 
 model Job {

@@ -989,6 +989,86 @@ try {
     for (const e of [lvEmail, leadEmail]) await call('PUT', `/people/by-email/${encodeURIComponent(e)}`, { token: admin, body: { active: false } })
   }
 
+  // Division admins (Art, 2026-11-11): Kris runs the admin screens for Sound Services
+  // only. Everything outside the division is invisible or refused, on the server.
+  {
+    const pw = () => `pw-${randomBytes(9).toString('base64url')}`
+    const divAdminEmail = `smoke-divadmin-${stamp}@example.invalid`
+    const inEmail = `smoke-div-in-${stamp}@example.invalid`
+    const outEmail = `smoke-div-out-${stamp}@example.invalid`
+    r = await call('PUT', `/people/by-email/${encodeURIComponent(inEmail)}`, { token: key, body: { name: 'Smoke Div In', division: 'Smoke Div' } })
+    check('a key without people:roles cannot set a division', r.status === 403, JSON.stringify(r.json))
+    r = await call('PUT', `/people/by-email/${encodeURIComponent(inEmail)}`, { token: admin, body: { name: 'Smoke Div In', division: `Smoke   Div ${stamp} ` } })
+    const inId = r.json?.person?.id
+    check('an admin sets a division (spaces folded)', r.status === 200 && r.json?.person?.division === `Smoke Div ${stamp}`, JSON.stringify(r.json))
+    r = await call('PUT', `/people/by-email/${encodeURIComponent(outEmail)}`, { token: key, body: { name: 'Smoke Div Out' } })
+    const outId = r.json?.person?.id
+    r = await call('PUT', `/people/by-email/${encodeURIComponent(divAdminEmail)}`, { token: key, body: { name: 'Smoke Div Admin', role: 'division_admin' } })
+    check('a key without people:roles cannot make a division admin', r.status === 403, JSON.stringify(r.json))
+    const divPw = pw()
+    r = await call('PUT', `/people/by-email/${encodeURIComponent(divAdminEmail)}`, {
+      token: admin,
+      body: { name: 'Smoke Div Admin', role: 'division_admin', division: `smoke div ${stamp}`, password: divPw, mustChangePassword: false },
+    })
+    const divAdminId = r.json?.person?.id
+    check('an admin makes a division admin', r.status === 200 && r.json?.person?.role === 'division_admin', JSON.stringify(r.json))
+    const div = (await call('POST', '/auth/login', { body: { email: divAdminEmail, password: divPw } })).json?.token
+    if (termsOn) await acceptAllTerms(div)
+
+    // A short closed segment for each tech, last hour.
+    const seg = async (email, tag) => {
+      await call('POST', '/punches/in', { token: key, headers: { 'X-Act-As': email }, body: { jobId, at: minutesAgo(30), clientId: `div-${tag}-${stamp}` } })
+      return (await call('POST', '/punches/out', { token: key, headers: { 'X-Act-As': email }, body: { at: minutesAgo(20) } })).json?.punch?.id
+    }
+    await seg(inEmail, 'in')
+    const outPunch = await seg(outEmail, 'out')
+
+    r = await call('GET', '/people', { token: div })
+    const roster = (r.json?.data ?? []).map((p) => p.id)
+    check('division admin: roster is their division only', r.status === 200 && roster.includes(inId) && roster.includes(divAdminId) && !roster.includes(outId), JSON.stringify(roster))
+    r = await call('GET', '/timesheets', { token: div })
+    const sheetIds = (r.json?.rows ?? []).map((x) => x.person.id).concat((r.json?.quiet ?? []).map((x) => x.id))
+    check('division admin: timesheets show their division only', r.status === 200 && sheetIds.includes(inId) && !sheetIds.includes(outId), JSON.stringify(sheetIds))
+    r = await call('GET', `/timesheets/${inId}`, { token: div })
+    check('division admin: opens a week in their division', r.status === 200, JSON.stringify(r.json?.error))
+    r = await call('GET', `/timesheets/${outId}`, { token: div })
+    check('division admin: a week outside the division is not found', r.status === 404, JSON.stringify(r.json))
+    r = await call('GET', '/punches', { token: div })
+    check('division admin: punches are their division only', r.status === 200 && (r.json?.data ?? []).every((x) => x.personId !== outId) && (r.json?.data ?? []).some((x) => x.personId === inId))
+    r = await call('GET', `/punches?personId=${outId}`, { token: div })
+    check('division admin: cannot ask for someone outside', r.status === 404)
+    r = await call('GET', `/punches/${outPunch}`, { token: div })
+    check('division admin: cannot open a punch outside', r.status === 404)
+    r = await call('PATCH', `/punches/${outPunch}`, { token: div, body: { notes: 'nope', reason: 'smoke' } })
+    check('division admin: cannot correct a punch outside', r.status === 404)
+    r = await call('POST', '/timesheets/approve', { token: div, body: { personIds: [outId] } })
+    check('division admin: cannot approve a week outside', r.status === 404)
+    r = await call('POST', '/timesheets/reopen', { token: div, body: { personId: outId, reason: 'smoke' } })
+    check('division admin: cannot reopen a week outside', r.status === 404)
+    r = await call('GET', '/reports/hours?groupBy=person', { token: div })
+    check('division admin: hours report is their division only', r.status === 200 && JSON.stringify(r.json).includes(inId) && !JSON.stringify(r.json).includes(outId))
+    r = await call('GET', '/board', { token: div })
+    check('division admin: board is their division only', r.status === 200 && (r.json?.rows ?? []).every((x) => x.personId !== outId))
+    r = await call('GET', '/requests', { token: div })
+    check('division admin: change requests are their division only', r.status === 200 && (r.json?.data ?? []).every((x) => x.person?.id !== outId))
+    r = await call('GET', '/leave/balances', { token: div })
+    if (r.status !== 200) console.log('SKIP  division admin leave balances (leave is off)')
+    else check('division admin: leave balances are their division only', (r.json?.people ?? []).every((x) => x.id !== outId) && (r.json?.people ?? []).some((x) => x.id === inId))
+    r = await call('GET', '/payroll/periods', { token: div })
+    check('division admin: no payroll export', r.status === 403)
+    r = await call('GET', `/assignments/${new Date().toISOString().slice(0, 10)}`, { token: div })
+    check('division admin: a route not reviewed for divisions is refused', r.status === 403 && r.json?.error?.code === 'division_not_allowed', JSON.stringify(r.json))
+    r = await call('PUT', `/people/by-email/${encodeURIComponent(outEmail)}`, { token: div, body: { division: `Smoke Div ${stamp}` } })
+    check('division admin: cannot pull someone into the division', r.status === 403)
+    r = await call('GET', '/me/state', { token: div })
+    check('division admin: still has their own clock', r.status === 200)
+    r = await call('GET', '/timesheets', { token: admin })
+    const allIds = (r.json?.rows ?? []).map((x) => x.person.id)
+    check('full admins still see everyone', r.status === 200 && allIds.includes(inId) && allIds.includes(outId))
+
+    for (const e of [divAdminEmail, inEmail, outEmail]) await call('PUT', `/people/by-email/${encodeURIComponent(e)}`, { token: admin, body: { active: false } })
+  }
+
   // Clean up.
   await call('PUT', `/people/by-email/${encodeURIComponent(testEmail)}`, { token: key, body: { active: false } })
   await call('PUT', `/people/by-email/${encodeURIComponent(crewEmail)}`, { token: key, body: { active: false } })

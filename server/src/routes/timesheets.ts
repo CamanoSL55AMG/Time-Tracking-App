@@ -3,6 +3,7 @@ import { prisma } from '../db.js'
 import { bool, limitOf, optionalDate, requiredStr, route, str } from '../api.js'
 import { ApiError, badRequest } from '../errors.js'
 import { requireAuth, requirePerson, requireScope } from '../auth/middleware.js'
+import { assertInDivision, divisionPersonIds, personFilterFor } from '../auth/division.js'
 import { APPROVE, CREW, FIX_APPROVE, SELF } from '../auth/apiKeys.js'
 import { parseGeo } from '../lib/geo.js'
 import { addDays, dayBounds, isYmd, startOfLocalDay } from '../lib/time.js'
@@ -69,10 +70,11 @@ route(
 
 route(
   timesheetsRouter,
-  { method: 'get', path: '/timesheets', tag: 'Timesheets', summary: "Everyone's week: hours per day, sign-off state and problems to look at.", access: ['punch:read'], query: WEEK },
+  { method: 'get', path: '/timesheets', tag: 'Timesheets', summary: "Everyone's week: hours per day, sign-off state and problems to look at.", access: ['punch:read'], query: WEEK, division: 'scoped' },
   async (req) => {
-    const companyId = requireScope(req, 'punch:read').companyId
-    const sheet = await weekSheet(companyId, str(req.query.week, 10) || undefined)
+    const auth = requireScope(req, 'punch:read')
+    const companyId = auth.companyId
+    const sheet = await weekSheet(companyId, str(req.query.week, 10) || undefined, await divisionPersonIds(auth))
     const company = await prisma.company.findUniqueOrThrow({ where: { id: companyId } })
     const { start, end } = weekBounds(sheet.weekStart, company.timezone)
     // Times people fixed themselves this week that nobody has looked at yet.
@@ -84,8 +86,12 @@ route(
 
 route(
   timesheetsRouter,
-  { method: 'get', path: '/timesheets/:personId', tag: 'Timesheets', summary: "One person's week in detail.", access: ['punch:read'], query: WEEK },
-  async (req) => weekWithRequests(requireScope(req, 'punch:read').companyId, req.params.personId, str(req.query.week, 10) || undefined),
+  { method: 'get', path: '/timesheets/:personId', tag: 'Timesheets', summary: "One person's week in detail.", access: ['punch:read'], query: WEEK, division: 'scoped' },
+  async (req) => {
+    const auth = requireScope(req, 'punch:read')
+    await assertInDivision(auth, req.params.personId)
+    return weekWithRequests(auth.companyId, req.params.personId, str(req.query.week, 10) || undefined)
+  },
 )
 
 route(
@@ -102,6 +108,7 @@ route(
       through: 'Optional last day to approve (YYYY-MM-DD). Default: the whole week once it is over, otherwise through yesterday',
       note: 'Optional note kept with the approval',
     },
+    division: 'scoped',
   },
   async (req) => {
     const auth = requireScope(req, APPROVE)
@@ -109,6 +116,7 @@ route(
     const ids = Array.isArray(req.body?.personIds) ? (req.body.personIds as unknown[]).map((x) => str(x, 80)).filter(Boolean) : []
     if (!ids.length) throw badRequest('personIds must list at least one person.', { field: 'personIds' })
     if (ids.length > 200) throw badRequest('Approve 200 people at most per call.', { field: 'personIds' })
+    await assertInDivision(auth, ...ids)
     const results = await approveWeek(auth.companyId, approver.id, ids, str(req.body?.week, 10) || undefined, str(req.body?.note, 500), str(req.body?.through, 10) || undefined)
     return { results, approved: results.filter((r) => r.ok).length }
   },
@@ -123,11 +131,13 @@ route(
     summary: 'Unlock an approved or signed week so it can be corrected.',
     access: [APPROVE],
     body: { personId: 'Whose week', ...WEEK, reason: 'Why it is being reopened (required)' },
+    division: 'scoped',
   },
   async (req) => {
     const auth = requireScope(req, APPROVE)
     const approver = requirePerson(auth)
     const personId = requiredStr(req.body?.personId, 'personId', 80)
+    await assertInDivision(auth, personId)
     const week = str(req.body?.week, 10) || undefined
     await reopenWeek(auth.companyId, approver.id, personId, week, str(req.body?.reason, 500))
     return weekWithRequests(auth.companyId, personId, week)
@@ -201,12 +211,13 @@ route(
     summary: 'Change requests to decide (status=pending), or the history.',
     access: ['punch:read'],
     query: { status: 'pending, approved, rejected or withdrawn. Defaults to all', personId: 'Only this person' },
+    division: 'scoped',
   },
   async (req) => {
     const auth = requireScope(req, 'punch:read')
     const status = str(req.query.status, 20)
     if (status && !['pending', 'approved', 'rejected', 'withdrawn'].includes(status)) throw badRequest('status must be pending, approved, rejected or withdrawn.', { field: 'status' })
-    return { data: await listRequests(auth.companyId, { status: status || undefined, personId: str(req.query.personId, 80) || undefined }) }
+    return { data: await listRequests(auth.companyId, { status: status || undefined, personId: await personFilterFor(auth, str(req.query.personId, 80) || undefined) }) }
   },
 )
 
@@ -220,9 +231,12 @@ for (const decision of ['approve', 'reject'] as const) {
       summary: decision === 'approve' ? 'Approve a change request; the change is applied as a correction.' : 'Turn down a change request.',
       access: [FIX_APPROVE],
       body: { note: decision === 'approve' ? 'Optional note' : 'Why it is turned down (required)' },
+      division: 'scoped',
     },
     async (req) => {
       const auth = requireScope(req, FIX_APPROVE)
+      const asked = await prisma.changeRequest.findFirst({ where: { id: req.params.id, companyId: auth.companyId }, select: { personId: true } })
+      if (asked) await assertInDivision(auth, asked.personId)
       return { request: await decideRequest(requirePerson(auth), req.params.id, decision, str(req.body?.note, 500)) }
     },
   )
@@ -274,12 +288,13 @@ route(
     summary: 'Times people fixed themselves: waiting to be looked at (default), looked at, or all.',
     access: ['punch:read'],
     query: { status: 'waiting, reviewed or all. Defaults to waiting', personId: 'Only this person', limit: 'At most this many, 200 by default' },
+    division: 'scoped',
   },
   async (req) => {
     const auth = requireScope(req, 'punch:read')
     const status = (str(req.query.status, 20) || 'waiting') as ReviewStatus
     if (!['waiting', 'reviewed', 'all'].includes(status)) throw badRequest('status must be waiting, reviewed or all.', { field: 'status' })
-    return { data: await listSelfEdits(auth.companyId, { status, personId: str(req.query.personId, 80) || undefined, limit: limitOf(req.query.limit, 200, 500) }) }
+    return { data: await listSelfEdits(auth.companyId, { status, personId: await personFilterFor(auth, str(req.query.personId, 80) || undefined), limit: limitOf(req.query.limit, 200, 500) }) }
   },
 )
 
@@ -292,10 +307,13 @@ route(
     summary: 'Mark times people fixed themselves as looked at.',
     access: [FIX_APPROVE],
     body: { ids: 'Edit ids from GET /edits' },
+    division: 'scoped',
   },
   async (req) => {
     const auth = requireScope(req, FIX_APPROVE)
     const ids = Array.isArray(req.body?.ids) ? (req.body.ids as unknown[]).map((x) => str(x, 80)).filter(Boolean) : []
+    const edited = await prisma.punchEdit.findMany({ where: { id: { in: ids }, punch: { companyId: auth.companyId } }, select: { punch: { select: { personId: true } } } })
+    await assertInDivision(auth, ...edited.map((e) => e.punch.personId))
     return markReviewed(requirePerson(auth), ids)
   },
 )
@@ -309,6 +327,7 @@ route(
     summary: 'Punches to look at: missed clock-outs, long days, punches away from the site, corrections, punches sent late.',
     access: ['reports:read', 'punch:read'],
     query: { from: 'YYYY-MM-DD, defaults to 7 days ago', to: 'YYYY-MM-DD inclusive, defaults to today', personId: 'Only this person' },
+    division: 'scoped',
   },
   async (req) => {
     const auth = requireScope(req, 'reports:read', 'punch:read')
@@ -320,7 +339,7 @@ route(
     const from = startOfLocalDay(fromRaw, company.timezone)
     const to = startOfLocalDay(addDays(toRaw, 1), company.timezone)
     if (to <= from) throw badRequest('to must not be before from.')
-    return { from: fromRaw, to: toRaw, data: await findExceptions(auth.companyId, { from, to, personId: str(req.query.personId, 80) || undefined }) }
+    return { from: fromRaw, to: toRaw, data: await findExceptions(auth.companyId, { from, to, personId: await personFilterFor(auth, str(req.query.personId, 80) || undefined) }) }
   },
 )
 

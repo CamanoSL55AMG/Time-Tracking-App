@@ -5,6 +5,7 @@ import { badRequest, conflict, forbidden, notFound } from '../errors.js'
 import { requireAuth, requirePerson, requireScope, type Auth } from '../auth/middleware.js'
 import { SELF } from '../auth/apiKeys.js'
 import { localDate } from '../lib/time.js'
+import { assertInDivision, divisionPersonIds, personFilterFor } from '../auth/division.js'
 import {
   acknowledgeNotice,
   addAdjustment,
@@ -45,6 +46,12 @@ const actorOf = (auth: Auth): LeaveActor => ({ companyId: auth.companyId, person
 function leaveAuth(req: Request, ...anyOf: string[]): Auth {
   requireLeaveOn()
   return anyOf.length ? requireScope(req, ...anyOf) : requireAuth(req)
+}
+
+/** A leave request someone else made: only within a division admin's own division. */
+async function assertLeaveInDivision(auth: Auth, requestId: string): Promise<void> {
+  const r = await prisma.leaveRequest.findFirst({ where: { id: requestId, companyId: auth.companyId }, select: { personId: true } })
+  if (r && r.personId !== auth.person?.id) await assertInDivision(auth, r.personId)
 }
 
 const num = (v: unknown) => (v === undefined || v === null || v === '' ? undefined : Number(v))
@@ -128,7 +135,7 @@ route(
 
 route(
   leaveRouter,
-  { method: 'get', path: '/leave/types', tag: 'Leave', summary: 'Kinds of leave.', access: [SELF, 'leave:read'] },
+  { method: 'get', path: '/leave/types', tag: 'Leave', summary: 'Kinds of leave.', access: [SELF, 'leave:read'], division: 'scoped' },
   async (req) => {
     const auth = leaveAuth(req, SELF, 'leave:read')
     const { types } = await ensureLeaveSetup(auth.companyId)
@@ -138,7 +145,7 @@ route(
 
 route(
   leaveRouter,
-  { method: 'get', path: '/leave/settings', tag: 'Leave', summary: 'Company leave settings: separate or combined banks, sick payout, switchover day.', access: ['leave:read'] },
+  { method: 'get', path: '/leave/settings', tag: 'Leave', summary: 'Company leave settings: separate or combined banks, sick payout, switchover day.', access: ['leave:read'], division: 'scoped' },
   async (req) => {
     const auth = leaveAuth(req, 'leave:read')
     return (await ensureLeaveSetup(auth.companyId)).settings
@@ -197,7 +204,7 @@ const POLICY_BODY = {
 
 route(
   leaveRouter,
-  { method: 'get', path: '/leave/policies', tag: 'Leave', summary: 'How each kind of leave is earned.', access: ['leave:read'] },
+  { method: 'get', path: '/leave/policies', tag: 'Leave', summary: 'How each kind of leave is earned.', access: ['leave:read'], division: 'scoped' },
   async (req) => {
     const auth = leaveAuth(req, 'leave:read')
     await ensureLeaveSetup(auth.companyId)
@@ -233,15 +240,17 @@ route(
     tag: 'Leave',
     summary: "Everyone's balances, hire date and the policy each person is on.",
     access: ['leave:read'],
+    division: 'scoped',
   },
   async (req) => {
     const auth = leaveAuth(req, 'leave:read')
     const { types } = await ensureLeaveSetup(auth.companyId)
     const company = await prisma.company.findUniqueOrThrow({ where: { id: auth.companyId } })
     const today = localDate(new Date(), company.timezone)
+    const only = await divisionPersonIds(auth)
     const [people, balances, profiles, assigned] = await Promise.all([
-      prisma.person.findMany({ where: { companyId: auth.companyId, active: true }, orderBy: { name: 'asc' } }),
-      balancesFor(auth.companyId, undefined, today),
+      prisma.person.findMany({ where: { companyId: auth.companyId, active: true, id: only ? { in: only } : undefined }, orderBy: { name: 'asc' } }),
+      balancesFor(auth.companyId, only ?? undefined, today),
       prisma.leaveProfile.findMany({ where: { companyId: auth.companyId } }),
       prisma.personLeavePolicy.findMany({ where: { companyId: auth.companyId, effectiveFrom: { lte: today }, OR: [{ effectiveTo: null }, { effectiveTo: { gte: today } }] } }),
     ])
@@ -265,10 +274,11 @@ route(
 
 route(
   leaveRouter,
-  { method: 'get', path: '/people/:id/leave/balances', tag: 'Leave', summary: "One person's balance per leave type.", access: ['leave:read', SELF] },
+  { method: 'get', path: '/people/:id/leave/balances', tag: 'Leave', summary: "One person's balance per leave type.", access: ['leave:read', SELF], division: 'scoped' },
   async (req) => {
     const auth = leaveAuth(req, 'leave:read', SELF)
     if (!auth.scopes.has('leave:read') && auth.person?.id !== req.params.id) throw forbidden('You can see your own balances only.')
+    if (auth.person?.id !== req.params.id) await assertInDivision(auth, req.params.id)
     const person = await prisma.person.findFirst({ where: { id: req.params.id, companyId: auth.companyId } })
     if (!person) throw notFound('Person')
     return { data: await balancesFor(auth.companyId, [person.id]) }
@@ -327,12 +337,14 @@ route(
       note: 'Optional scheduling note (not kept for sick leave)',
       approve: 'Approvers recording leave for someone else: true to approve at once',
     },
+    division: 'scoped',
   },
   async (req) => {
     const auth = leaveAuth(req, SELF, 'leave:approve')
     const b = req.body ?? {}
     const personId = str(b.personId, 80) || auth.person?.id
     if (!personId) throw badRequest('personId is required with an API key.', { field: 'personId' })
+    if (personId !== auth.person?.id) await assertInDivision(auth, personId)
     const days = Array.isArray(b.days) ? (b.days as { date: unknown; hours: unknown }[]).map((d) => ({ date: str(d.date, 10), hours: Number(d.hours) })) : undefined
     const created = await createLeaveRequest(
       actorOf(auth),
@@ -362,13 +374,14 @@ route(
     summary: 'Leave requests, filterable. pending lists the oldest first.',
     access: ['leave:read'],
     query: { status: 'pending | approved | denied | cancelled', personId: 'One person', from: 'Leave on or after YYYY-MM-DD', to: 'Leave on or before YYYY-MM-DD', limit: 'Default 200' },
+    division: 'scoped',
   },
   async (req) => {
     const auth = leaveAuth(req, 'leave:read')
     return {
       data: await listLeaveRequests(auth.companyId, {
         status: str(req.query.status, 20) || undefined,
-        personId: str(req.query.personId, 80) || undefined,
+        personId: await personFilterFor(auth, str(req.query.personId, 80) || undefined),
         from: str(req.query.from, 10) || undefined,
         to: str(req.query.to, 10) || undefined,
         limit: limitOf(req.query.limit, 200, 1000),
@@ -387,9 +400,11 @@ for (const decision of ['approve', 'deny'] as const) {
       summary: decision === 'approve' ? 'Approve a request: the hours come off the balance. Not your own.' : 'Turn a request down. A note saying why is required.',
       access: ['leave:approve'],
       body: { note: decision === 'approve' ? 'Optional' : 'Why (required)' },
+      division: 'scoped',
     },
     async (req) => {
       const auth = leaveAuth(req, 'leave:approve')
+      await assertLeaveInDivision(auth, req.params.id)
       const u = await decideLeaveRequest(actorOf(auth), req.params.id, decision, str(req.body?.note, 300))
       return { request: (await viewRequests([u]))[0] }
     },
@@ -405,9 +420,11 @@ route(
     summary: 'Withdraw your own request (or approved leave that has not started). Approvers can cancel approved leave; the hours go back on the balance.',
     access: [SELF, 'leave:approve'],
     body: { note: 'Optional' },
+    division: 'scoped',
   },
   async (req) => {
     const auth = leaveAuth(req, SELF, 'leave:approve')
+    await assertLeaveInDivision(auth, req.params.id)
     const u = await cancelLeaveRequest(actorOf(auth), auth.scopes, req.params.id, str(req.body?.note, 300))
     return { request: (await viewRequests([u]))[0] }
   },
@@ -485,12 +502,13 @@ route(
     summary: 'Every accrual, use and adjustment, oldest first.',
     access: ['leave:read'],
     query: { personId: 'One person', leaveTypeId: 'One leave type', from: 'YYYY-MM-DD', to: 'YYYY-MM-DD', limit: 'Default 1000' },
+    division: 'scoped',
   },
   async (req) => {
     const auth = leaveAuth(req, 'leave:read')
     return {
       data: await ledger(auth.companyId, {
-        personId: str(req.query.personId, 80) || undefined,
+        personId: await personFilterFor(auth, str(req.query.personId, 80) || undefined),
         leaveTypeId: str(req.query.leaveTypeId, 80) || undefined,
         from: str(req.query.from, 10) || undefined,
         to: str(req.query.to, 10) || undefined,
@@ -502,12 +520,12 @@ route(
 
 route(
   leaveRouter,
-  { method: 'get', path: '/leave/statements', tag: 'Leave', summary: 'Monthly statement per person: earned, used and available per leave type.', access: ['leave:read'], query: { month: 'YYYY-MM', personId: 'One person' } },
+  { method: 'get', path: '/leave/statements', tag: 'Leave', summary: 'Monthly statement per person: earned, used and available per leave type.', access: ['leave:read'], query: { month: 'YYYY-MM', personId: 'One person' }, division: 'scoped' },
   async (req) => {
     const auth = leaveAuth(req, 'leave:read')
     const company = await prisma.company.findUniqueOrThrow({ where: { id: auth.companyId } })
     const month = str(req.query.month, 7) || localDate(new Date(), company.timezone).slice(0, 7)
-    return statements(auth.companyId, month, str(req.query.personId, 80) || undefined)
+    return statements(auth.companyId, month, await personFilterFor(auth, str(req.query.personId, 80) || undefined))
   },
 )
 

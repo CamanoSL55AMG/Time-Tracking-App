@@ -259,7 +259,16 @@ deploy    Dockerfile + docker-compose, same as the other add-ons
 - **Sign-in.** Three ways: GED one-click (the existing `v1.<payload>.<hmac>` add-on token,
   audience `time_tracking`), the app's own email + password for companies without GED, and
   name + PIN in kiosk mode.
-- **Roles.** `tech`, `lead`, `manager`, `payroll`, `admin`.
+- **Roles.** `tech`, `lead`, `manager`, `payroll`, `admin`, `division_admin`.
+- **Divisions** (2026-11-11). Each person has an optional `division` (e.g. Sound Services).
+  A `division_admin` runs the admin screens (timecards and approvals, time fixes, leave
+  approvals, hours and exceptions reports, the board) for the people in their own
+  division only, and keeps their own clock. No payroll export, leave balance edits,
+  jobs, people, keys or expenses. The limit is on the server (`server/src/auth/division.ts`):
+  a route opens to division admins only when it is declared `division: 'scoped'` and
+  filters by the division; any other route answers 403 `division_not_allowed`. Someone
+  outside the division answers 404. Only a signed-in admin or a `people:roles` key sets
+  a division or hands out `division_admin`. Full admins still see everyone.
 - **GPS.** A position is recorded only at the moment of a punch. No background tracking.
   Staff are told this in writing before rollout.
 

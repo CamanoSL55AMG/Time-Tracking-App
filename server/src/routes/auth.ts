@@ -21,6 +21,7 @@ export const publicPerson = (p: Person) => ({
   name: p.name,
   initials: p.initials,
   role: p.role,
+  division: p.division,
   active: p.active,
   mustChangePassword: p.mustChangePassword,
   workerType: p.workerType,

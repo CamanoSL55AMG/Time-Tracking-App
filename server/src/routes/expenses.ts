@@ -71,7 +71,7 @@ const rangeWhere = (q: Request['query']): Prisma.ExpenseWhereInput => {
 
 route(
   expensesRouter,
-  { method: 'get', path: '/expense-categories', tag: 'Expenses', summary: 'Expense categories, and the mileage rate in force.', access: [SELF, 'jobs:read', 'expenses:read'], query: { all: 'true to include switched-off ones' } },
+  { method: 'get', path: '/expense-categories', tag: 'Expenses', summary: 'Expense categories, and the mileage rate in force.', access: [SELF, 'jobs:read', 'expenses:read'], query: { all: 'true to include switched-off ones' }, division: 'scoped' },
   async (req) => {
     const auth = requireScope(req, SELF, 'jobs:read', 'expenses:read')
     const company = await prisma.company.findUniqueOrThrow({ where: { id: auth.companyId } })
@@ -243,7 +243,7 @@ route(
 
 route(
   expensesRouter,
-  { method: 'get', path: '/expenses/:id/receipt', tag: 'Expenses', summary: 'The receipt file itself (not JSON). Yours, or anyone’s with expenses:read.', access: [SELF, 'expenses:read'] },
+  { method: 'get', path: '/expenses/:id/receipt', tag: 'Expenses', summary: 'The receipt file itself (not JSON). Yours, or anyone’s with expenses:read.', access: [SELF, 'expenses:read'], division: 'scoped' },
   async (req, res) => {
     const auth = requireScope(req, SELF, 'expenses:read')
     const { file, type } = await receiptFile(auth.companyId, req.params.id, { personId: auth.person?.id ?? null, canReadAll: auth.scopes.has('expenses:read') })
