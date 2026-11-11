@@ -281,7 +281,7 @@ export default function App() {
         {current === 'review' && <ReviewPage onWaitingChange={approver ? setWaitingFixes : undefined} canApprove={can('timesheets:approve')} canDecideFixes={can('requests:approve')} canEdit={can('punch:write:any')} canApproveExpenses={can('expenses:approve')} meId={person.id} />}
         {current === 'board' && <BoardPage />}
         {current === 'admin' && <AdminPage me={person} />}
-        {current === 'payroll' && <PayrollPage />}
+        {current === 'payroll' && <PayrollPage division={person.role === 'division_admin' ? person.division || '(no division set)' : undefined} />}
         {current === 'leave' && <LeavePage me={person} scopes={person.scopes} />}
       </Container>
 

@@ -296,7 +296,7 @@ function People({ isAdmin }: { isAdmin: boolean }) {
               inputProps={{ list: 'logbook-divisions' }}
               helperText={
                 roleFor?.role === 'division_admin'
-                  ? 'They see and manage only the people in this division: timecards, time fixes, leave and reports. No payroll.'
+                  ? 'They see and manage only the people in this division: timecards, time fixes, leave, reports and the payroll export.'
                   : 'e.g. Sound Services. Leave empty for none.'
               }
             />

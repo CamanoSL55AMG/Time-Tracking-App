@@ -789,10 +789,10 @@ export interface LeaveLine {
  * normal rate in the period it was used; it is not hours worked, so it never counts
  * toward overtime. Unpaid types (state family leave, unpaid) stay out.
  */
-export async function leaveForPayroll(companyId: string, from: string, to: string) {
+export async function leaveForPayroll(companyId: string, from: string, to: string, personId?: PersonFilter) {
   const company = await prisma.company.findUniqueOrThrow({ where: { id: companyId } })
   const [requests, types] = await Promise.all([
-    prisma.leaveRequest.findMany({ where: { companyId, status: { in: ['approved', 'pending'] }, startDate: { lte: to }, endDate: { gte: from } } }),
+    prisma.leaveRequest.findMany({ where: { companyId, ...(personId ? { personId } : {}), status: { in: ['approved', 'pending'] }, startDate: { lte: to }, endDate: { gte: from } } }),
     prisma.leaveType.findMany({ where: { companyId } }),
   ])
   const type = new Map(types.map((t) => [t.id, t]))

@@ -70,10 +70,11 @@ export const ROLE_SCOPES: Record<Role, string[]> = {
   payroll: [SELF, 'jobs:read', 'punch:read', 'people:read', 'reports:read', APPROVE, FIX_APPROVE, 'expenses:read', 'expenses:approve', 'payroll:read', 'leave:read', 'leave:approve', 'leave:write'],
   admin: [...MANAGER, KEYS_MANAGE, 'payroll:read', 'leave:write'],
   // Runs the admin screens for their own division only (auth/division.ts limits every
-  // query to Person.division). Timecards, missed-punch fixes, leave approvals and the
-  // hours reports. Not: payroll export, leave balance edits, jobs, people, keys,
-  // expenses or crew punching. Those stay with full admins and payroll.
-  division_admin: [SELF, 'jobs:read', 'punch:read', 'people:read', 'reports:read', APPROVE, FIX_APPROVE, 'punch:write:any', 'leave:read', 'leave:approve'],
+  // query to Person.division). Timecards, missed-punch fixes, leave approvals, the
+  // hours reports and the payroll export for their division (Art, 2026-11-11: "Let Kris
+  // send payroll"). Not: leave balance edits, jobs, people, keys, expenses or crew
+  // punching. Those stay with full admins and payroll.
+  division_admin: [SELF, 'jobs:read', 'punch:read', 'people:read', 'reports:read', APPROVE, FIX_APPROVE, 'punch:write:any', 'leave:read', 'leave:approve', 'payroll:read'],
 }
 
 /** What the AIC Terminal (GED) key may do. link-ged creates the key with these;

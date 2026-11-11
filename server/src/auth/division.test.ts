@@ -30,13 +30,13 @@ test('division_admin is a real role, guarded like admin', () => {
   assert.ok(GUARDED_ROLES.includes('admin'))
 })
 
-test('division admins get the admin screens, not payroll, keys, set-up or other people', () => {
+test('division admins get the admin screens and payroll export, not keys, set-up or other people', () => {
   const s = new Set(ROLE_SCOPES.division_admin)
-  for (const want of [SELF, 'punch:read', 'timesheets:approve', 'requests:approve', 'punch:write:any', 'reports:read', 'leave:read', 'leave:approve']) {
+  for (const want of [SELF, 'punch:read', 'timesheets:approve', 'requests:approve', 'punch:write:any', 'reports:read', 'leave:read', 'leave:approve', 'payroll:read']) {
     assert.ok(s.has(want), `should have ${want}`)
   }
-  // Payroll export stays with Art and payroll (open question 1, default no).
-  for (const never of ['payroll:read', KEYS_MANAGE, 'leave:write', 'people:write', 'jobs:write', 'expenses:read', 'expenses:approve', 'events:read', 'assignments:write', 'punch:crew', 'people:roles']) {
+  // Art, 2026-11-11: "Let Kris send payroll" (their division's hours only, see below).
+  for (const never of [KEYS_MANAGE, 'leave:write', 'people:write', 'jobs:write', 'expenses:read', 'expenses:approve', 'events:read', 'assignments:write', 'punch:crew', 'people:roles']) {
     assert.equal(s.has(never), false, `should not have ${never}`)
   }
 })
@@ -83,7 +83,8 @@ test('every route a division admin can reach is limited to their division or ref
     .filter((r) => !divisionMayCall(r))
     .map((r) => `${r.method.toUpperCase()} ${r.path}`)
     .sort()
-  assert.deepEqual(refused, ['GET /assignments/:date', 'GET /company/service-billing', 'GET /reports/service-billing'])
+  // The state PFML report is filed once for the whole company: full admins and payroll.
+  assert.deepEqual(refused, ['GET /assignments/:date', 'GET /company/service-billing', 'GET /reports/pfml-quarterly', 'GET /reports/service-billing'])
 })
 
 test('the division admin screens are all marked as limited to the division', () => {
@@ -108,9 +109,9 @@ test('the division admin screens are all marked as limited to the division', () 
     'GET /leave/requests',
     'POST /leave/requests/:id/approve',
     'POST /leave/requests/:id/deny',
+    'GET /payroll/labor',
+    'GET /payroll/periods',
   ]) {
     assert.ok(scoped.has(r), `${r} should be division scoped`)
   }
-  // Payroll is never open to a division admin.
-  assert.equal([...scoped].some((r) => r.includes('/payroll')), false)
 })

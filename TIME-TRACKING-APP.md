@@ -262,8 +262,8 @@ deploy    Dockerfile + docker-compose, same as the other add-ons
 - **Roles.** `tech`, `lead`, `manager`, `payroll`, `admin`, `division_admin`.
 - **Divisions** (2026-11-11). Each person has an optional `division` (e.g. Sound Services).
   A `division_admin` runs the admin screens (timecards and approvals, time fixes, leave
-  approvals, hours and exceptions reports, the board) for the people in their own
-  division only, and keeps their own clock. No payroll export, leave balance edits,
+  approvals, hours and exceptions reports, the board, and the payroll export) for the
+  people in their own division only, and keeps their own clock. No leave balance edits,
   jobs, people, keys or expenses. The limit is on the server (`server/src/auth/division.ts`):
   a route opens to division admins only when it is declared `division: 'scoped'` and
   filters by the division; any other route answers 403 `division_not_allowed`. Someone
