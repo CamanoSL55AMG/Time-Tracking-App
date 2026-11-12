@@ -1,3 +1,4 @@
+// TESTED & APPROVED by Art 2026-11-01: (part) Bench Repair shows only bench work. See TESTED.md before changing.
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Alert,

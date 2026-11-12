@@ -1,5 +1,7 @@
 # Logbook (Time Tracking)
 
+> **Before changing anything, read [TESTED.md](TESTED.md)** — features Art has tested and approved are hands off unless he asks for the change.
+
 Logbook, the AIC Terminal time tracking module. Standalone time tracking: a phone-first punch clock that records the job and the phase
 of the day, a live Tower board, and a versioned API that other apps (GED, Project Report,
 Accounting) link to. Built to replace Timesheets.com at Morgan Sound and to be sold on

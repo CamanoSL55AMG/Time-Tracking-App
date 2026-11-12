@@ -1,3 +1,4 @@
+// TESTED & APPROVED by Art 2026-11-07: password generator. See TESTED.md before changing.
 // Password generator, modelled on Bitwarden's / Vaultwarden's: a length, toggles for
 // A-Z, a-z, 0-9 and special characters, and "avoid ambiguous characters".
 //
