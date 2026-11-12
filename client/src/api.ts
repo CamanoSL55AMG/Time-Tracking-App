@@ -402,7 +402,7 @@ export interface ApiKey {
 
 export type SheetStatus = 'open' | 'signed' | 'approved'
 export interface TimeException {
-  code: 'missed_clock_out' | 'long_day' | 'away_from_site' | 'away_from_shop' | 'edited' | 'sent_late'
+  code: 'missed_clock_out' | 'long_day' | 'am_pm' | 'away_from_site' | 'away_from_shop' | 'edited' | 'sent_late'
   severity: 'problem' | 'note'
   personId: string
   personName: string

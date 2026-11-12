@@ -314,6 +314,24 @@ try {
   r = await call('GET', `/reports/exceptions?from=${lastWeek}&to=${lastWeek}&personId=${crewId}`, { token: key })
   check('exceptions report flags the 13-hour day', r.status === 200 && r.json?.data?.some((x) => x.code === 'long_day'), JSON.stringify(r.json))
 
+  // AM/PM slip (Art 2026-11-12): a third throwaway person clocks in at 6:19 PM the
+  // evening before that Wednesday and out the next morning, 14.6 hours. The review
+  // flags it as a likely AM/PM mix-up; the 13-hour day above, started in the
+  // morning, is not.
+  const ampmEmail = `smoke-${stamp}-ampm@example.invalid`
+  r = await call('PUT', `/people/by-email/${encodeURIComponent(ampmEmail)}`, { token: key, body: { name: 'Smoke AmPm', initials: 'ZP' } })
+  const ampmId = r.json?.person?.id
+  const eveDay = ymd(new Date(t0.getTime() - 86_400_000))
+  // Lynnwood's offset from UTC that day (-8 or -7), from the wall hour at noon UTC.
+  const offH = Number(new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', hour: 'numeric' }).format(new Date(`${eveDay}T12:00:00Z`))) - 12
+  const pmIn = new Date(Date.parse(`${eveDay}T18:19:00Z`) - offH * 3_600_000)
+  r = await call('POST', '/punches/in', { token: key, headers: { 'X-Act-As': ampmEmail }, body: { jobId, at: pmIn.toISOString() } })
+  r = await call('POST', '/punches/out', { token: key, headers: { 'X-Act-As': ampmEmail }, body: { at: new Date(pmIn.getTime() + 14.62 * 3_600_000).toISOString() } })
+  r = await call('GET', `/reports/exceptions?from=${ymd(pmIn)}&to=${ymd(pmIn)}&personId=${ampmId}`, { token: key })
+  check('exceptions report flags a 6:19 PM start on a 14.6-hour day as AM/PM', r.status === 200 && r.json?.data?.some((x) => x.code === 'am_pm' && x.severity === 'problem'), JSON.stringify(r.json))
+  r = await call('GET', `/reports/exceptions?from=${lastWeek}&to=${lastWeek}&personId=${crewId}`, { token: key })
+  check('a long day that started in the morning is not called an AM/PM slip', r.status === 200 && !r.json?.data?.some((x) => x.code === 'am_pm'), JSON.stringify(r.json))
+
   r = await call('POST', '/me/week/sign', { token: tech, body: {} })
   check('a tech signs their week', r.status === 200 && r.json?.status === 'signed', JSON.stringify(r.json))
   r = await call('POST', '/punches/in', { token: key, headers: as, body: { jobId } })

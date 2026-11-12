@@ -125,6 +125,7 @@ const noteWord: Record<TimeException['code'], [string, string]> = {
   away_from_shop: ['punch away from the shop', 'punches away from the shop'],
   missed_clock_out: ['missed clock-out', 'missed clock-outs'],
   long_day: ['long day', 'long days'],
+  am_pm: ['possible AM/PM mix-up', 'possible AM/PM mix-ups'],
   edited: ['change', 'changes'],
   sent_late: ['punch sent late', 'punches sent late'],
 }
