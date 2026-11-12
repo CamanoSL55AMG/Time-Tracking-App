@@ -259,7 +259,10 @@ deploy    Dockerfile + docker-compose, same as the other add-ons
 - **Sign-in.** Three ways: GED one-click (the existing `v1.<payload>.<hmac>` add-on token,
   audience `time_tracking`), the app's own email + password for companies without GED, and
   name + PIN in kiosk mode.
-- **Roles.** `tech`, `lead`, `manager`, `payroll`, `admin`, `division_admin`.
+- **Roles.** `tech`, `lead`, `manager`, `payroll`, `admin`, `division_admin`, `sales`, `shop_supervisor`.
+  `sales` (2026-11-11) has a tech's access: their own time and expenses only.
+  `shop_supervisor` (2026-11-11) has a crew lead's access: punches the crew in and
+  out, sees punches and who's off, and approves nothing.
 - **Divisions** (2026-11-11). Each person has an optional `division` (e.g. Sound Services).
   A `division_admin` runs the admin screens (timecards and approvals, time fixes, leave
   approvals, hours and exceptions reports, the board, and the payroll export) for the

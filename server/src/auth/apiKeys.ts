@@ -51,7 +51,7 @@ export const APPROVE = 'timesheets:approve'
  *  clock-out). Managers, admins and payroll (Art, 2026-11-04); not crew leads. */
 export const FIX_APPROVE = 'requests:approve'
 
-export const ROLES = ['tech', 'lead', 'manager', 'payroll', 'admin', 'division_admin'] as const
+export const ROLES = ['tech', 'lead', 'manager', 'payroll', 'admin', 'division_admin', 'sales', 'shop_supervisor'] as const
 /** Roles only a signed-in admin (or a key with people:roles) may hand out or take away. */
 export const GUARDED_ROLES: readonly Role[] = ['admin', 'division_admin']
 export type Role = (typeof ROLES)[number]
@@ -75,6 +75,12 @@ export const ROLE_SCOPES: Record<Role, string[]> = {
   // send payroll"). Not: leave balance edits, jobs, people, keys, expenses or crew
   // punching. Those stay with full admins and payroll.
   division_admin: [SELF, 'jobs:read', 'punch:read', 'people:read', 'reports:read', APPROVE, FIX_APPROVE, 'punch:write:any', 'leave:read', 'leave:approve', 'payroll:read'],
+  // Sales and Shop Supervisor (Art, 2026-11-11). Sales clocks and fixes only their own
+  // time and expenses, like a tech. A shop supervisor runs the shop crew like a crew
+  // lead: punches the crew in and out, sees their punches and who's off, and approves
+  // nothing (timecards and leave stay with managers, payroll and admins).
+  sales: TECH,
+  shop_supervisor: LEAD,
 }
 
 /** What the AIC Terminal (GED) key may do. link-ged creates the key with these;

@@ -68,7 +68,7 @@ export interface Person {
   email: string
   name: string
   initials: string
-  role: 'tech' | 'lead' | 'manager' | 'payroll' | 'admin' | 'division_admin'
+  role: 'tech' | 'lead' | 'manager' | 'payroll' | 'admin' | 'division_admin' | 'sales' | 'shop_supervisor'
   /** The part of the company they work in, e.g. Sound Services. A division_admin
    *  sees and manages only the people in their own division. */
   division?: string

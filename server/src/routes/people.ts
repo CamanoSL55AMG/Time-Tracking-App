@@ -63,7 +63,7 @@ route(
     if (existing && existing.companyId !== auth.companyId) throw forbidden('That email belongs to another company.')
 
     const role = req.body?.role === undefined ? undefined : String(req.body.role)
-    if (role !== undefined && !isRole(role)) throw badRequest('role must be tech, lead, manager, payroll, admin or division_admin.', { field: 'role' })
+    if (role !== undefined && !isRole(role)) throw badRequest('role must be tech, lead, manager, payroll, admin, division_admin, sales or shop_supervisor.', { field: 'role' })
     // Only a signed-in admin hands out or takes away the admin and division admin roles.
     const guarded = (r: string | undefined) => r !== undefined && (GUARDED_ROLES as readonly string[]).includes(r as Role)
     if (!mayManageAdmins && (guarded(role) || (guarded(existing?.role) && role !== undefined && role !== existing?.role))) {
