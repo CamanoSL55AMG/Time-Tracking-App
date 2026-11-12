@@ -706,6 +706,8 @@ export interface BoardRow {
   personId: string
   name: string
   email: string
+  /** The person's division, e.g. Sound Services ('' = none). The board groups people by it. */
+  division: string
   onClock: boolean
   jobId: string | null
   jobName: string
@@ -755,6 +757,7 @@ export async function board(companyId: string) {
         personId: p.personId,
         name: p.person.name,
         email: p.person.email,
+        division: p.person.division,
         onClock: false,
         jobId: null,
         jobName: '',

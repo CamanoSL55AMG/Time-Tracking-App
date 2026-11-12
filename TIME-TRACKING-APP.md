@@ -74,7 +74,7 @@ sold commercially, have counsel look at the name and marketing before launch.
   (crew initials in the title) selects the job before the tech touches anything.
 - **One-click punch from other apps.** A task card in GED can clock a tech into that job
   with one API call.
-- **Tower board.** Live view of every tech: job, phase n of 7, since when, hours today.
+- **Tower board.** Live view of every tech: job, phase n of 7, since when, hours today. Grouped by division (No division last); each division and each person opens and closes, person headers show the first name (last initial added when two share one), and what is open is remembered per browser.
 - **Labor budget tie-in.** Hours per job per phase line up against the labor sold in
   Jetbuilt, through GED.
 - **Lead punches the crew.** One action clocks several people onto the same job.
