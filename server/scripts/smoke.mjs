@@ -366,6 +366,21 @@ try {
   )
   r = await call('GET', '/payroll/periods', { token: tech })
   check('a tech cannot read the pay periods', r.status === 403)
+  // Shop punches to Stage Forge: admins only; a dry run sends nothing and works while off.
+  {
+    const today = new Date().toISOString().slice(0, 10)
+    r = await call('GET', '/integrations/stageforge/punches', { token: admin })
+    check('Stage Forge punch status answers', r.status === 200 && typeof r.json?.enabled === 'boolean', JSON.stringify(r.json))
+    const pushOn = r.json?.enabled === true
+    r = await call('POST', '/integrations/stageforge/punches/push', { token: admin, body: { from: today, to: today, dryRun: true } })
+    check('Stage Forge dry run shows what would go', r.status === 200 && r.json?.dryRun === true && Array.isArray(r.json?.preview), JSON.stringify(r.json))
+    if (!pushOn) {
+      r = await call('POST', '/integrations/stageforge/punches/push', { token: admin, body: { from: today, to: today } })
+      check('Stage Forge sending is off until turned on', r.status === 403 && r.json?.error?.code === 'stageforge_push_off', JSON.stringify(r.json))
+    }
+    r = await call('POST', '/integrations/stageforge/punches/push', { token: tech, body: { from: today, to: today, dryRun: true } })
+    check('a tech cannot send punches to Stage Forge', r.status === 403)
+  }
   // 1099 contractors: off unless CONTRACTORS_ENABLED=true.
   {
     const subEmail = `smoke-1099-${Date.now()}@example.invalid`

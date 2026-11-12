@@ -236,3 +236,19 @@ curl -X POST http://localhost:5400/api/v1/punches/in \
   -H "Content-Type: application/json" \
   -d '{"jobRef":{"system":"ged","externalId":"P-1371"},"phaseKey":"work"}'
 ```
+
+## Shop punches to Stage Forge
+
+Stage Forge shows Sound Services crew hours from its shows and from the shop side by
+side, and it doesn't read Logbook, so Logbook sends them: each finished punch segment
+of the people whose division is `STAGEFORGE_PUNCH_DIVISION` (default "Sound Services")
+goes to Stage Forge's `POST /time-activities`, every `STAGEFORGE_PUSH_MINUTES` for the
+last two weeks. A segment goes once, and again only when it is corrected; Logbook's
+punch id rides along as `StageForge.externalId`, with an `Idempotency-Key`. Pay is not
+worked out from this: AIC Accounting reads Logbook's payroll export as before.
+
+Off unless `STAGEFORGE_PUNCH_PUSH=true` with `STAGEFORGE_URL` (https) and
+`STAGEFORGE_KEY` in `server/.env`. Admins can look and test:
+`GET /api/v1/integrations/stageforge/punches` (on or off, counts, last failures) and
+`POST /api/v1/integrations/stageforge/punches/push {"from","to","dryRun":true}` (shows
+what would go and sends nothing, even while off).
