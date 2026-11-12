@@ -51,7 +51,9 @@ export const APPROVE = 'timesheets:approve'
  *  clock-out). Managers, admins and payroll (Art, 2026-11-04); not crew leads. */
 export const FIX_APPROVE = 'requests:approve'
 
-export const ROLES = ['tech', 'lead', 'manager', 'payroll', 'admin'] as const
+export const ROLES = ['tech', 'lead', 'manager', 'payroll', 'admin', 'division_admin'] as const
+/** Roles only a signed-in admin (or a key with people:roles) may hand out or take away. */
+export const GUARDED_ROLES: readonly Role[] = ['admin', 'division_admin']
 export type Role = (typeof ROLES)[number]
 
 const TECH = [SELF, 'jobs:read']
@@ -67,6 +69,12 @@ export const ROLE_SCOPES: Record<Role, string[]> = {
   manager: MANAGER,
   payroll: [SELF, 'jobs:read', 'punch:read', 'people:read', 'reports:read', APPROVE, FIX_APPROVE, 'expenses:read', 'expenses:approve', 'payroll:read', 'leave:read', 'leave:approve', 'leave:write'],
   admin: [...MANAGER, KEYS_MANAGE, 'payroll:read', 'leave:write'],
+  // Runs the admin screens for their own division only (auth/division.ts limits every
+  // query to Person.division). Timecards, missed-punch fixes, leave approvals, the
+  // hours reports and the payroll export for their division (Art, 2026-11-11: "Let Kris
+  // send payroll"). Not: leave balance edits, jobs, people, keys, expenses or crew
+  // punching. Those stay with full admins and payroll.
+  division_admin: [SELF, 'jobs:read', 'punch:read', 'people:read', 'reports:read', APPROVE, FIX_APPROVE, 'punch:write:any', 'leave:read', 'leave:approve', 'payroll:read'],
 }
 
 /** What the AIC Terminal (GED) key may do. link-ged creates the key with these;

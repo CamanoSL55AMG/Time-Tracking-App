@@ -1,6 +1,7 @@
 import { prisma } from '../db.js'
 import { hoursBetween, localDate } from '../lib/time.js'
 import { insideFence, type Fence } from '../lib/geo.js'
+import type { PersonFilter } from '../auth/division.js'
 
 // Things an approver should look at before signing off a week. "problem" needs a
 // decision (a missed clock-out, a 14-hour day); "note" is context (a correction,
@@ -25,7 +26,7 @@ const isTravel = (key: string | undefined) => Boolean(key && /travel|drive/i.tes
 const timeOf = (d: Date, tz: string) => d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: tz })
 const dayOf = (d: Date, tz: string) => d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: tz })
 
-export async function findExceptions(companyId: string, opts: { from: Date; to: Date; personId?: string }): Promise<TimeException[]> {
+export async function findExceptions(companyId: string, opts: { from: Date; to: Date; personId?: PersonFilter }): Promise<TimeException[]> {
   const company = await prisma.company.findUniqueOrThrow({ where: { id: companyId } })
   const tz = company.timezone
   const now = new Date()

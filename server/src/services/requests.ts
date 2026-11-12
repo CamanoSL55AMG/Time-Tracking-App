@@ -7,6 +7,7 @@ import { emit } from './events.js'
 import { requestWindowProblem } from './requestRules.js'
 import { addSegmentTx, editPunchTx } from './punch.js'
 import { weekOf } from './timesheets.js'
+import type { PersonFilter } from '../auth/division.js'
 
 // Change requests: a person asks for their own time to be fixed, a supervisor
 // decides. Approving applies the change as an ordinary audited correction, so the
@@ -176,7 +177,7 @@ export async function viewRequests(rows: ChangeRequest[]) {
   }))
 }
 
-export async function listRequests(companyId: string, opts: { status?: string; personId?: string; weekStart?: string; limit?: number }) {
+export async function listRequests(companyId: string, opts: { status?: string; personId?: PersonFilter; weekStart?: string; limit?: number }) {
   const rows = await prisma.changeRequest.findMany({
     where: { companyId, status: opts.status || undefined, personId: opts.personId || undefined, weekStart: opts.weekStart || undefined },
     orderBy: { createdAt: opts.status === 'pending' ? 'asc' : 'desc' },

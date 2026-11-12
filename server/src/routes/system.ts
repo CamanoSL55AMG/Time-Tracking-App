@@ -8,6 +8,7 @@ import { GROUPS, hoursReport, type Group } from '../services/reports.js'
 import { serviceBilling } from '../services/serviceBilling.js'
 import { addDays, dayBounds, isYmd, startOfLocalDay } from '../lib/time.js'
 import { switchState } from '../services/tower.js'
+import { personFilterFor } from '../auth/division.js'
 
 export const systemRouter = Router()
 
@@ -34,6 +35,7 @@ route(
       personId: 'Only this person',
       jobId: 'Only this job',
     },
+    division: 'scoped',
   },
   async (req) => {
     const auth = requireScope(req, 'reports:read')
@@ -59,7 +61,7 @@ route(
       from,
       to,
       groupBy: groupBy as Group[],
-      personId: str(req.query.personId, 80) || undefined,
+      personId: await personFilterFor(auth, str(req.query.personId, 80) || undefined),
       jobId: str(req.query.jobId, 80) || undefined,
     })
   },

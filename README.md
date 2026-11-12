@@ -208,7 +208,9 @@ calendar as assignments, and its title-bar clock punches through this app.
 
 AIC Terminal (GED) is where people are enrolled. Its Users page turns Logbook on or off
 for each person and sets their Logbook role (tech, crew lead, manager, payroll or admin);
-its key carries `people:roles` so it can set admins too. An older GED key gets that scope
+its key carries `people:roles` so it can set admins too. The division admin role and a
+person's division (`division_admin`, `division`) are set in Logbook's Admin → People (tap
+the role chip) until AIC Terminal's Users page sends them. An older GED key gets that scope
 without being replaced:
 
 ```powershell

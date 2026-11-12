@@ -68,7 +68,10 @@ export interface Person {
   email: string
   name: string
   initials: string
-  role: 'tech' | 'lead' | 'manager' | 'payroll' | 'admin'
+  role: 'tech' | 'lead' | 'manager' | 'payroll' | 'admin' | 'division_admin'
+  /** The part of the company they work in, e.g. Sound Services. A division_admin
+   *  sees and manages only the people in their own division. */
+  division?: string
   active: boolean
   /** An admin set their password: they must pick their own before anything else. */
   mustChangePassword?: boolean
@@ -834,7 +837,7 @@ export const api = {
   roster: () => http.get<{ data: Person[]; contractorsEnabled?: boolean }>('/people').then((r) => ({ people: r.data.data, contractorsEnabled: Boolean(r.data.contractorsEnabled) })),
   savePerson: (
     email: string,
-    body: { name?: string; initials?: string; role?: string; active?: boolean; password?: string; mustChangePassword?: boolean; workerType?: WorkerType; workerTypeFrom?: string | null },
+    body: { name?: string; initials?: string; role?: string; division?: string; active?: boolean; password?: string; mustChangePassword?: boolean; workerType?: WorkerType; workerTypeFrom?: string | null },
   ) =>
     http.put<{ created: boolean; person: Person }>(`/people/by-email/${encodeURIComponent(email)}`, body).then((r) => r.data),
 

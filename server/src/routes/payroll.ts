@@ -7,6 +7,7 @@ import { laborCsv, laborExport, previousSemimonthlyPeriod, semimonthlyPeriod } f
 import { prisma } from '../db.js'
 import { localDate } from '../lib/time.js'
 import { leaveForPayroll } from '../services/leave.js'
+import { personFilterFor } from '../auth/division.js'
 
 export const payrollRouter = Router()
 
@@ -21,6 +22,8 @@ route(
       'Weeks not approved yet are listed under notReady. Off unless PAYROLL_EXPORT_ENABLED=true. ' +
       'With LEAVE_ENABLED=true, approved paid leave comes too: leaveLines (and leave rows in the CSV, job_kind "leave"), leaveHours on each total, and requests still waiting under leavePending.',
     access: ['payroll:read'],
+    // A division admin gets their own division's people only.
+    division: 'scoped',
     query: {
       from: 'First day of the pay period, YYYY-MM-DD (company time)',
       to: 'Last day of the pay period, YYYY-MM-DD, inclusive',
@@ -35,8 +38,9 @@ route(
     const from = str(req.query.from, 10)
     const to = str(req.query.to, 10) || from
     const contractors = config.contractorsEnabled
-    const result = await laborExport(auth.companyId, from, to, { contractors })
-    const leave = config.leaveEnabled ? await leaveForPayroll(auth.companyId, result.from, result.to) : null
+    const personId = await personFilterFor(auth)
+    const result = await laborExport(auth.companyId, from, to, { contractors, personId })
+    const leave = config.leaveEnabled ? await leaveForPayroll(auth.companyId, result.from, result.to, personId) : null
     if (str(req.query.format, 10).toLowerCase() === 'csv') {
       res.setHeader('Content-Type', 'text/csv; charset=utf-8')
       res.setHeader('Content-Disposition', `attachment; filename="labor-${result.from}-to-${result.to}.csv"`)
@@ -69,6 +73,8 @@ route(
     tag: 'Payroll',
     summary: 'The pay periods payroll runs on (the 1st to the 15th, and the 16th to month end): the one today is in, and the one before it.',
     access: ['payroll:read'],
+    // Dates and settings only, no one's hours.
+    division: 'scoped',
   },
   async (req) => {
     const auth = requireScope(req, 'payroll:read')

@@ -26,6 +26,7 @@ import {
   type PolicyRules,
 } from './leaveRules.js'
 import { buildRows, checkMapping, guessMapping, type ImportMapping } from './leaveImport.js'
+import type { PersonFilter } from '../auth/division.js'
 
 // Leave: balances kept as a ledger, Washington sick leave, vacation / PTO policies per
 // person, time-off requests with approval, opening balances from the finance sheet,
@@ -495,7 +496,7 @@ export async function cancelLeaveRequest(actor: LeaveActor, scopes: Set<string>,
   })
 }
 
-export async function listLeaveRequests(companyId: string, opts: { status?: string; personId?: string; from?: string; to?: string; limit?: number }) {
+export async function listLeaveRequests(companyId: string, opts: { status?: string; personId?: PersonFilter; from?: string; to?: string; limit?: number }) {
   const rows = await prisma.leaveRequest.findMany({
     where: {
       companyId,
@@ -576,7 +577,7 @@ export async function addAdjustment(
   })
 }
 
-export async function ledger(companyId: string, opts: { personId?: string; leaveTypeId?: string; from?: string; to?: string; limit?: number }) {
+export async function ledger(companyId: string, opts: { personId?: PersonFilter; leaveTypeId?: string; from?: string; to?: string; limit?: number }) {
   const rows = await prisma.leaveLedger.findMany({
     where: {
       companyId,
@@ -743,7 +744,7 @@ export async function runYearEnd(actor: LeaveActor, year: number, opts: { dryRun
 // ─── Statements, payroll, board, state report ───────────────────────────────
 
 /** Monthly statement (WA requires one at least monthly): earned, used and available per type. */
-export async function statements(companyId: string, month: string, personId?: string) {
+export async function statements(companyId: string, month: string, personId?: PersonFilter) {
   if (!/^\d{4}-\d{2}$/.test(month)) throw badRequest('month must be YYYY-MM.', { field: 'month' })
   const first = `${month}-01`
   const [y, m] = month.split('-').map(Number)
@@ -788,10 +789,10 @@ export interface LeaveLine {
  * normal rate in the period it was used; it is not hours worked, so it never counts
  * toward overtime. Unpaid types (state family leave, unpaid) stay out.
  */
-export async function leaveForPayroll(companyId: string, from: string, to: string) {
+export async function leaveForPayroll(companyId: string, from: string, to: string, personId?: PersonFilter) {
   const company = await prisma.company.findUniqueOrThrow({ where: { id: companyId } })
   const [requests, types] = await Promise.all([
-    prisma.leaveRequest.findMany({ where: { companyId, status: { in: ['approved', 'pending'] }, startDate: { lte: to }, endDate: { gte: from } } }),
+    prisma.leaveRequest.findMany({ where: { companyId, ...(personId ? { personId } : {}), status: { in: ['approved', 'pending'] }, startDate: { lte: to }, endDate: { gte: from } } }),
     prisma.leaveType.findMany({ where: { companyId } }),
   ])
   const type = new Map(types.map((t) => [t.id, t]))
