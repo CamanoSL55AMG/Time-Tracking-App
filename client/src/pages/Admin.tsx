@@ -101,7 +101,7 @@ function People({ isAdmin }: { isAdmin: boolean }) {
   const [adding, setAdding] = useState(false)
   const [form, setForm] = useState({ email: '', name: '', initials: '', role: 'tech', division: '', password: '', workerType: 'employee' as WorkerType })
   // Role and division of someone already on the roster (signed-in admins only).
-  const [roleFor, setRoleFor] = useState<{ person: Person; role: Person['role']; division: string; error: string } | null>(null)
+  const [roleFor, setRoleFor] = useState<{ person: Person; role: Person['role']; division: string; salaried: boolean; error: string } | null>(null)
   const divisions = [...new Set((data ?? []).map((p) => p.division ?? '').filter(Boolean))].sort()
   const [busy, setBusy] = useState(false)
   const [payAs, setPayAs] = useState<{ person: Person; workerType: WorkerType; from: string } | null>(null)
@@ -162,7 +162,7 @@ function People({ isAdmin }: { isAdmin: boolean }) {
     if (!roleFor) return
     setBusy(true)
     try {
-      await api.savePerson(roleFor.person.email, { role: roleFor.role, division: roleFor.division.trim() })
+      await api.savePerson(roleFor.person.email, { role: roleFor.role, division: roleFor.division.trim(), overtimeExempt: roleFor.salaried })
       setRoleFor(null)
       await load()
     } catch (err) {
@@ -211,11 +211,12 @@ function People({ isAdmin }: { isAdmin: boolean }) {
           )}
           {p.mustChangePassword && <Chip size="small" color="info" variant="outlined" label="New password due" title="They must pick their own password at their next sign-in" />}
           {p.division && <Chip size="small" variant="outlined" label={p.division} />}
+          {p.overtimeExempt && <Chip size="small" variant="outlined" label="Salaried" title="No weekly overtime: all their hours go to payroll as regular" />}
           <Chip
             size="small"
             label={roleText(p.role)}
-            onClick={isAdmin ? () => setRoleFor({ person: p, role: p.role, division: p.division ?? '', error: '' }) : undefined}
-            aria-label={isAdmin ? `${p.name} is ${roleText(p.role)}. Change role or division` : undefined}
+            onClick={isAdmin ? () => setRoleFor({ person: p, role: p.role, division: p.division ?? '', salaried: Boolean(p.overtimeExempt), error: '' }) : undefined}
+            aria-label={isAdmin ? `${p.name} is ${roleText(p.role)}. Change role, division or salaried` : undefined}
           />
           {isAdmin && (
             <Button size="small" onClick={() => setPwFor({ person: p, password: '', mustChange: true, saved: false, error: '' })} aria-label={`Set a password for ${p.name}`}>
@@ -278,7 +279,7 @@ function People({ isAdmin }: { isAdmin: boolean }) {
       </Dialog>
 
       <Dialog open={Boolean(roleFor)} onClose={() => setRoleFor(null)} fullWidth maxWidth="xs">
-        <DialogTitle>Role and division: {roleFor?.person.name}</DialogTitle>
+        <DialogTitle>Role, division and pay: {roleFor?.person.name}</DialogTitle>
         <DialogContent>
           <Stack spacing={2} sx={{ pt: 1 }}>
             {roleFor?.error && <Alert severity="error">{roleFor.error}</Alert>}
@@ -306,6 +307,13 @@ function People({ isAdmin }: { isAdmin: boolean }) {
               ))}
             </datalist>
             {roleFor?.role === 'division_admin' && !roleFor.division.trim() && <Alert severity="warning">A division admin with no division sees nobody.</Alert>}
+            <FormControlLabel
+              control={<Switch checked={roleFor?.salaried ?? false} onChange={(e) => roleFor && setRoleFor({ ...roleFor, salaried: e.target.checked })} />}
+              label="Salaried: no weekly overtime"
+            />
+            <Typography variant="body2" color="text.secondary">
+              Salaried staff get no overtime. All their hours go to payroll as regular hours. Leave it off for hourly people.
+            </Typography>
           </Stack>
         </DialogContent>
         <DialogActions>

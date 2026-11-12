@@ -269,6 +269,10 @@ deploy    Dockerfile + docker-compose, same as the other add-ons
   filters by the division; any other route answers 403 `division_not_allowed`. Someone
   outside the division answers 404. Only a signed-in admin or a `people:roles` key sets
   a division or hands out `division_admin`. Full admins still see everyone.
+- **Salaried** (2026-11-11). `Person.overtimeExempt`: salaried (exempt) staff get no
+  weekly overtime; the payroll export sends all their hours as regular. Set it in Admin →
+  People (tap the role chip) or with `overtimeExempt` on `PUT /people/by-email`. Only a
+  signed-in admin or a `people:roles` key changes it, because it decides who is paid overtime.
 - **GPS.** A position is recorded only at the moment of a punch. No background tracking.
   Staff are told this in writing before rollout.
 

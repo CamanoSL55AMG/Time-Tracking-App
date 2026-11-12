@@ -1074,6 +1074,17 @@ try {
     }
     r = await call('GET', `/assignments/${new Date().toISOString().slice(0, 10)}`, { token: div })
     check('division admin: a route not reviewed for divisions is refused', r.status === 403 && r.json?.error?.code === 'division_not_allowed', JSON.stringify(r.json))
+    // Salaried (exempt): pay data, so only signed-in admins (or a people:roles key) set it.
+    r = await call('PUT', `/people/by-email/${encodeURIComponent(inEmail)}`, { token: key, body: { overtimeExempt: true } })
+    check('a key without people:roles cannot mark someone salaried', r.status === 403, JSON.stringify(r.json))
+    r = await call('PUT', `/people/by-email/${encodeURIComponent(inEmail)}`, { token: div, body: { overtimeExempt: true } })
+    check('division admin: cannot mark someone salaried', r.status === 403)
+    r = await call('PUT', `/people/by-email/${encodeURIComponent(inEmail)}`, { token: admin, body: { overtimeExempt: true } })
+    check('an admin marks someone salaried', r.status === 200 && r.json?.person?.overtimeExempt === true, JSON.stringify(r.json))
+    r = await call('PUT', `/people/by-email/${encodeURIComponent(inEmail)}`, { token: admin, body: { overtimeExempt: 'yes' } })
+    check('salaried must be true or false', r.status === 400)
+    r = await call('PUT', `/people/by-email/${encodeURIComponent(inEmail)}`, { token: admin, body: { overtimeExempt: false } })
+    check('an admin marks someone hourly again', r.status === 200 && r.json?.person?.overtimeExempt === false)
     r = await call('PUT', `/people/by-email/${encodeURIComponent(outEmail)}`, { token: div, body: { division: `Smoke Div ${stamp}` } })
     check('division admin: cannot pull someone into the division', r.status === 403)
     r = await call('GET', '/me/state', { token: div })
