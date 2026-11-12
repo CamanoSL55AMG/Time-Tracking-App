@@ -208,32 +208,78 @@ export default function App() {
   return (
     <Box sx={{ minHeight: '100dvh', pb: 'calc(72px + env(safe-area-inset-bottom))' }}>
       <AppBar position="sticky" color="primary" elevation={0} sx={{ background: 'linear-gradient(90deg, #0f2537 0%, #173550 60%, #1d5a6e 100%)', boxShadow: '0 1px 0 rgba(0,0,0,.2)' }}>
-        <Toolbar sx={{ gap: 1, minHeight: { xs: 54, sm: 54 } }}>
-          {/* Same header as AIC Accounting (Art, 2026-11-09) with the standard
-              AICPNW logo: the company name, Advanced Integration Consultants,
-              under the chrome logo (Art, 2026-11-10), then a divider, LOGBOOK, a
-              divider and the company. Phones keep Logbook under the logo. */}
+        <Toolbar sx={{ gap: 1, minHeight: { xs: 54, sm: 54, md: 64 } }}>
+          {/* App header standard (Art, 2026-11-12): the card-one lockup on the left
+              (AICPNW, Advanced Integration Consultants under it, the tagline), LOGBOOK
+              centred on the bar, the company and the user's menu on the right.
+              Folds as the screen narrows:
+                1000px and up  full lockup (342px) + LOGBOOK centred on the bar
+                900-999px      logo and name line (207px) + LOGBOOK right after it,
+                               because centring could reach a long company/user name
+                under 900px    the phone header as before: logo, Logbook under it.
+              The right side is capped (company 200px, name 180px) so the centred name
+              never meets it: at 1000px the centred LOGBOOK spans ~455-545px, the
+              lockup ends at 366px and the right side (412px at most) starts at
+              588px or later (573px with a scrollbar). */}
           <Box sx={{ flex: 1, display: 'flex', alignItems: 'center', gap: '14px', minWidth: 0 }}>
             <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '3px', flexShrink: 0 }}>
-              {/* The name line is an SVG spaced to the logo's exact width, so it stays
-                  within AICPNW (Art, 2026-11-11); the logo is 30px tall while it shows. */}
-              <Box component="img" src="/brand/aicpnw-logo.png" alt="AICPNW" sx={{ height: { xs: 20, sm: 24, md: 30 }, width: 'auto', display: 'block' }} />
-              <Box component="img" src="/brand/aicpnw-name-line.svg" alt="Advanced Integration Consultants" sx={{ display: { xs: 'none', md: 'block' }, width: 159, height: 'auto' }} />
+              <Box component="img" src="/brand/aicpnw-logo.png" alt="AICPNW" sx={{ height: { xs: 20, sm: 24 }, width: 'auto', display: { xs: 'block', md: 'none' } }} />
+              <Box
+                component="img"
+                src="/brand/aicpnw-header-logo-name.svg"
+                alt="AICPNW Advanced Integration Consultants"
+                width={207}
+                height={48}
+                loading="lazy"
+                sx={{ display: { xs: 'none', md: 'block' }, height: 48, width: 'auto', '@media (min-width:1000px)': { display: 'none' } }}
+              />
+              <Box
+                component="img"
+                src="/brand/aicpnw-header-lockup.svg"
+                alt="AICPNW Advanced Integration Consultants. Automate the routine. Connect the rest."
+                width={342}
+                height={48}
+                loading="lazy"
+                sx={{ display: 'none', height: 48, width: 'auto', '@media (min-width:1000px)': { display: 'block' } }}
+              />
               <Box component="span" sx={{ display: { xs: 'block', md: 'none' }, fontSize: { xs: 10, sm: 11 }, fontWeight: 600, letterSpacing: '0.16em', textTransform: 'uppercase', color: '#c9d1d7', lineHeight: 1, whiteSpace: 'nowrap' }}>
                 Logbook
               </Box>
             </Box>
-            <Box component="span" sx={{ display: { xs: 'none', md: 'inline' }, flexShrink: 0, fontSize: 12, fontWeight: 700, letterSpacing: '0.16em', textTransform: 'uppercase', color: '#e6ecf2', pl: '14px', borderLeft: '1px solid rgba(255,255,255,.22)', lineHeight: '24px', whiteSpace: 'nowrap' }}>
+            <Box
+              component="span"
+              sx={{
+                display: { xs: 'none', md: 'block' },
+                ml: '10px',
+                pl: '0.16em', // balances the letter-spacing after the last letter
+                flexShrink: 0,
+                fontSize: 15,
+                fontWeight: 700,
+                letterSpacing: '0.16em',
+                textTransform: 'uppercase',
+                color: '#E6ECF2',
+                lineHeight: 1,
+                whiteSpace: 'nowrap',
+                '@media (min-width:1000px)': { position: 'absolute', left: '50%', top: '50%', transform: 'translate(-50%, -50%)', ml: 0, pointerEvents: 'none' },
+              }}
+            >
               Logbook
             </Box>
             {companyName && (
-              <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' }, fontSize: 14, opacity: 0.7, pl: '14px', borderLeft: '1px solid rgba(255,255,255,.22)', lineHeight: '24px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>
+              <Box component="span" sx={{ display: { xs: 'none', sm: 'inline', md: 'none' }, fontSize: 14, opacity: 0.7, pl: '14px', borderLeft: '1px solid rgba(255,255,255,.22)', lineHeight: '24px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>
                 {companyName}
               </Box>
             )}
           </Box>
-          <Button color="inherit" onClick={(e) => setMenuAt(e.currentTarget)} sx={{ fontWeight: 600 }}>
-            {person.name}
+          {companyName && (
+            <Box component="span" title={companyName} sx={{ display: { xs: 'none', md: 'block' }, maxWidth: 200, fontSize: 14, opacity: 0.7, pr: '14px', borderRight: '1px solid rgba(255,255,255,.22)', lineHeight: '24px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>
+              {companyName}
+            </Box>
+          )}
+          <Button color="inherit" onClick={(e) => setMenuAt(e.currentTarget)} sx={{ fontWeight: 600, minWidth: { md: 0 }, maxWidth: { md: 180 } }}>
+            <Box component="span" sx={{ whiteSpace: { md: 'nowrap' }, overflow: { md: 'hidden' }, textOverflow: { md: 'ellipsis' } }}>
+              {person.name}
+            </Box>
           </Button>
           <Menu anchorEl={menuAt} open={Boolean(menuAt)} onClose={() => setMenuAt(null)}>
             <MenuItem disabled sx={{ opacity: '1 !important' }}>
