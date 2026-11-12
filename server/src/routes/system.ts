@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { prisma } from '../db.js'
 import { limitOf, openApiDocument, optionalDate, registry, requiredStr, route, str } from '../api.js'
-import { badRequest, notFound } from '../errors.js'
+import { ApiError, badRequest, notFound } from '../errors.js'
 import { requireScope } from '../auth/middleware.js'
 import { generateKey, isScope, KEYS_MANAGE, SCOPES } from '../auth/apiKeys.js'
 import { GROUPS, hoursReport, type Group } from '../services/reports.js'
@@ -9,6 +9,8 @@ import { serviceBilling } from '../services/serviceBilling.js'
 import { addDays, dayBounds, isYmd, startOfLocalDay } from '../lib/time.js'
 import { switchState } from '../services/tower.js'
 import { personFilterFor } from '../auth/division.js'
+import { config } from '../config.js'
+import { pushShopPunches, pushStatus } from '../services/stageforgePush.js'
 
 export const systemRouter = Router()
 
@@ -244,6 +246,45 @@ route(
     if (!key) throw notFound('API key')
     const row = await prisma.apiKey.update({ where: { id: key.id }, data: { revokedAt: key.revokedAt ?? new Date() } })
     return { apiKey: keyView(row) }
+  },
+)
+
+// ─── Shop punches to Stage Forge (services/stageforgePush.ts) ──────────────
+
+route(
+  systemRouter,
+  {
+    method: 'get',
+    path: '/integrations/stageforge/punches',
+    tag: 'Integration',
+    summary: 'Sending Sound Services punches to Stage Forge: whether it is on, how many segments were sent, and the last failures. Admins only.',
+    access: [KEYS_MANAGE],
+  },
+  async (req) => {
+    const auth = requireScope(req, KEYS_MANAGE)
+    return pushStatus(auth.companyId)
+  },
+)
+
+route(
+  systemRouter,
+  {
+    method: 'post',
+    path: '/integrations/stageforge/punches/push',
+    tag: 'Integration',
+    summary:
+      'Send the division\'s finished punch segments in a date range to Stage Forge now (new and changed ones only). ' +
+      'dryRun: true shows what would go and sends nothing; it works even while sending is off. Admins only.',
+    access: [KEYS_MANAGE],
+    body: { from: 'First day, YYYY-MM-DD (company time)', to: 'Last day, YYYY-MM-DD, inclusive (63 days at most)', dryRun: 'true to only show what would be sent' },
+  },
+  async (req) => {
+    const auth = requireScope(req, KEYS_MANAGE)
+    const dryRun = req.body?.dryRun === true
+    if (!dryRun && !config.stageforgePunchPush) {
+      throw new ApiError(403, 'stageforge_push_off', 'Sending punches to Stage Forge is turned off. Set STAGEFORGE_PUNCH_PUSH=true in server/.env and restart.')
+    }
+    return pushShopPunches(auth.companyId, { from: str(req.body?.from, 10), to: str(req.body?.to, 10), dryRun })
   },
 )
 

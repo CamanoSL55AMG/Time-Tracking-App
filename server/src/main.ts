@@ -25,6 +25,7 @@ import { termsRouter } from './routes/terms.js'
 import { leaveRouter } from './routes/leave.js'
 import { logbookSwitch, startTowerSwitch } from './services/tower.js'
 import { startRecurringExpenses } from './services/recurringExpenses.js'
+import { startStageForgePush } from './services/stageforgePush.js'
 
 assertConfig()
 logTermsAtStart()
@@ -130,6 +131,7 @@ const server = app.listen(config.port, () => {
   console.log(`Time Tracking API on http://localhost:${config.port}  (docs: /api/v1/docs)`)
   startTowerSwitch()
   startRecurringExpenses(config.recurringCheckMinutes)
+  startStageForgePush()
 })
 
 const shutdown = () => {

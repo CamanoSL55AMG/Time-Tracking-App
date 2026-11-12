@@ -662,3 +662,23 @@ model LeaveRequest {
   @@index([personId, startDate])
   @@index([companyId, startDate])
 }
+
+// Shop punches sent to Stage Forge (STAGEFORGE_PUNCH_PUSH, services/stageforgePush.ts):
+// one row per punch segment, so a segment goes once and again only when it changes.
+model StageForgePush {
+  id          String    @id @default(uuid())
+  companyId   String
+  punchId     String
+  // SHA-256 of the time activity last sent; a changed punch sends again.
+  payloadHash String
+  status      String // sent | failed
+  sfId        String? // Stage Forge's id for the time activity, when it answers with one
+  error       String    @default("")
+  attempts    Int       @default(0)
+  sentAt      DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([companyId, punchId])
+  @@index([companyId, status])
+}
