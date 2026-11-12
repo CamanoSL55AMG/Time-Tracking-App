@@ -26,6 +26,7 @@ export const publicPerson = (p: Person) => ({
   mustChangePassword: p.mustChangePassword,
   workerType: p.workerType,
   workerTypeFrom: p.workerTypeFrom,
+  overtimeExempt: p.overtimeExempt,
   scopes: ROLE_SCOPES[isRole(p.role) ? p.role : 'tech'],
 })
 

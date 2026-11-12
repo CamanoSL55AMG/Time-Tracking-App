@@ -47,6 +47,7 @@ route(
       mustChangePassword: 'true or false: whether they must pick a new password at their next sign-in (signed-in admins only)',
       workerType: 'employee (W-2) | contractor (1099). Only with CONTRACTORS_ENABLED=true',
       workerTypeFrom: 'YYYY-MM-DD the worker type starts (company time). A change defaults to today',
+      overtimeExempt: 'true for salaried (exempt) staff: no weekly overtime, all their hours go to payroll as regular. Signed-in admins or a key with people:roles',
     },
   },
   async (req) => {
@@ -74,6 +75,15 @@ route(
     const division = req.body?.division === undefined ? undefined : normalizeDivision(req.body.division)
     if (division !== undefined && division !== (existing?.division ?? '') && !mayManageAdmins) {
       throw forbidden('Only a signed-in admin can change someone\'s division.')
+    }
+    // Salaried (exempt) or hourly decides who gets overtime, so it is pay data: the same guard.
+    let overtimeExempt: boolean | undefined
+    if (req.body?.overtimeExempt !== undefined) {
+      if (typeof req.body.overtimeExempt !== 'boolean') throw badRequest('overtimeExempt must be true or false.', { field: 'overtimeExempt' })
+      overtimeExempt = req.body.overtimeExempt
+      if (overtimeExempt !== (existing?.overtimeExempt ?? false) && !mayManageAdmins) {
+        throw forbidden('Only a signed-in admin can change whether someone is salaried.')
+      }
     }
 
     // Never leave the company without an admin who can sign in.
@@ -121,7 +131,7 @@ route(
       const saved = existing
         ? await tx.person.update({
             where: { id: existing.id },
-            data: { name: name || undefined, initials, role, division, active, passwordHash, mustChangePassword, ...worker },
+            data: { name: name || undefined, initials, role, division, active, passwordHash, mustChangePassword, overtimeExempt, ...worker },
           })
         : await tx.person.create({
             data: {
@@ -134,10 +144,11 @@ route(
               active: active ?? true,
               passwordHash,
               mustChangePassword,
+              overtimeExempt: overtimeExempt ?? false,
               ...worker,
             },
           })
-      await emit(tx, auth.companyId, 'person.upserted', { person: { id: saved.id, email: saved.email, name: saved.name, role: saved.role, division: saved.division, active: saved.active, workerType: saved.workerType } })
+      await emit(tx, auth.companyId, 'person.upserted', { person: { id: saved.id, email: saved.email, name: saved.name, role: saved.role, division: saved.division, active: saved.active, workerType: saved.workerType, overtimeExempt: saved.overtimeExempt } })
       return saved
     })
     return { created: !existing, person: publicPerson(person) }
