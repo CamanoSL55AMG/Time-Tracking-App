@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { createHmac } from 'node:crypto'
 import { signSsoToken, verifySsoToken, type SsoPayload } from './ssoToken.js'
 import { passwordChangeBlocks } from './passwordChange.js'
-import { generateKey, hashKey, isScope, looksLikeKey, ROLE_SCOPES, FIX_APPROVE, KEYS_MANAGE, SELF, PEOPLE_ROLES, GED_KEY_SCOPES } from './apiKeys.js'
+import { generateKey, hashKey, isRole, isScope, looksLikeKey, ROLE_SCOPES, FIX_APPROVE, KEYS_MANAGE, SELF, PEOPLE_ROLES, GED_KEY_SCOPES } from './apiKeys.js'
 
 const secret = 'test-secret-test-secret-test-secret'
 const now = 1_800_000_000
@@ -90,4 +90,13 @@ test('a person told to change their password reaches only the sign-in endpoints'
   // An integration key acting for the person is not held back.
   assert.equal(passwordChangeBlocks({ via: 'key', person: { mustChangePassword: true } }, '/punches/in'), false)
   assert.equal(passwordChangeBlocks(undefined, '/board'), false)
+})
+
+test('sales has a tech\'s access and a shop supervisor a crew lead\'s (Art, 2026-11-11)', () => {
+  assert.equal(isRole('sales'), true)
+  assert.equal(isRole('shop_supervisor'), true)
+  assert.deepEqual(ROLE_SCOPES.sales, ROLE_SCOPES.tech)
+  assert.deepEqual(ROLE_SCOPES.shop_supervisor, ROLE_SCOPES.lead)
+  assert.ok(!ROLE_SCOPES.shop_supervisor.includes(FIX_APPROVE))
+  assert.ok(!ROLE_SCOPES.shop_supervisor.includes('timesheets:approve'))
 })

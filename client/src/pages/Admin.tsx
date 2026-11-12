@@ -84,10 +84,10 @@ const Row = ({ children, dim }: { children: ReactNode; dim?: boolean }) => (
 
 // ─── People ─────────────────────────────────────────────────────────────────
 
-const ROLES: Person['role'][] = ['tech', 'lead', 'manager', 'payroll', 'admin', 'division_admin']
+const ROLES: Person['role'][] = ['tech', 'sales', 'lead', 'shop_supervisor', 'manager', 'payroll', 'admin', 'division_admin']
 // Only a signed-in admin hands these out (the server checks too).
 const GUARDED: Person['role'][] = ['admin', 'division_admin']
-const ROLE_TEXT: Partial<Record<Person['role'], string>> = { division_admin: 'division admin' }
+const ROLE_TEXT: Partial<Record<Person['role'], string>> = { division_admin: 'division admin', shop_supervisor: 'shop supervisor' }
 const roleText = (r: Person['role']) => ROLE_TEXT[r] ?? r
 
 // W-2 employee or 1099 contractor. Shown only when the server has CONTRACTORS_ENABLED.
