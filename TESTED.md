@@ -57,6 +57,7 @@ _None._
 
 | Date | What | How it was checked | Code |
 |---|---|---|---|
+| 2026-11-13 | Location declined flag: each punch keeps whether the phone shared its position; declined punches show to approvers (row chip, week count with a filter, "Needs a look" list, "location declined" on the segment); the worker is told right after the punch (not on the Bench Repair screen) | Unit tests (`lib/geo.test.ts`, `lib/locationFlags.test.ts`) and the full smoke run on a local copy (254 checks pass). Not yet tried on a phone | `server/src/lib/geo.ts`, `server/src/lib/locationFlags.ts`, `server/src/services/exceptions.ts`, `client/src/api.ts` (readGeo), `client/src/pages/Punch.tsx` (NoLocationNotice), `client/src/pages/Review.tsx`, `client/src/pages/Week.tsx` (WeekDetail) |
 | 2026-11-07 | AIC Terminal takes over Logbook app access and roles (people:roles key scope) | Dell journal after the 2 PM deploy: 26 people taken over from Logbook, the key has its scopes | `server/src/auth/apiKeys.ts`, `server/scripts/grant-ged-scopes.ts` |
 | 2026-11-04 | On/off switch from AIC Control Tower (through Cloudflare Access) | Dell check after the deploy, tested both ways | `server/src/services/tower.ts` |
 | 2026-11-04 | Payroll labor export to AIC Accounting | On the Dell: AIC Accounting's key read the Nov 1 to 15 labor feed | `server/src/services/payroll.ts`, `server/src/routes/payroll.ts` |

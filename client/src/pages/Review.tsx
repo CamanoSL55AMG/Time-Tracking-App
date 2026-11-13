@@ -58,6 +58,7 @@ export default function ReviewPage({
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [showNotes, setShowNotes] = useState(false)
+  const [onlyDeclined, setOnlyDeclined] = useState(false)
   // Change requests waiting for a decision, from any week.
   const [requests, setRequests] = useState<ChangeRequest[]>([])
   // Times people fixed themselves that nobody has looked at yet, from any week.
@@ -130,8 +131,12 @@ export default function ReviewPage({
     )
   }
 
-  const problems = sheet.exceptions.filter((x) => x.severity === 'problem')
-  const notes = sheet.exceptions.filter((x) => x.severity === 'note')
+  // "Location declined" chip: show only the people (and flags) with a punch made with location declined.
+  const declinedOnly = onlyDeclined && (sheet.counts.locationDeclined ?? 0) > 0
+  const rows = declinedOnly ? sheet.rows.filter((r) => (r.locationDeclined ?? 0) > 0) : sheet.rows
+  const shown = declinedOnly ? sheet.exceptions.filter((x) => x.code === 'location_declined') : sheet.exceptions
+  const problems = shown.filter((x) => x.severity === 'problem')
+  const notes = shown.filter((x) => x.severity === 'note')
   const total = sheet.rows.reduce((s, r) => s + r.hours, 0)
   const allPicked = selectable.length > 0 && selectable.every((r) => picked.has(r.person.id))
 
@@ -146,6 +151,15 @@ export default function ReviewPage({
         <Chip color="info" variant="outlined" label={`${sheet.counts.signed} signed`} />
         <Chip variant="outlined" label={`${sheet.counts.open} not signed`} />
         {!sheet.weekOver && <Chip color="warning" variant="outlined" label="Week not over yet" />}
+        {(sheet.counts.locationDeclined ?? 0) > 0 && (
+          <Chip
+            color="warning"
+            variant={declinedOnly ? 'filled' : 'outlined'}
+            onClick={() => setOnlyDeclined(!declinedOnly)}
+            label={`${sheet.counts.locationDeclined} punch${sheet.counts.locationDeclined === 1 ? '' : 'es'} with location declined${declinedOnly ? ' · show all' : ''}`}
+            sx={{ fontWeight: 700 }}
+          />
+        )}
       </Stack>
 
       {requests.length > 0 && (
@@ -216,7 +230,7 @@ export default function ReviewPage({
               </TableRow>
             </TableHead>
             <TableBody>
-              {sheet.rows.map((r) => (
+              {rows.map((r) => (
                 <TableRow key={r.person.id} hover sx={{ cursor: 'pointer' }} onClick={() => setOpen(r)}>
                   {canApprove && (
                     <TableCell padding="checkbox" onClick={(e) => e.stopPropagation()}>
@@ -257,6 +271,7 @@ export default function ReviewPage({
                         <StatusChip status={r.status} />
                       )}
                       {r.pendingRequests > 0 && <Chip size="small" color="warning" variant="outlined" label={`${r.pendingRequests} change${r.pendingRequests === 1 ? '' : 's'} waiting`} />}
+                      {(r.locationDeclined ?? 0) > 0 && <Chip size="small" color="warning" variant="outlined" label={`${r.locationDeclined} location declined`} />}
                       {(r.editsToReview ?? 0) > 0 && <Chip size="small" color="info" variant="outlined" label={`${r.editsToReview} fixed by them`} />}
                     </Stack>
                   </TableCell>
@@ -317,7 +332,7 @@ export default function ReviewPage({
       {notes.length > 0 && (
         <Box>
           <Button size="small" onClick={() => setShowNotes(!showNotes)}>
-            {showNotes ? 'Hide' : 'Show'} {notes.length} note{notes.length === 1 ? '' : 's'} (corrections, punches away from the site, punches sent late)
+            {showNotes ? 'Hide' : 'Show'} {notes.length} note{notes.length === 1 ? '' : 's'} (corrections, punches away from the site, punches without location, punches sent late)
           </Button>
           {showNotes && <ExceptionList items={notes} showName />}
         </Box>
