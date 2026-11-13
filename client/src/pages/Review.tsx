@@ -28,6 +28,7 @@ import { DecideButtons, RequestCard } from './Requests'
 import { ExpenseApprovals } from './Expenses'
 import { TeamOpenItems } from './items'
 import type { ChangeRequest, ServiceBilling } from '../api'
+import { useTimeCheck } from '../components/TimeCheck'
 
 // The approver's week: everyone's hours by day, who has signed, what needs a look.
 // Approve the rows that are right; an approved week is locked until reopened.
@@ -516,7 +517,11 @@ function EditSegment({ segment, onClose, onSaved }: { segment: WeekSegment; onCl
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
 
-  const save = async () => {
+  const timeCheck = useTimeCheck()
+  // The times to save come in as arguments: the AM/PM check may have switched one.
+  const save = async (clockIn: string, clockOut: string) => {
+    setClockIn(clockIn)
+    setClockOut(clockOut)
     setSaving(true)
     setError('')
     try {
@@ -556,10 +561,15 @@ function EditSegment({ segment, onClose, onSaved }: { segment: WeekSegment; onCl
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>Cancel</Button>
-        <Button variant="contained" disabled={saving || !reason.trim() || !clockIn} onClick={save}>
+        <Button variant="contained" disabled={saving || !reason.trim() || !clockIn} onClick={() => {
+            const touched = clockIn !== toLocalInput(segment.clockIn) || clockOut !== toLocalInput(segment.clockOut)
+            if (touched) timeCheck.guard(clockIn, clockOut, (ci, co) => void save(ci, co))
+            else void save(clockIn, clockOut)
+          }}>
           {saving ? 'Saving…' : 'Save correction'}
         </Button>
       </DialogActions>
+      {timeCheck.dialog}
     </Dialog>
   )
 }

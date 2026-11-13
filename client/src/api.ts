@@ -231,6 +231,8 @@ export interface BoardRow {
   personId: string
   name: string
   email: string
+  /** Their division, e.g. Sound Services ('' = none). The board groups people by it. */
+  division?: string
   onClock: boolean
   jobName: string
   phaseName: string
@@ -402,7 +404,7 @@ export interface ApiKey {
 
 export type SheetStatus = 'open' | 'signed' | 'approved'
 export interface TimeException {
-  code: 'missed_clock_out' | 'long_day' | 'away_from_site' | 'away_from_shop' | 'edited' | 'sent_late' | 'location_declined' | 'no_location'
+  code: 'missed_clock_out' | 'long_day' | 'am_pm' | 'away_from_site' | 'away_from_shop' | 'edited' | 'sent_late' | 'location_declined' | 'no_location'
   severity: 'problem' | 'note'
   personId: string
   personName: string
