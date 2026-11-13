@@ -387,7 +387,7 @@ Views and reports
 | --- | --- | --- |
 | GET | `/board` | Tower: everyone's current job and phase |
 | GET | `/reports/hours` | Hours grouped by any of person / job / phase / day / week |
-| GET | `/reports/exceptions` | Overlaps, missed punches, long shifts, off-site punches |
+| GET | `/reports/exceptions` | Overlaps, missed punches, long shifts, likely AM/PM slips, off-site punches |
 | GET | `/reports/reconcile` | Our hours vs Timesheets.com per person per day (parallel run only) |
 
 Payroll
@@ -731,3 +731,11 @@ Jake asked for a way to go back and clean up a day; Art approved (2026-11-09): "
 - **Review** lists "Times techs fixed themselves" with before → after and the reason. Managers, admins and payroll press **Looks right** or **Mark all looked at** (not on their own fixes, unless admin). The week sheet shows "N fixed by them" per person. An unreviewed fix does not hold up approving the week.
 - Switch: `SELF_EDIT_ENABLED` (default on; `false` sends every fix back through change requests). `GET /auth/config` reports it as `features.selfEdit`.
 - Schema: `PunchEdit.selfEdit`, `reviewedById`, `reviewedAt` (new columns only). Run `npx prisma db push` after pulling; `deploy.sh` does.
+
+### AM/PM check (2026-11-12)
+
+Nate's clock-in went in as 6:19 PM instead of 6:19 AM and the day showed 14.6 hours. Live punches use the server's clock, so the slip comes from a typed time.
+
+- **Before a typed time saves** (Fix times, Fix your start or clock-out time, Add missing time, Ask for a change, and the supervisor's Correct segment), a pop-up asks when the clock-in is between **5 PM and 4 AM**, the shift is **over 12 hours**, or the clock-out is **not after** the clock-in. It offers the likely switch ("Clock-in at 6:19 PM? Did you mean 6:19 AM?"), **Keep as entered**, or **Go back**. It is a warning, never a block: night work saves with Keep as entered. A switch is only offered when it gives a 2 to 12 hour shift. Only changed times are questioned. Same look as the Reload card (black card, yellow border and button). Logic: `client/src/timeCheck.ts` (tests: `cd client && npm test`).
+- **Review** flags a day that started between 5 PM and 4 AM and ran over 12 hours as a problem, `am_pm`: "Clocked in at 6:19 PM for a 14.6 h day. AM/PM mix-up?" The plain `long_day` flag stays as it was. Logic: `server/src/lib/amPm.ts`.
+- To change the windows, edit the constants at the top of both files.
