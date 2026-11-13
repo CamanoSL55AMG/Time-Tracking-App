@@ -1,3 +1,4 @@
+// TESTED & APPROVED by Art 2026-11-13: (part) location status on each punch (resolveGeoStatus, geoFlag). See TESTED.md before changing.
 export interface GeoStamp {
   lat: number
   lng: number

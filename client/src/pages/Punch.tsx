@@ -1,4 +1,5 @@
 // TESTED & APPROVED by Art 2026-11-01: (part) Bench Repair shows only bench work. See TESTED.md before changing.
+// TESTED & APPROVED by Art 2026-11-13: (part) NoLocationNotice shown after a punch without location. See TESTED.md before changing.
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Alert,

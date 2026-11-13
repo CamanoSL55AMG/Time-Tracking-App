@@ -1,3 +1,4 @@
+// TESTED & APPROVED by Art 2026-11-13: (part) location_declined and no_location notes. See TESTED.md before changing.
 import { prisma } from '../db.js'
 import { hoursBetween, localDate } from '../lib/time.js'
 import { insideFence, type Fence } from '../lib/geo.js'

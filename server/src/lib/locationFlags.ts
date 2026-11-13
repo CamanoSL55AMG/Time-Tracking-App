@@ -1,3 +1,4 @@
+// TESTED & APPROVED by Art 2026-11-13: location declined flags. See TESTED.md before changing.
 import { geoFlag } from './geo.js'
 
 // Punches made without the phone's position, for the review screens (Art, 2026-11-13:

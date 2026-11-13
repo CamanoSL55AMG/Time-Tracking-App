@@ -1,3 +1,4 @@
+// TESTED & APPROVED by Art 2026-11-13: (part) location declined chips and filter. See TESTED.md before changing.
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Alert,
