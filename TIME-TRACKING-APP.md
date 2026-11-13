@@ -278,6 +278,9 @@ deploy    Dockerfile + docker-compose, same as the other add-ons
   signed-in admin or a `people:roles` key changes it, because it decides who is paid overtime.
 - **GPS.** A position is recorded only at the moment of a punch. No background tracking.
   Staff are told this in writing before rollout.
+  If the phone gives none, the punch still counts and keeps why (`inGeoStatus` / `outGeoStatus`:
+  denied, unavailable, timeout, unsupported). Declined shows to approvers as a problem;
+  the others as a note (Art, 2026-11-13).
 
 ### Data model (sketch)
 

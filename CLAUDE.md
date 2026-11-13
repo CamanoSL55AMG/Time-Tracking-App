@@ -1,5 +1,10 @@
 # CLAUDE.md — Time Tracking
 
+**Before you change anything, read [TESTED.md](TESTED.md).** It lists what Art has
+tested and approved. Approved items are hands off unless Art asks for the change
+himself; files carrying a `TESTED & APPROVED` comment at the top are covered by it.
+When Art approves something new, add its row to TESTED.md and the comment to its file.
+
 Context for AI coding agents. The product plan is `TIME-TRACKING-APP.md`; read its
 phases before adding features.
 

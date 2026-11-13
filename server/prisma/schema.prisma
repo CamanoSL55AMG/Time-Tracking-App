@@ -178,6 +178,12 @@ model Punch {
   outLat       Float?
   outLng       Float?
   outAccuracyM Float?
+  // What happened when the phone was asked for its position at the punch: captured,
+  // denied (the person said no or location is off for the app), unavailable, timeout
+  // or unsupported. Null for punches with no phone behind them (edits, integrations)
+  // and for punches made before this was recorded (Art, 2026-11-13).
+  inGeoStatus  String?
+  outGeoStatus String?
   notes        String    @default("")
   clientId     String? // generated on the phone; makes offline re-sends harmless
   apiKeyId     String? // set when an integration punched on the person's behalf

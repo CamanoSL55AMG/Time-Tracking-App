@@ -2,7 +2,7 @@ import type { Company, Job, Person, Phase, Prisma, Punch } from '@prisma/client'
 import { prisma, type Tx } from '../db.js'
 import { ApiError, badRequest, conflict, forbidden, notFound } from '../errors.js'
 import { addDays, dayBounds, hoursBetween, localDate, startOfLocalDay } from '../lib/time.js'
-import { insideFence, type Fence, type GeoStamp } from '../lib/geo.js'
+import { insideFence, resolveGeoStatus, type Fence, type GeoStamp, type GeoStatus } from '../lib/geo.js'
 import { emit } from './events.js'
 import { touchWeeks } from './timesheets.js'
 import { config } from '../config.js'
@@ -35,6 +35,8 @@ export interface PunchInput {
   phaseId?: string
   phaseKey?: string
   geo?: GeoStamp | null
+  /** What the phone answered when asked for its position (see resolveGeoStatus). */
+  geoStatus?: GeoStatus | null
   at?: Date
   clientId?: string
   notes?: string
@@ -102,8 +104,10 @@ function checkAt(at: Date): void {
   }
 }
 
-const geoIn = (geo?: GeoStamp | null) => ({ inLat: geo?.lat ?? null, inLng: geo?.lng ?? null, inAccuracyM: geo?.accuracyM ?? null })
-const geoOut = (geo?: GeoStamp | null) => ({ outLat: geo?.lat ?? null, outLng: geo?.lng ?? null, outAccuracyM: geo?.accuracyM ?? null })
+type GeoIn = Pick<PunchInput, 'geo' | 'geoStatus'>
+const statusOf = (i: GeoIn) => resolveGeoStatus(i.geo, i.geoStatus)
+const geoIn = (i: GeoIn) => ({ inLat: i.geo?.lat ?? null, inLng: i.geo?.lng ?? null, inAccuracyM: i.geo?.accuracyM ?? null, inGeoStatus: statusOf(i) })
+const geoOut = (i: GeoIn) => ({ outLat: i.geo?.lat ?? null, outLng: i.geo?.lng ?? null, outAccuracyM: i.geo?.accuracyM ?? null, outGeoStatus: statusOf(i) })
 
 const summary = (p: PunchRow) => ({
   id: p.id,
@@ -114,6 +118,8 @@ const summary = (p: PunchRow) => ({
   phaseKey: p.phase?.key ?? null,
   clockIn: p.clockIn,
   clockOut: p.clockOut,
+  inGeoStatus: p.inGeoStatus,
+  outGeoStatus: p.outGeoStatus,
 })
 
 /** Open the next segment after closing any open one. Caller holds the person lock. */
@@ -135,7 +141,7 @@ async function openSegment(
     if (at.getTime() < open.clockIn.getTime()) {
       throw conflict('punch_overlap', 'That time is before the current segment started.', { openSince: open.clockIn })
     }
-    switchedFrom = await tx.punch.update({ where: { id: open.id }, data: { clockOut: at, ...geoOut(input.geo) }, include })
+    switchedFrom = await tx.punch.update({ where: { id: open.id }, data: { clockOut: at, ...geoOut(input) }, include })
   } else {
     const last = await tx.punch.findFirst({
       where: { personId: person.id, clockOut: { not: null } },
@@ -182,7 +188,7 @@ async function openSegment(
       punchedById: actor.punchedById ?? null,
       clientId: input.clientId || null,
       notes: input.notes ?? '',
-      ...geoIn(input.geo),
+      ...geoIn(input),
     },
     include,
   })
@@ -217,7 +223,7 @@ export async function punchIn(actor: Actor, person: Person, input: PunchInput) {
 }
 
 /** Move to the next phase of the day (or a named one) on the same job. */
-export async function punchNext(actor: Actor, person: Person, input: Pick<PunchInput, 'phaseId' | 'phaseKey' | 'geo' | 'at' | 'clientId'>) {
+export async function punchNext(actor: Actor, person: Person, input: Pick<PunchInput, 'phaseId' | 'phaseKey' | 'geo' | 'geoStatus' | 'at' | 'clientId'>) {
   if (input.at) checkAt(input.at)
   return prisma.$transaction(async (tx) => {
     await lockPerson(tx, person.id)
@@ -260,7 +266,7 @@ export async function punchNext(actor: Actor, person: Person, input: Pick<PunchI
   })
 }
 
-export async function punchOut(actor: Actor, person: Person, input: Pick<PunchInput, 'geo' | 'at'>) {
+export async function punchOut(actor: Actor, person: Person, input: Pick<PunchInput, 'geo' | 'geoStatus' | 'at'>) {
   if (input.at) checkAt(input.at)
   return prisma.$transaction(async (tx) => {
     await lockPerson(tx, person.id)
@@ -273,7 +279,7 @@ export async function punchOut(actor: Actor, person: Person, input: Pick<PunchIn
       throw conflict('punch_overlap', 'That time is before the current segment started.', { openSince: open.clockIn })
     }
     await touchWeeks(tx, actor.companyId, person.id, [open.clockIn, at], 'clock-out')
-    const punch = await tx.punch.update({ where: { id: open.id }, data: { clockOut: at, ...geoOut(input.geo) }, include })
+    const punch = await tx.punch.update({ where: { id: open.id }, data: { clockOut: at, ...geoOut(input) }, include })
     await emit(tx, actor.companyId, 'punch.ended', { punch: summary(punch) })
     return { punch }
   })

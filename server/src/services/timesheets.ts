@@ -202,6 +202,9 @@ export async function weekSheet(companyId: string, rawWeek?: string, only: strin
   }
   const problemsBy = new Map<string, number>()
   for (const x of exceptions) if (x.severity === 'problem') problemsBy.set(x.personId, (problemsBy.get(x.personId) ?? 0) + 1)
+  // Punches made with location declined on the phone, per person (Art, 2026-11-13).
+  const declinedBy = new Map<string, number>()
+  for (const x of exceptions) if (x.code === 'location_declined') declinedBy.set(x.personId, (declinedBy.get(x.personId) ?? 0) + 1)
 
   // Everyone who worked this week, plus active people with a sheet (signed with no hours is still worth seeing).
   const ids = new Set<string>([...rows.keys(), ...sheets.map((s) => s.personId), ...pendingBy.keys()])
@@ -215,6 +218,7 @@ export async function weekSheet(companyId: string, rawWeek?: string, only: strin
         hours: r.hours.reduce((a, b) => a + b, 0),
         openSegment: r.open,
         problems: problemsBy.get(p.id) ?? 0,
+        locationDeclined: declinedBy.get(p.id) ?? 0,
         pendingRequests: pendingBy.get(p.id) ?? 0,
         ...sheetView(sheetBy.get(p.id) ?? null, names, days[6]),
       }
@@ -236,6 +240,7 @@ export async function weekSheet(companyId: string, rawWeek?: string, only: strin
       signed: out.filter((r) => r.status === 'signed').length,
       open: out.filter((r) => r.status === 'open').length,
       pendingRequests: pendingRows.length,
+      locationDeclined: exceptions.filter((x) => x.code === 'location_declined').length,
     },
   }
 }
