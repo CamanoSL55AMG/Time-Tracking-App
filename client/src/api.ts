@@ -231,6 +231,8 @@ export interface BoardRow {
   personId: string
   name: string
   email: string
+  /** Their division, e.g. Sound Services ('' = none). The board groups people by it. */
+  division?: string
   onClock: boolean
   jobName: string
   phaseName: string

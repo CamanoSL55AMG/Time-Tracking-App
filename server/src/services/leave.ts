@@ -1025,13 +1025,13 @@ export async function usableFromFor(companyId: string, personId: string, leaveTy
 export async function boardWithLeave<R extends { personId: string; name: string; email: string; onClock: boolean }>(
   companyId: string,
   b: { date: string; rows: R[] },
-  blank: (p: { id: string; name: string; email: string }) => R,
+  blank: (p: { id: string; name: string; email: string; division: string }) => R,
 ) {
   const off = await offOn(companyId, b.date)
   if (!off.size) return { ...b, rows: b.rows.map((r) => ({ ...r, off: null })) }
   const have = new Set(b.rows.map((r) => r.personId))
   const missing = await prisma.person.findMany({ where: { companyId, id: { in: [...off.keys()].filter((id) => !have.has(id)) }, active: true } })
-  const rows = [...b.rows, ...missing.map((p) => blank({ id: p.id, name: p.name, email: p.email }))].map((r) => ({ ...r, off: off.get(r.personId) ?? null }))
+  const rows = [...b.rows, ...missing.map((p) => blank({ id: p.id, name: p.name, email: p.email, division: p.division }))].map((r) => ({ ...r, off: off.get(r.personId) ?? null }))
   rows.sort((a, c) => Number(c.onClock) - Number(a.onClock) || Number(Boolean(a.off)) - Number(Boolean(c.off)) || a.name.localeCompare(c.name))
   return { ...b, rows }
 }

@@ -160,6 +160,7 @@ try {
   r = await call('GET', '/board', { token: key })
   const row = r.json?.rows?.find((x) => x.email === testEmail)
   check('board shows the person on the clock', r.status === 200 && row?.onClock === true && row?.phaseIndex === 1, JSON.stringify(row))
+  check('board rows carry the division the board groups by', typeof row?.division === 'string', JSON.stringify(row))
 
   r = await call('POST', '/punches/out', { token: key, headers: as, body: { at: minutesAgo(10) } })
   check('clock out', r.status === 200 && r.json?.state?.onClock === false && Math.abs(r.json?.state?.hoursToday - 40 / 60) < 0.01, `hoursToday=${r.json?.state?.hoursToday}`)
