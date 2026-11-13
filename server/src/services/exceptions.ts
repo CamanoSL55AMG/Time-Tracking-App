@@ -1,14 +1,19 @@
 import { prisma } from '../db.js'
 import { hoursBetween, localDate } from '../lib/time.js'
 import { insideFence, type Fence } from '../lib/geo.js'
+import { locationFlags, noLocationReason } from '../lib/locationFlags.js'
 import type { PersonFilter } from '../auth/division.js'
+import { suspectAmPm } from '../lib/amPm.js'
 
 // Things an approver should look at before signing off a week. "problem" needs a
 // decision (a missed clock-out, a 14-hour day); "note" is context (a correction,
-// a punch sent late from a phone with no signal).
+// a punch sent late from a phone with no signal). A punch made with location declined
+// on the phone is a problem (Art wants to know); a phone that could not find its
+// position is a note. "am_pm" is a long day that started between 5 PM and 4 AM:
+// most likely PM picked for AM (Nate, Art 2026-11-12).
 
 export interface TimeException {
-  code: 'missed_clock_out' | 'long_day' | 'away_from_site' | 'away_from_shop' | 'edited' | 'sent_late'
+  code: 'missed_clock_out' | 'long_day' | 'am_pm' | 'away_from_site' | 'away_from_shop' | 'edited' | 'sent_late' | 'location_declined' | 'no_location'
   severity: 'problem' | 'note'
   personId: string
   personName: string
@@ -51,7 +56,7 @@ export async function findExceptions(companyId: string, opts: { from: Date; to: 
   const editors = new Map((await prisma.person.findMany({ where: { id: { in: editorIds } }, select: { id: true, name: true } })).map((p) => [p.id, p.name]))
 
   const out: TimeException[] = []
-  const dayTotals = new Map<string, { personId: string; personName: string; date: string; hours: number }>()
+  const dayTotals = new Map<string, { personId: string; personName: string; date: string; hours: number; firstIn: Date; firstId: string }>()
 
   for (const p of punches) {
     const date = localDate(p.clockIn, tz)
@@ -63,7 +68,8 @@ export async function findExceptions(companyId: string, opts: { from: Date; to: 
 
     if (p.clockIn >= opts.from) {
       const key = `${p.personId}|${date}`
-      const t = dayTotals.get(key) ?? { personId: p.personId, personName: p.person.name, date, hours: 0 }
+      // Punches come oldest first, so the first one seen is the day's start.
+      const t = dayTotals.get(key) ?? { personId: p.personId, personName: p.person.name, date, hours: 0, firstIn: p.clockIn, firstId: p.id }
       t.hours += hoursBetween(p.clockIn, p.clockOut, now)
       dayTotals.set(key, t)
     }
@@ -94,9 +100,38 @@ export async function findExceptions(companyId: string, opts: { from: Date; to: 
     }
   }
 
+  // Punches made without the phone's position. The punch itself always went through.
+  const byId = new Map(punches.map((p) => [p.id, p]))
+  for (const f of locationFlags(punches)) {
+    const p = byId.get(f.punchId)!
+    // An open segment from before the range is only here for the missed clock-out check.
+    if (f.side === 'in' && p.clockIn < opts.from) continue
+    const what = f.side === 'in' ? `${timeOf(f.at, tz)} punch on ${p.job.name}` : `${timeOf(f.at, tz)} clock-out`
+    out.push({
+      personId: p.personId,
+      personName: p.person.name,
+      date: localDate(f.at, tz),
+      punchId: p.id,
+      code: f.code,
+      severity: f.code === 'location_declined' ? 'problem' : 'note',
+      message: `${what} has no location: ${noLocationReason(f.status, p.source === 'lead')}.`,
+    })
+  }
+
   for (const t of dayTotals.values()) {
     if (t.hours > LONG_DAY_H) {
       out.push({ personId: t.personId, personName: t.personName, date: t.date, code: 'long_day', severity: 'problem', message: `${t.hours.toFixed(1)} h on ${dayOf(new Date(`${t.date}T12:00:00Z`), 'UTC')}.` })
+    }
+    if (suspectAmPm(t.firstIn, t.hours, tz)) {
+      out.push({
+        personId: t.personId,
+        personName: t.personName,
+        date: t.date,
+        punchId: t.firstId,
+        code: 'am_pm',
+        severity: 'problem',
+        message: `Clocked in at ${timeOf(t.firstIn, tz)} for a ${t.hours.toFixed(1)} h day. AM/PM mix-up?`,
+      })
     }
   }
 

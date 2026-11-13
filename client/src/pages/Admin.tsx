@@ -1,3 +1,4 @@
+// TESTED & APPROVED by Art 2026-11-07: (part) per-person Password button and dialog in Manage > People. See TESTED.md before changing.
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import PasswordField from '../PasswordField'
 import {

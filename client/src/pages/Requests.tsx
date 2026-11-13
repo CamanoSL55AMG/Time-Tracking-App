@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { Alert, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle, MenuItem, Paper, Stack, TextField, Typography } from '@mui/material'
 import { api, errorText, fmtTime, toLocalInput, type ChangeRequest, type Job, type PendingChange, type Phase, type Punch, type RequestBody, type RequestStatus, type WeekSegment } from '../api'
+import { useTimeCheck } from '../components/TimeCheck'
 
 // Asking for a change to your own time, and showing what was asked. Nothing changes
 // until a supervisor approves; then it is applied as a correction with the reason.
@@ -110,7 +111,11 @@ export function RequestDialog({
     )
   }, [segment])
 
-  const send = async () => {
+  const timeCheck = useTimeCheck()
+  // The times to send come in as arguments: the AM/PM check may have switched one.
+  const send = async (clockIn: string, clockOut: string) => {
+    setClockIn(clockIn)
+    setClockOut(clockOut)
     setSending(true)
     setError('')
     try {
@@ -142,6 +147,9 @@ export function RequestDialog({
   const unchanged =
     oneTime && (only === 'start' ? clockIn === toLocalInput(segment!.clockIn) : !clockOut || clockOut === toLocalInput(segment!.clockOut))
   const ready = reason.trim() && (adding ? clockIn && clockOut && jobId : !unchanged)
+  // Only typed times are questioned; a job or note change leaves the times alone.
+  const timesTouched = adding || clockIn !== toLocalInput(segment!.clockIn) || (Boolean(clockOut) && clockOut !== toLocalInput(segment!.clockOut))
+  const submit = () => (timesTouched ? timeCheck.guard(clockIn, clockOut, (ci, co) => void send(ci, co)) : void send(clockIn, clockOut))
   return (
     <Dialog open onClose={onClose} fullWidth maxWidth="xs">
       <DialogTitle>{adding ? 'Add missing time' : only === 'start' ? 'Fix your start time' : only === 'end' ? 'Fix your clock-out time' : 'Ask for a change'}</DialogTitle>
@@ -201,10 +209,11 @@ export function RequestDialog({
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>Cancel</Button>
-        <Button variant="contained" disabled={sending || !ready} onClick={send}>
+        <Button variant="contained" disabled={sending || !ready} onClick={submit}>
           {fixNow ? (sending ? 'Saving…' : 'Save') : sending ? 'Sending…' : 'Send for approval'}
         </Button>
       </DialogActions>
+      {timeCheck.dialog}
     </Dialog>
   )
 }

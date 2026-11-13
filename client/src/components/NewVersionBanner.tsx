@@ -1,3 +1,4 @@
+// TESTED & APPROVED by Art 2026-11-07: new-version Reload card (big, centred, yellow, checks on window focus). See TESTED.md before changing.
 import { useEffect, useState } from 'react'
 import { Box, Button, Fade, SvgIcon, Typography, type SvgIconProps } from '@mui/material'
 import { fetchServerBuild } from '../api'

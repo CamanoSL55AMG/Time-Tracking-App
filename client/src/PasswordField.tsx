@@ -1,3 +1,4 @@
+// TESTED & APPROVED by Art 2026-11-07: password field with generator. See TESTED.md before changing.
 import { useState } from 'react'
 import {
   Box,

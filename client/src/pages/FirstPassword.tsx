@@ -1,3 +1,4 @@
+// TESTED & APPROVED by Art 2026-11-07: Set your own password screen at first sign-in. See TESTED.md before changing.
 import { useState, type FormEvent } from 'react'
 import { Alert, Box, Button, Paper, Stack, TextField, Typography } from '@mui/material'
 import { api, errorText, type Person } from '../api'

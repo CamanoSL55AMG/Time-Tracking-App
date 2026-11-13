@@ -1,3 +1,4 @@
+// TESTED & APPROVED by Art 2026-11-01: (part) Bench Repair shows only bench work. See TESTED.md before changing.
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Alert,
@@ -39,6 +40,7 @@ import {
   type Phase,
   type PunchKind,
   type PunchOutcome,
+  type GeoStatus,
   type OpenItem,
   type Punch as Segment,
   type WorkMode,
@@ -163,6 +165,8 @@ export default function PunchPage({ canCrew = false, meId = '', meName = '' }: {
   const [crewPick, setCrewPick] = useState(false)
   const [people, setPeople] = useState<Person[]>([])
   const [crewMsg, setCrewMsg] = useState<{ severity: 'success' | 'warning'; text: string } | null>(null)
+  // The last punch went through without the phone's position (Art, 2026-11-13).
+  const [locMsg, setLocMsg] = useState<GeoStatus | null>(null)
 
   useEffect(() => {
     if (canCrew) api.people().then((p) => setPeople(p.filter((x) => x.active && x.id !== meId)), () => undefined)
@@ -296,6 +300,8 @@ export default function PunchPage({ canCrew = false, meId = '', meName = '' }: {
       if (next.open?.phase) setPhaseId(next.open.phase.id)
       if (next.parallelRun ?? state.parallelRun) setMirror(kind)
       setCrewMsg(null)
+      // Bench Repair keeps its approved screen with no location notice (2026-11-01).
+      setLocMsg(r.geoStatus !== 'captured' && mode !== 'bench' ? r.geoStatus : null)
       await punchCrew(kind, r.sent, next, local.job)
     } catch (err) {
       setError(errorText(err))
@@ -479,6 +485,7 @@ export default function PunchPage({ canCrew = false, meId = '', meName = '' }: {
           times are kept as you tapped them.
         </Alert>
       )}
+      {locMsg && <NoLocationNotice status={locMsg} onClose={() => setLocMsg(null)} />}
       {queue.failed.length > 0 && (
         <Alert severity="warning" onClose={clearFailedPunches}>
           {queue.failed.length === 1 ? 'A punch saved without signal' : 'Some punches saved without signal'} could not be recorded. Tell your manager so it
@@ -1043,6 +1050,24 @@ export default function PunchPage({ canCrew = false, meId = '', meName = '' }: {
         </Typography>
       )}
     </Stack>
+  )
+}
+
+/** Told right after a punch that went through without the phone's position. */
+function NoLocationNotice({ status, onClose }: { status: GeoStatus; onClose: () => void }) {
+  if (status === 'denied') {
+    return (
+      <Alert severity="warning" onClose={onClose}>
+        Your punch counted, but location is turned off for Logbook on this phone. Your supervisor will see this punch marked "location declined". To share it,
+        allow location for this site in your phone's settings.
+      </Alert>
+    )
+  }
+  return (
+    <Alert severity="info" onClose={onClose}>
+      Your punch counted, but {status === 'unsupported' ? 'this phone or browser cannot share its location' : 'your phone could not find its location this time'}. Your
+      supervisor will see this punch marked "no location".
+    </Alert>
   )
 }
 

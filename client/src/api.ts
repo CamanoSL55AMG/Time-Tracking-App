@@ -404,7 +404,7 @@ export interface ApiKey {
 
 export type SheetStatus = 'open' | 'signed' | 'approved'
 export interface TimeException {
-  code: 'missed_clock_out' | 'long_day' | 'away_from_site' | 'away_from_shop' | 'edited' | 'sent_late'
+  code: 'missed_clock_out' | 'long_day' | 'am_pm' | 'away_from_site' | 'away_from_shop' | 'edited' | 'sent_late' | 'location_declined' | 'no_location'
   severity: 'problem' | 'note'
   personId: string
   personName: string
@@ -421,6 +421,9 @@ export interface WeekSegment {
   job: { id: string; name: string; code: string; kind: string }
   phase: { id: string; key: string; name: string; short: string; laborCategory: string } | null
   edited: boolean
+  /** What the phone answered for its position at the start and end; null when unknown (older punches, edits, integrations). */
+  inGeoStatus?: GeoStatus | null
+  outGeoStatus?: GeoStatus | null
 }
 interface SheetState {
   status: SheetStatus
@@ -509,6 +512,8 @@ export interface WeekSheetRow extends SheetState {
   hours: number
   openSegment: boolean
   problems: number
+  /** Punches this week made with location declined on the phone. */
+  locationDeclined?: number
   pendingRequests: number
   /** Times this person fixed themselves this week that nobody has looked at yet. */
   editsToReview?: number
@@ -521,7 +526,7 @@ export interface WeekSheet {
   rows: WeekSheetRow[]
   quiet: { id: string; name: string }[]
   exceptions: TimeException[]
-  counts: { approved: number; partlyApproved: number; signed: number; open: number; pendingRequests: number; editsToReview?: number }
+  counts: { approved: number; partlyApproved: number; signed: number; open: number; pendingRequests: number; editsToReview?: number; locationDeclined?: number }
 }
 export interface CrewResult {
   personId: string
@@ -540,16 +545,49 @@ export interface Geo {
   accuracyM?: number
 }
 
-/** The phone's position right now, or null if it is refused, unavailable or slow. Never throws. */
-export const grabGeo = (timeoutMs = 6000): Promise<Geo | null> =>
+/** What the phone answered when asked for its position. Anything but "captured" is flagged for review. */
+export type GeoStatus = 'captured' | 'denied' | 'unavailable' | 'timeout' | 'unsupported'
+export interface GeoRead {
+  geo: Geo | null
+  status: GeoStatus
+}
+
+/**
+ * The phone's position right now, and why there is none when it is refused,
+ * unavailable or slow. Never throws, and never holds a punch up for long: the punch
+ * goes through either way (Art, 2026-11-13: if the person declines, he needs to know).
+ */
+export const readGeo = (timeoutMs = 6000): Promise<GeoRead> =>
   new Promise((resolve) => {
-    if (!('geolocation' in navigator)) return resolve(null)
-    navigator.geolocation.getCurrentPosition(
-      (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude, accuracyM: pos.coords.accuracy }),
-      () => resolve(null),
-      { enableHighAccuracy: true, timeout: timeoutMs, maximumAge: 60_000 },
-    )
+    if (!('geolocation' in navigator)) return resolve({ geo: null, status: 'unsupported' })
+    let done = false
+    const finish = (r: GeoRead) => {
+      if (done) return
+      done = true
+      resolve(r)
+    }
+    // Some browsers never answer while their own permission question is open.
+    const guard = setTimeout(() => finish({ geo: null, status: 'timeout' }), timeoutMs + 2000)
+    try {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          clearTimeout(guard)
+          finish({ geo: { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracyM: pos.coords.accuracy }, status: 'captured' })
+        },
+        (err) => {
+          clearTimeout(guard)
+          finish({ geo: null, status: err.code === 1 ? 'denied' : err.code === 3 ? 'timeout' : 'unavailable' })
+        },
+        { enableHighAccuracy: true, timeout: timeoutMs, maximumAge: 60_000 },
+      )
+    } catch {
+      clearTimeout(guard)
+      finish({ geo: null, status: 'unsupported' })
+    }
   })
+
+/** The position fields of a punch body. */
+const geoFields = (r: GeoRead) => ({ geo: r.geo ?? undefined, geoStatus: r.status })
 
 const newId = () => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`)
 
@@ -798,10 +836,10 @@ export const api = {
     http.post<{ request: ChangeRequest }>(`/requests/${id}/${decision}`, { note }).then((r) => r.data.request),
   reopen: (personId: string, week: string, reason: string) => http.post<PersonWeek>('/timesheets/reopen', { personId, week, reason }).then((r) => r.data),
   crew: async (kind: PunchKind, body: { personIds: string[]; jobId?: string; phaseId?: string }) => {
-    const geo = await grabGeo()
+    const read = await readGeo()
     const clientId = newId()
     return http
-      .post<{ results: CrewResult[]; punched: number }>(`/crew/${kind}`, { ...body, geo: geo ?? undefined, clientId }, { headers: { 'Idempotency-Key': clientId } })
+      .post<{ results: CrewResult[]; punched: number }>(`/crew/${kind}`, { ...body, ...geoFields(read), clientId }, { headers: { 'Idempotency-Key': clientId } })
       .then((r) => r.data)
   },
 
@@ -915,7 +953,8 @@ interface QueuedPunch {
   kind: PunchKind
   body: Record<string, unknown>
 }
-export type PunchOutcome = { sent: true; state: DayState } | { sent: false; at: string }
+/** geoStatus: whether the phone shared its position for this punch (the punch counts either way). */
+export type PunchOutcome = ({ sent: true; state: DayState } | { sent: false; at: string }) & { geoStatus: GeoStatus }
 
 const QUEUE_KEY = 'tt_punch_queue'
 const FAILED_KEY = 'tt_punch_failed'
@@ -956,15 +995,15 @@ const send = (q: QueuedPunch) => http.post<PunchResult>(`/punches/${q.kind}`, q.
 
 async function punch(kind: PunchKind, fields: Record<string, unknown>): Promise<PunchOutcome> {
   const id = newId()
-  const geo = await grabGeo()
-  const body: Record<string, unknown> = { ...fields, geo: geo ?? undefined }
+  const read = await readGeo()
+  const body: Record<string, unknown> = { ...fields, ...geoFields(read) }
   if (kind !== 'out') body.clientId = id
   const tappedAt = new Date().toISOString()
 
   const keep = () => {
     // Waiting punches carry the moment of the tap; online ones use the server's clock.
     writeJson(QUEUE_KEY, [...queuedPunches(), { id, kind, body: { ...body, at: tappedAt } }])
-    return { sent: false as const, at: tappedAt }
+    return { sent: false as const, at: tappedAt, geoStatus: read.status }
   }
   if (queuedPunches().length) {
     const outcome = keep()
@@ -973,7 +1012,7 @@ async function punch(kind: PunchKind, fields: Record<string, unknown>): Promise<
   }
   try {
     const r = await send({ id, kind, body })
-    return { sent: true, state: r.data.state }
+    return { sent: true, state: r.data.state, geoStatus: read.status }
   } catch (err) {
     if (isOffline(err)) return keep()
     throw err

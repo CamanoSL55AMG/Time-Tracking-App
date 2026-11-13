@@ -14,6 +14,7 @@ import {
   Typography,
 } from '@mui/material'
 import { api, errorText, fmtDay, fmtTime, toLocalInput, type WeekSegment } from '../api'
+import { useTimeCheck } from '../components/TimeCheck'
 
 // Fixing your own day (Jake's ask, Art 2026-11-09). Open an earlier day, fix one
 // segment, then step forward through each switch until the day is right. A change
@@ -58,6 +59,7 @@ export default function DayFix({
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [note, setNote] = useState('')
+  const timeCheck = useTimeCheck()
 
   // Load the times of the segment in front of you (again after a save moved them).
   useEffect(() => {
@@ -100,15 +102,18 @@ export default function DayFix({
     )
   }
 
-  const save = async () => {
+  // The times to save come in as arguments: the AM/PM check may have switched one.
+  const save = async (ci: string, co: string) => {
+    setClockIn(ci)
+    setClockOut(co)
     setSaving(true)
     setError('')
     setNote('')
     try {
       const iso = (v: string) => new Date(v).toISOString()
       const r = await api.fixMyTime(seg.id, {
-        clockIn: inChanged ? iso(clockIn) : undefined,
-        clockOut: outChanged ? iso(clockOut) : undefined,
+        clockIn: ci && ci !== toLocalInput(seg.clockIn) ? iso(ci) : undefined,
+        clockOut: co && co !== toLocalInput(seg.clockOut) ? iso(co) : undefined,
         keepJoined,
         reason,
       })
@@ -230,10 +235,11 @@ export default function DayFix({
         <Button onClick={onClose} disabled={saving}>
           Done
         </Button>
-        <Button variant="contained" disabled={saving || !reason.trim() || (!inChanged && !outChanged)} onClick={save}>
+        <Button variant="contained" disabled={saving || !reason.trim() || (!inChanged && !outChanged)} onClick={() => timeCheck.guard(clockIn, clockOut, (ci, co) => void save(ci, co))}>
           {saving ? 'Saving…' : next ? 'Save and next' : 'Save'}
         </Button>
       </DialogActions>
+      {timeCheck.dialog}
     </Dialog>
   )
 }
