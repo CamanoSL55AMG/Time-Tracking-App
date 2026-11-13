@@ -5,7 +5,7 @@ import { ApiError, badRequest } from '../errors.js'
 import { requireAuth, requirePerson, requireScope } from '../auth/middleware.js'
 import { assertInDivision, divisionPersonIds, personFilterFor } from '../auth/division.js'
 import { APPROVE, CREW, FIX_APPROVE, SELF } from '../auth/apiKeys.js'
-import { parseGeo } from '../lib/geo.js'
+import { parseGeo, resolveGeoStatus } from '../lib/geo.js'
 import { addDays, dayBounds, isYmd, startOfLocalDay } from '../lib/time.js'
 import { approveWeek, personWeek, reopenWeek, signWeek, weekBounds, weekSheet } from '../services/timesheets.js'
 import { findExceptions } from '../services/exceptions.js'
@@ -324,9 +324,14 @@ route(
     method: 'get',
     path: '/reports/exceptions',
     tag: 'Views',
-    summary: 'Punches to look at: missed clock-outs, long days, punches away from the site, corrections, punches sent late.',
+    summary: 'Punches to look at: missed clock-outs, long days, punches away from the site, punches made without location, corrections, punches sent late.',
     access: ['reports:read', 'punch:read'],
-    query: { from: 'YYYY-MM-DD, defaults to 7 days ago', to: 'YYYY-MM-DD inclusive, defaults to today', personId: 'Only this person' },
+    query: {
+      from: 'YYYY-MM-DD, defaults to 7 days ago',
+      to: 'YYYY-MM-DD inclusive, defaults to today',
+      personId: 'Only this person',
+      code: 'Only these kinds, comma separated, e.g. location_declined or location_declined,no_location',
+    },
     division: 'scoped',
   },
   async (req) => {
@@ -339,7 +344,14 @@ route(
     const from = startOfLocalDay(fromRaw, company.timezone)
     const to = startOfLocalDay(addDays(toRaw, 1), company.timezone)
     if (to <= from) throw badRequest('to must not be before from.')
-    return { from: fromRaw, to: toRaw, data: await findExceptions(auth.companyId, { from, to, personId: await personFilterFor(auth, str(req.query.personId, 80) || undefined) }) }
+    const codes = new Set(
+      str(req.query.code, 200)
+        .split(',')
+        .map((c) => c.trim())
+        .filter(Boolean),
+    )
+    const all = await findExceptions(auth.companyId, { from, to, personId: await personFilterFor(auth, str(req.query.personId, 80) || undefined) })
+    return { from: fromRaw, to: toRaw, data: codes.size ? all.filter((x) => codes.has(x.code)) : all }
   },
 )
 
@@ -353,6 +365,7 @@ const CREW_BODY = {
   phaseId: 'Phase. For next, omit to move each person to their own next phase',
   phaseKey: 'Alternative to phaseId',
   geo: "{ lat, lng, accuracyM } from the lead's phone",
+  geoStatus: "When there is no geo: why the lead's phone gave none (denied, unavailable, timeout or unsupported)",
   at: 'ISO date-time the punch happened, for punches sent late',
   clientId: 'Id from the sender; re-sending it does nothing twice',
 }
@@ -379,11 +392,13 @@ for (const kind of ['in', 'next', 'out'] as CrewKind[]) {
       if (ids.length > 30) throw badRequest('Punch 30 people at most at once.', { field: 'personIds' })
       const actor: Actor = { companyId: auth.companyId, apiKeyId: auth.apiKeyId, source: 'lead', punchedById: lead.id }
       const clientId = str(b.clientId, 60)
+      const geo = parseGeo(b.geo)
       const base: PunchInput = {
         jobId: str(b.jobId, 80) || undefined,
         phaseId: str(b.phaseId, 80) || undefined,
         phaseKey: str(b.phaseKey, 80) || undefined,
-        geo: parseGeo(b.geo),
+        geo,
+        geoStatus: resolveGeoStatus(geo, b.geoStatus),
         at: optionalDate(b.at, 'at'),
       }
       const people = await prisma.person.findMany({ where: { companyId: auth.companyId, id: { in: ids } } })

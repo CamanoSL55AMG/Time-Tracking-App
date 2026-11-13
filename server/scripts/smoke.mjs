@@ -303,16 +303,26 @@ try {
   const dow = (new Date(`${ymd(weekAgo)}T12:00:00Z`).getUTCDay() + 6) % 7 // Monday = 0
   const t0 = new Date(`${ymd(new Date(weekAgo.getTime() + (2 - dow) * 86_400_000))}T14:00:00Z`)
   const lastWeek = ymd(t0)
-  r = await call('POST', '/punches/in', { token: key, headers: asB, body: { jobId, at: t0.toISOString() } })
+  // The phone said no to location at clock-in; the clock-out had a position.
+  r = await call('POST', '/punches/in', { token: key, headers: asB, body: { jobId, at: t0.toISOString(), geoStatus: 'denied' } })
   const oldId = r.json?.punch?.id
-  r = await call('POST', '/punches/out', { token: key, headers: asB, body: { at: new Date(t0.getTime() + 13 * 3_600_000).toISOString() } })
+  check('a punch with location declined still goes through and keeps the answer', r.status === 200 && r.json?.punch?.inGeoStatus === 'denied' && r.json?.punch?.inLat === null, JSON.stringify(r.json?.punch ?? r.json))
+  r = await call('POST', '/punches/out', { token: key, headers: asB, body: { at: new Date(t0.getTime() + 13 * 3_600_000).toISOString(), geo: { lat: 47.82, lng: -122.3, accuracyM: 10 }, geoStatus: 'denied' } })
   check('a back-dated day last week is recorded', r.status === 200 && Boolean(oldId), JSON.stringify(r.json?.error ?? ''))
+  check('a real position wins over a stray status', r.json?.punch?.outGeoStatus === 'captured', JSON.stringify(r.json?.punch ?? null))
 
   r = await call('GET', `/timesheets?week=${lastWeek}`, { token: admin })
   const sheetRow = r.json?.rows?.find((x) => x.person.id === crewId)
   check('the week view lists the person, hours and the long day', r.status === 200 && Math.abs((sheetRow?.hours ?? 0) - 13) < 0.02 && sheetRow?.status === 'open' && sheetRow?.problems >= 1, JSON.stringify(sheetRow ?? r.json))
   r = await call('GET', `/reports/exceptions?from=${lastWeek}&to=${lastWeek}&personId=${crewId}`, { token: key })
   check('exceptions report flags the 13-hour day', r.status === 200 && r.json?.data?.some((x) => x.code === 'long_day'), JSON.stringify(r.json))
+  check('the week view counts the punch with location declined', sheetRow?.locationDeclined === 1, JSON.stringify(sheetRow ?? null))
+  r = await call('GET', `/reports/exceptions?from=${lastWeek}&to=${lastWeek}&personId=${crewId}&code=location_declined`, { token: key })
+  check(
+    'exceptions report filters to the punch with location declined, as a problem',
+    r.status === 200 && r.json?.data?.length === 1 && r.json.data[0].punchId === oldId && r.json.data[0].severity === 'problem',
+    JSON.stringify(r.json),
+  )
 
   r = await call('POST', '/me/week/sign', { token: tech, body: {} })
   check('a tech signs their week', r.status === 200 && r.json?.status === 'signed', JSON.stringify(r.json))
