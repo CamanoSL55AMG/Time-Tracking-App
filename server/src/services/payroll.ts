@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { prisma } from '../db.js'
+import type { PersonFilter } from '../auth/division.js'
 import { badRequest } from '../errors.js'
 import { addDays, isYmd, localDate, startOfLocalDay } from '../lib/time.js'
 import { approvedThroughOf, weekOf } from './timesheets.js'
@@ -116,7 +117,14 @@ export interface NotReady {
   hours: number
 }
 
-export async function laborExport(companyId: string, from: string, to: string, opts: { contractors?: boolean } = {}) {
+export async function laborExport(
+  companyId: string,
+  from: string,
+  to: string,
+  // personId: only these people (a division admin's crew). Overtime is worked out per
+  // person and week, so leaving others out changes no one's numbers.
+  opts: { contractors?: boolean; personId?: PersonFilter } = {},
+) {
   if (!isYmd(from) || !isYmd(to)) throw badRequest('from and to must be dates, YYYY-MM-DD.', { fields: ['from', 'to'] })
   if (to < from) throw badRequest('to must be on or after from.')
   const days = (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000 + 1
@@ -133,7 +141,7 @@ export async function laborExport(companyId: string, from: string, to: string, o
 
   const [punches, sheets] = await Promise.all([
     prisma.punch.findMany({
-      where: { companyId, clockIn: { gte: startOfLocalDay(firstWeek, tz), lt: startOfLocalDay(addDays(lastWeek, 7), tz) } },
+      where: { companyId, ...(opts.personId ? { personId: opts.personId } : {}), clockIn: { gte: startOfLocalDay(firstWeek, tz), lt: startOfLocalDay(addDays(lastWeek, 7), tz) } },
       include: {
         person: { select: { id: true, name: true, email: true, overtimeExempt: true, workerType: true, workerTypeFrom: true, priorWorkerType: true } },
         job: { select: { id: true, name: true, code: true, kind: true } },
@@ -142,7 +150,7 @@ export async function laborExport(companyId: string, from: string, to: string, o
       orderBy: { clockIn: 'asc' },
       take: MAX_SEGMENTS + 1,
     }),
-    prisma.timesheet.findMany({ where: { companyId, weekStart: { in: weeks } } }),
+    prisma.timesheet.findMany({ where: { companyId, ...(opts.personId ? { personId: opts.personId } : {}), weekStart: { in: weeks } } }),
   ])
   if (punches.length > MAX_SEGMENTS) throw badRequest('That range holds too many segments. Narrow the dates.')
 

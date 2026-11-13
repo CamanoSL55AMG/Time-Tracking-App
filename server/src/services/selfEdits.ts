@@ -2,6 +2,7 @@ import type { Person, Prisma } from '@prisma/client'
 import { prisma } from '../db.js'
 import { badRequest, conflict } from '../errors.js'
 import { emit } from './events.js'
+import type { PersonFilter } from '../auth/division.js'
 
 // Times people fixed themselves (services/punch.ts editOwnTimes). They count at once,
 // with no approval first; a supervisor or admin looks them over afterwards and marks
@@ -20,7 +21,7 @@ const timesOf = (j: Prisma.JsonValue): Times | null => {
   return typeof o.clockIn === 'string' ? { clockIn: o.clockIn, clockOut: typeof o.clockOut === 'string' ? o.clockOut : null } : null
 }
 
-export async function listSelfEdits(companyId: string, opts: { status?: ReviewStatus; personId?: string; from?: Date; to?: Date; limit?: number }) {
+export async function listSelfEdits(companyId: string, opts: { status?: ReviewStatus; personId?: PersonFilter; from?: Date; to?: Date; limit?: number }) {
   const status = opts.status ?? 'waiting'
   const rows = await prisma.punchEdit.findMany({
     where: {

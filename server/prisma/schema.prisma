@@ -60,7 +60,11 @@ model Person {
   email        String   @unique
   name         String
   initials     String   @default("")
-  role         String   @default("tech") // tech | lead | manager | payroll | admin
+  role         String   @default("tech") // tech | lead | manager | payroll | admin | division_admin | sales | shop_supervisor
+  // The part of the company the person works in, e.g. "Sound Services". Free text,
+  // compared without case. A division_admin sees and manages only the people whose
+  // division matches theirs. Empty = no division.
+  division     String   @default("")
   passwordHash String?
   // Set when an admin creates the person with a password or sets a new one for them.
   // While true, a signed-in session can only read /auth/me and change its own
@@ -90,6 +94,7 @@ model Person {
   termsAcceptances TermsAcceptance[]
 
   @@index([companyId, active])
+  @@index([companyId, division])
 }
 
 model Job {
@@ -173,6 +178,12 @@ model Punch {
   outLat       Float?
   outLng       Float?
   outAccuracyM Float?
+  // What happened when the phone was asked for its position at the punch: captured,
+  // denied (the person said no or location is off for the app), unavailable, timeout
+  // or unsupported. Null for punches with no phone behind them (edits, integrations)
+  // and for punches made before this was recorded (Art, 2026-11-13).
+  inGeoStatus  String?
+  outGeoStatus String?
   notes        String    @default("")
   clientId     String? // generated on the phone; makes offline re-sends harmless
   apiKeyId     String? // set when an integration punched on the person's behalf
@@ -656,4 +667,24 @@ model LeaveRequest {
   @@index([companyId, status])
   @@index([personId, startDate])
   @@index([companyId, startDate])
+}
+
+// Shop punches sent to Stage Forge (STAGEFORGE_PUNCH_PUSH, services/stageforgePush.ts):
+// one row per punch segment, so a segment goes once and again only when it changes.
+model StageForgePush {
+  id          String    @id @default(uuid())
+  companyId   String
+  punchId     String
+  // SHA-256 of the time activity last sent; a changed punch sends again.
+  payloadHash String
+  status      String // sent | failed
+  sfId        String? // Stage Forge's id for the time activity, when it answers with one
+  error       String    @default("")
+  attempts    Int       @default(0)
+  sentAt      DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([companyId, punchId])
+  @@index([companyId, status])
 }

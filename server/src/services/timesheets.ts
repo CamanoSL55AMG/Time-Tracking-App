@@ -174,17 +174,19 @@ export async function personWeek(companyId: string, personId: string, rawWeek?: 
 }
 
 /** Everyone's week at a glance, for the approver. */
-export async function weekSheet(companyId: string, rawWeek?: string) {
+/** `only`: limit the sheet to these people (a division admin's division). Null = everyone. */
+export async function weekSheet(companyId: string, rawWeek?: string, only: string[] | null = null) {
   const company = await prisma.company.findUniqueOrThrow({ where: { id: companyId } })
   const weekStart = resolveWeek(company, rawWeek)
   const { days, start, end } = weekBounds(weekStart, company.timezone)
   const now = new Date()
+  const personId = only ? { in: only } : undefined
   const [segments, sheets, people, exceptions, pendingRows] = await Promise.all([
-    prisma.punch.findMany({ where: { companyId, clockIn: { gte: start, lt: end } }, select: { personId: true, clockIn: true, clockOut: true } }),
-    prisma.timesheet.findMany({ where: { companyId, weekStart } }),
-    prisma.person.findMany({ where: { companyId }, select: { id: true, name: true, email: true, active: true, role: true } }),
-    findExceptions(companyId, { from: start, to: end }),
-    prisma.changeRequest.findMany({ where: { companyId, weekStart, status: 'pending' }, select: { personId: true } }),
+    prisma.punch.findMany({ where: { companyId, personId, clockIn: { gte: start, lt: end } }, select: { personId: true, clockIn: true, clockOut: true } }),
+    prisma.timesheet.findMany({ where: { companyId, personId, weekStart } }),
+    prisma.person.findMany({ where: { companyId, id: personId }, select: { id: true, name: true, email: true, active: true, role: true } }),
+    findExceptions(companyId, { from: start, to: end, personId }),
+    prisma.changeRequest.findMany({ where: { companyId, personId, weekStart, status: 'pending' }, select: { personId: true } }),
   ])
   const pendingBy = new Map<string, number>()
   for (const p of pendingRows) pendingBy.set(p.personId, (pendingBy.get(p.personId) ?? 0) + 1)
@@ -200,6 +202,9 @@ export async function weekSheet(companyId: string, rawWeek?: string) {
   }
   const problemsBy = new Map<string, number>()
   for (const x of exceptions) if (x.severity === 'problem') problemsBy.set(x.personId, (problemsBy.get(x.personId) ?? 0) + 1)
+  // Punches made with location declined on the phone, per person (Art, 2026-11-13).
+  const declinedBy = new Map<string, number>()
+  for (const x of exceptions) if (x.code === 'location_declined') declinedBy.set(x.personId, (declinedBy.get(x.personId) ?? 0) + 1)
 
   // Everyone who worked this week, plus active people with a sheet (signed with no hours is still worth seeing).
   const ids = new Set<string>([...rows.keys(), ...sheets.map((s) => s.personId), ...pendingBy.keys()])
@@ -213,6 +218,7 @@ export async function weekSheet(companyId: string, rawWeek?: string) {
         hours: r.hours.reduce((a, b) => a + b, 0),
         openSegment: r.open,
         problems: problemsBy.get(p.id) ?? 0,
+        locationDeclined: declinedBy.get(p.id) ?? 0,
         pendingRequests: pendingBy.get(p.id) ?? 0,
         ...sheetView(sheetBy.get(p.id) ?? null, names, days[6]),
       }
@@ -234,6 +240,7 @@ export async function weekSheet(companyId: string, rawWeek?: string) {
       signed: out.filter((r) => r.status === 'signed').length,
       open: out.filter((r) => r.status === 'open').length,
       pendingRequests: pendingRows.length,
+      locationDeclined: exceptions.filter((x) => x.code === 'location_declined').length,
     },
   }
 }

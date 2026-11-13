@@ -77,11 +77,35 @@ export const config = {
   termsGateEnabled: isOn(process.env.TERMS_GATE_ENABLED),
   // Folder holding manifest.json and the documents. Empty = <repo>/legal.
   termsDir: (process.env.TERMS_DIR ?? '').trim(),
+  // Shop punches to Stage Forge (services/stageforgePush.ts): each finished segment of
+  // the division's people goes to Stage Forge's POST /time-activities, for its crew
+  // reports. Off unless STAGEFORGE_PUNCH_PUSH=true. STAGEFORGE_URL is Stage Forge's
+  // accounting API base (https); STAGEFORGE_KEY a Stage Forge key that may add them.
+  stageforgePunchPush: isOn(process.env.STAGEFORGE_PUNCH_PUSH),
+  stageforgeUrl: (process.env.STAGEFORGE_URL ?? '').trim().replace(/\/+$/, ''),
+  stageforgeKey: (process.env.STAGEFORGE_KEY ?? '').trim(),
+  stageforgePunchDivision: (process.env.STAGEFORGE_PUNCH_DIVISION ?? '').trim() || 'Sound Services',
+  stageforgePushMinutes: Math.max(5, num(process.env.STAGEFORGE_PUSH_MINUTES) ?? 15),
 }
 
 /** Refuse to start with a missing or weak signing secret. */
 export function assertConfig(): void {
   if (config.jwtSecret.length < 32) {
     throw new Error('JWT_SECRET is missing or shorter than 32 characters. Set it in server/.env (see .env.example).')
+  }
+  if (config.stageforgePunchPush) {
+    if (!config.stageforgeUrl || !config.stageforgeKey) {
+      throw new Error('STAGEFORGE_PUNCH_PUSH is on, but STAGEFORGE_URL and STAGEFORGE_KEY are not both set.')
+    }
+    let u: URL
+    try {
+      u = new URL(config.stageforgeUrl)
+    } catch {
+      throw new Error(`STAGEFORGE_URL is not a valid address: ${config.stageforgeUrl}`)
+    }
+    const local = ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname)
+    if (u.protocol !== 'https:' && !(u.protocol === 'http:' && local)) {
+      throw new Error('STAGEFORGE_URL must start with https:// (http:// only for localhost).')
+    }
   }
 }

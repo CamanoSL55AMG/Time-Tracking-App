@@ -1,5 +1,7 @@
 # Logbook (Time Tracking)
 
+> **Before changing anything, read [TESTED.md](TESTED.md)** — features Art has tested and approved are hands off unless he asks for the change.
+
 Logbook, the AIC Terminal time tracking module. Standalone time tracking: a phone-first punch clock that records the job and the phase
 of the day, a live Tower board, and a versioned API that other apps (GED, Project Report,
 Accounting) link to. Built to replace Timesheets.com at Morgan Sound and to be sold on
@@ -208,7 +210,9 @@ calendar as assignments, and its title-bar clock punches through this app.
 
 AIC Terminal (GED) is where people are enrolled. Its Users page turns Logbook on or off
 for each person and sets their Logbook role (tech, crew lead, manager, payroll or admin);
-its key carries `people:roles` so it can set admins too. An older GED key gets that scope
+its key carries `people:roles` so it can set admins too. The division admin role and a
+person's division (`division_admin`, `division`) are set in Logbook's Admin → People (tap
+the role chip) until AIC Terminal's Users page sends them. An older GED key gets that scope
 without being replaced:
 
 ```powershell
@@ -234,3 +238,19 @@ curl -X POST http://localhost:5400/api/v1/punches/in \
   -H "Content-Type: application/json" \
   -d '{"jobRef":{"system":"ged","externalId":"P-1371"},"phaseKey":"work"}'
 ```
+
+## Shop punches to Stage Forge
+
+Stage Forge shows Sound Services crew hours from its shows and from the shop side by
+side, and it doesn't read Logbook, so Logbook sends them: each finished punch segment
+of the people whose division is `STAGEFORGE_PUNCH_DIVISION` (default "Sound Services")
+goes to Stage Forge's `POST /time-activities`, every `STAGEFORGE_PUSH_MINUTES` for the
+last two weeks. A segment goes once, and again only when it is corrected; Logbook's
+punch id rides along as `StageForge.externalId`, with an `Idempotency-Key`. Pay is not
+worked out from this: AIC Accounting reads Logbook's payroll export as before.
+
+Off unless `STAGEFORGE_PUNCH_PUSH=true` with `STAGEFORGE_URL` (https) and
+`STAGEFORGE_KEY` in `server/.env`. Admins can look and test:
+`GET /api/v1/integrations/stageforge/punches` (on or off, counts, last failures) and
+`POST /api/v1/integrations/stageforge/punches/push {"from","to","dryRun":true}` (shows
+what would go and sends nothing, even while off).

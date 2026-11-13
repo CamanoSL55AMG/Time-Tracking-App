@@ -259,9 +259,28 @@ deploy    Dockerfile + docker-compose, same as the other add-ons
 - **Sign-in.** Three ways: GED one-click (the existing `v1.<payload>.<hmac>` add-on token,
   audience `time_tracking`), the app's own email + password for companies without GED, and
   name + PIN in kiosk mode.
-- **Roles.** `tech`, `lead`, `manager`, `payroll`, `admin`.
+- **Roles.** `tech`, `lead`, `manager`, `payroll`, `admin`, `division_admin`, `sales`, `shop_supervisor`.
+  `sales` (2026-11-11) has a tech's access: their own time and expenses only.
+  `shop_supervisor` (2026-11-11) has a crew lead's access: punches the crew in and
+  out, sees punches and who's off, and approves nothing.
+- **Divisions** (2026-11-11). Each person has an optional `division` (e.g. Sound Services).
+  A `division_admin` runs the admin screens (timecards and approvals, time fixes, leave
+  approvals, hours and exceptions reports, the board, and the payroll export) for the
+  people in their own division only, and keeps their own clock. No leave balance edits,
+  jobs, people, keys or expenses. The limit is on the server (`server/src/auth/division.ts`):
+  a route opens to division admins only when it is declared `division: 'scoped'` and
+  filters by the division; any other route answers 403 `division_not_allowed`. Someone
+  outside the division answers 404. Only a signed-in admin or a `people:roles` key sets
+  a division or hands out `division_admin`. Full admins still see everyone.
+- **Salaried** (2026-11-11). `Person.overtimeExempt`: salaried (exempt) staff get no
+  weekly overtime; the payroll export sends all their hours as regular. Set it in Admin →
+  People (tap the role chip) or with `overtimeExempt` on `PUT /people/by-email`. Only a
+  signed-in admin or a `people:roles` key changes it, because it decides who is paid overtime.
 - **GPS.** A position is recorded only at the moment of a punch. No background tracking.
   Staff are told this in writing before rollout.
+  If the phone gives none, the punch still counts and keeps why (`inGeoStatus` / `outGeoStatus`:
+  denied, unavailable, timeout, unsupported). Declined shows to approvers as a problem;
+  the others as a note (Art, 2026-11-13).
 
 ### Data model (sketch)
 

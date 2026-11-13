@@ -7,6 +7,7 @@ import { SELF } from '../auth/apiKeys.js'
 import { emit } from '../services/events.js'
 import { hoursBetween } from '../lib/time.js'
 import { openItemsFor } from '../services/punch.js'
+import { personFilterFor } from '../auth/division.js'
 
 // ─── Open items ─────────────────────────────────────────────────────────────
 // Service tickets and Shop / Office / CAD tasks a person has open. They open with
@@ -99,6 +100,7 @@ route(
     summary: "Everyone's open service tickets and tasks, oldest first: who, what, how long, why it is still open.",
     access: ['punch:read'],
     query: { status: 'open (default) or closed', mode: 'Only service, shop, office or cad' },
+    division: 'scoped',
   },
   async (req) => {
     const auth = requireScope(req, 'punch:read')
@@ -107,7 +109,7 @@ route(
     const mode = str(req.query.mode, 10) || undefined
     const now = new Date()
     const items = await prisma.workItem.findMany({
-      where: { companyId: auth.companyId, status, mode },
+      where: { companyId: auth.companyId, status, mode, personId: await personFilterFor(auth) },
       orderBy: status === 'open' ? { openedAt: 'asc' } : { closedAt: 'desc' },
       take: status === 'open' ? 500 : 100,
       include: {

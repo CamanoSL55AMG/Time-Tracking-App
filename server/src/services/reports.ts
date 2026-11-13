@@ -1,6 +1,7 @@
 import { prisma } from '../db.js'
 import { badRequest } from '../errors.js'
 import { hoursBetween, localDate } from '../lib/time.js'
+import type { PersonFilter } from '../auth/division.js'
 
 // Hours grouped by any mix of person / job / phase / laborCategory / day. A segment
 // that runs past midnight is counted on the day it started. laborCategory is the
@@ -32,7 +33,7 @@ const categoryOf = (phase: { laborCategory: string } | null): string => phase?.l
 
 export async function hoursReport(
   companyId: string,
-  opts: { from: Date; to: Date; groupBy: Group[]; personId?: string; jobId?: string },
+  opts: { from: Date; to: Date; groupBy: Group[]; personId?: PersonFilter; jobId?: string },
 ) {
   if (opts.to.getTime() <= opts.from.getTime()) throw badRequest('to must be after from.')
   const company = await prisma.company.findUniqueOrThrow({ where: { id: companyId } })

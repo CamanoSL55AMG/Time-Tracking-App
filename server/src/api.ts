@@ -2,6 +2,7 @@ import type { Request, RequestHandler, Response, Router } from 'express'
 import type { Prisma } from '@prisma/client'
 import { prisma } from './db.js'
 import { badRequest } from './errors.js'
+import { assertDivisionRoute } from './auth/division.js'
 
 // Every endpoint is declared once, through route(). That single declaration both
 // mounts the handler and feeds the OpenAPI document, so the published API
@@ -19,6 +20,9 @@ export interface RouteDoc {
   query?: Record<string, string>
   body?: Record<string, string>
   status?: number
+  /** 'scoped': the handler limits itself to the caller's division, so division
+   *  admins may call it. Without it they are refused (auth/division.ts). */
+  division?: 'scoped'
 }
 
 export const registry: RouteDoc[] = []
@@ -34,6 +38,7 @@ export function route(router: Router, doc: RouteDoc, handler: Handler): void {
 }
 
 async function run(doc: RouteDoc, handler: Handler, req: Request, res: Response): Promise<void> {
+  assertDivisionRoute(req, doc)
   const status = doc.status ?? 200
   const idemKey = doc.method === 'post' ? String(req.headers['idempotency-key'] ?? '').trim() : ''
   const companyId = req.auth?.companyId
@@ -111,6 +116,7 @@ export function openApiDocument(serverUrl: string) {
       parameters,
       security: r.access === 'public' ? [] : [{ bearer: [] }],
       'x-scopes': r.access === 'public' ? [] : r.access,
+      'x-division-scoped': r.division === 'scoped',
       responses: {
         [String(r.status ?? 200)]: { description: 'Success', content: { 'application/json': { schema: { type: 'object' } } } },
         default: { description: 'Error', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },

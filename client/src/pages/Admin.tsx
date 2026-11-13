@@ -1,3 +1,4 @@
+// TESTED & APPROVED by Art 2026-11-07: (part) per-person Password button and dialog in Manage > People. See TESTED.md before changing.
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import PasswordField from '../PasswordField'
 import {
@@ -84,7 +85,11 @@ const Row = ({ children, dim }: { children: ReactNode; dim?: boolean }) => (
 
 // ─── People ─────────────────────────────────────────────────────────────────
 
-const ROLES: Person['role'][] = ['tech', 'lead', 'manager', 'payroll', 'admin']
+const ROLES: Person['role'][] = ['tech', 'sales', 'lead', 'shop_supervisor', 'manager', 'payroll', 'admin', 'division_admin']
+// Only a signed-in admin hands these out (the server checks too).
+const GUARDED: Person['role'][] = ['admin', 'division_admin']
+const ROLE_TEXT: Partial<Record<Person['role'], string>> = { division_admin: 'division admin', shop_supervisor: 'shop supervisor' }
+const roleText = (r: Person['role']) => ROLE_TEXT[r] ?? r
 
 // W-2 employee or 1099 contractor. Shown only when the server has CONTRACTORS_ENABLED.
 const WORKER_LABEL: Record<WorkerType, string> = { employee: 'W-2', contractor: '1099' }
@@ -95,7 +100,10 @@ function People({ isAdmin }: { isAdmin: boolean }) {
   const data = roster?.people
   const contractors = roster?.contractorsEnabled ?? false
   const [adding, setAdding] = useState(false)
-  const [form, setForm] = useState({ email: '', name: '', initials: '', role: 'tech', password: '', workerType: 'employee' as WorkerType })
+  const [form, setForm] = useState({ email: '', name: '', initials: '', role: 'tech', division: '', password: '', workerType: 'employee' as WorkerType })
+  // Role and division of someone already on the roster (signed-in admins only).
+  const [roleFor, setRoleFor] = useState<{ person: Person; role: Person['role']; division: string; salaried: boolean; error: string } | null>(null)
+  const divisions = [...new Set((data ?? []).map((p) => p.division ?? '').filter(Boolean))].sort()
   const [busy, setBusy] = useState(false)
   const [payAs, setPayAs] = useState<{ person: Person; workerType: WorkerType; from: string } | null>(null)
   const [pwFor, setPwFor] = useState<{ person: Person; password: string; mustChange: boolean; saved: boolean; error: string } | null>(null)
@@ -138,11 +146,12 @@ function People({ isAdmin }: { isAdmin: boolean }) {
         name: form.name.trim(),
         initials: form.initials.trim(),
         role: form.role,
+        ...(isAdmin && form.division.trim() ? { division: form.division.trim() } : {}),
         password: form.password || undefined,
         ...(contractors ? { workerType: form.workerType } : {}),
       })
       setAdding(false)
-      setForm({ email: '', name: '', initials: '', role: 'tech', password: '', workerType: 'employee' })
+      setForm({ email: '', name: '', initials: '', role: 'tech', division: '', password: '', workerType: 'employee' })
       await load()
     } catch (err) {
       setError(errorText(err))
@@ -150,6 +159,20 @@ function People({ isAdmin }: { isAdmin: boolean }) {
       setBusy(false)
     }
   }
+  const saveRole = async () => {
+    if (!roleFor) return
+    setBusy(true)
+    try {
+      await api.savePerson(roleFor.person.email, { role: roleFor.role, division: roleFor.division.trim(), overtimeExempt: roleFor.salaried })
+      setRoleFor(null)
+      await load()
+    } catch (err) {
+      setRoleFor({ ...roleFor, error: errorText(err) })
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const toggle = async (p: Person) => {
     try {
       await api.savePerson(p.email, { active: !p.active })
@@ -188,7 +211,14 @@ function People({ isAdmin }: { isAdmin: boolean }) {
             />
           )}
           {p.mustChangePassword && <Chip size="small" color="info" variant="outlined" label="New password due" title="They must pick their own password at their next sign-in" />}
-          <Chip size="small" label={p.role} />
+          {p.division && <Chip size="small" variant="outlined" label={p.division} />}
+          {p.overtimeExempt && <Chip size="small" variant="outlined" label="Salaried" title="No weekly overtime: all their hours go to payroll as regular" />}
+          <Chip
+            size="small"
+            label={roleText(p.role)}
+            onClick={isAdmin ? () => setRoleFor({ person: p, role: p.role, division: p.division ?? '', salaried: Boolean(p.overtimeExempt), error: '' }) : undefined}
+            aria-label={isAdmin ? `${p.name} is ${roleText(p.role)}. Change role, division or salaried` : undefined}
+          />
           {isAdmin && (
             <Button size="small" onClick={() => setPwFor({ person: p, password: '', mustChange: true, saved: false, error: '' })} aria-label={`Set a password for ${p.name}`}>
               Password
@@ -206,12 +236,20 @@ function People({ isAdmin }: { isAdmin: boolean }) {
             <TextField label="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
             <TextField label="Initials" value={form.initials} onChange={(e) => setForm({ ...form, initials: e.target.value })} helperText="As written on the job calendar" />
             <TextField select label="Role" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
-              {ROLES.filter((r) => isAdmin || r !== 'admin').map((r) => (
+              {ROLES.filter((r) => isAdmin || !GUARDED.includes(r)).map((r) => (
                 <MenuItem key={r} value={r}>
-                  {r}
+                  {roleText(r)}
                 </MenuItem>
               ))}
             </TextField>
+            {isAdmin && (
+              <TextField
+                label="Division"
+                value={form.division}
+                onChange={(e) => setForm({ ...form, division: e.target.value })}
+                helperText={form.role === 'division_admin' ? 'They manage only the people in this division' : 'Optional, e.g. Sound Services'}
+              />
+            )}
             {contractors && (
               <TextField select label="Paid as" value={form.workerType} onChange={(e) => setForm({ ...form, workerType: e.target.value as WorkerType })}>
                 {(['employee', 'contractor'] as const).map((t) => (
@@ -237,6 +275,52 @@ function People({ isAdmin }: { isAdmin: boolean }) {
           <Button onClick={() => setAdding(false)}>Cancel</Button>
           <Button variant="contained" onClick={save} disabled={busy || !form.email.includes('@') || !form.name.trim() || (form.password.length > 0 && form.password.length < 10)}>
             Add
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={Boolean(roleFor)} onClose={() => setRoleFor(null)} fullWidth maxWidth="xs">
+        <DialogTitle>Role, division and pay: {roleFor?.person.name}</DialogTitle>
+        <DialogContent>
+          <Stack spacing={2} sx={{ pt: 1 }}>
+            {roleFor?.error && <Alert severity="error">{roleFor.error}</Alert>}
+            <TextField select label="Role" value={roleFor?.role ?? 'tech'} onChange={(e) => roleFor && setRoleFor({ ...roleFor, role: e.target.value as Person['role'] })}>
+              {ROLES.map((r) => (
+                <MenuItem key={r} value={r}>
+                  {roleText(r)}
+                </MenuItem>
+              ))}
+            </TextField>
+            <TextField
+              label="Division"
+              value={roleFor?.division ?? ''}
+              onChange={(e) => roleFor && setRoleFor({ ...roleFor, division: e.target.value })}
+              inputProps={{ list: 'logbook-divisions' }}
+              helperText={
+                roleFor?.role === 'division_admin'
+                  ? 'They see and manage only the people in this division: timecards, time fixes, leave, reports and the payroll export.'
+                  : 'e.g. Sound Services. Leave empty for none.'
+              }
+            />
+            <datalist id="logbook-divisions">
+              {divisions.map((d) => (
+                <option key={d} value={d} />
+              ))}
+            </datalist>
+            {roleFor?.role === 'division_admin' && !roleFor.division.trim() && <Alert severity="warning">A division admin with no division sees nobody.</Alert>}
+            <FormControlLabel
+              control={<Switch checked={roleFor?.salaried ?? false} onChange={(e) => roleFor && setRoleFor({ ...roleFor, salaried: e.target.checked })} />}
+              label="Salaried: no weekly overtime"
+            />
+            <Typography variant="body2" color="text.secondary">
+              Salaried staff get no overtime. All their hours go to payroll as regular hours. Leave it off for hourly people.
+            </Typography>
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setRoleFor(null)}>Cancel</Button>
+          <Button variant="contained" disabled={busy} onClick={() => void saveRole()}>
+            Save
           </Button>
         </DialogActions>
       </Dialog>

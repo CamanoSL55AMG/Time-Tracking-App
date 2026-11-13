@@ -102,6 +102,8 @@ route(
     tag: 'Jobs',
     summary: 'Jobs time can be charged to. Each carries lastPunchAt and archived (an old project, or one closed to new time).',
     access: ['jobs:read'],
+    // The company's job list, which every tech reads to clock in. Nobody's time in it.
+    division: 'scoped',
     query: {
       active: 'true (default) or false; "all" for both',
       kind: 'project | service | shop | other',
@@ -333,6 +335,7 @@ route(
     tag: 'Jobs',
     summary: 'The phases of the work day, in order.',
     access: ['jobs:read'],
+    division: 'scoped',
     query: { all: 'true to include switched-off phases (needs jobs:write)' },
   },
   async (req) => {
@@ -352,6 +355,7 @@ route(
     tag: 'Jobs',
     summary: 'Bench Repair: clock in / clock out only, or the full version with repair tickets and tasks.',
     access: ['jobs:read'],
+    division: 'scoped',
   },
   async (req) => {
     const auth = requireScope(req, 'jobs:read')

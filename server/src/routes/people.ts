@@ -4,7 +4,8 @@ import { prisma } from '../db.js'
 import { bool, route, str } from '../api.js'
 import { badRequest, conflict, forbidden } from '../errors.js'
 import { requireScope } from '../auth/middleware.js'
-import { isRole, KEYS_MANAGE, PEOPLE_ROLES } from '../auth/apiKeys.js'
+import { GUARDED_ROLES, isRole, KEYS_MANAGE, PEOPLE_ROLES, type Role } from '../auth/apiKeys.js'
+import { divisionPersonIds, normalizeDivision } from '../auth/division.js'
 import { emit } from '../services/events.js'
 import { publicPerson } from './auth.js'
 import { config } from '../config.js'
@@ -16,11 +17,12 @@ export const peopleRouter = Router()
 
 route(
   peopleRouter,
-  { method: 'get', path: '/people', tag: 'People', summary: 'The roster.', access: ['people:read'], query: { active: 'true or false' } },
+  { method: 'get', path: '/people', tag: 'People', summary: 'The roster.', access: ['people:read'], query: { active: 'true or false' }, division: 'scoped' },
   async (req) => {
     const auth = requireScope(req, 'people:read')
+    const only = await divisionPersonIds(auth)
     const people = await prisma.person.findMany({
-      where: { companyId: auth.companyId, active: bool(req.query.active) },
+      where: { companyId: auth.companyId, active: bool(req.query.active), id: only ? { in: only } : undefined },
       orderBy: { name: 'asc' },
     })
     return { data: people.map(publicPerson), contractorsEnabled: config.contractorsEnabled }
@@ -38,12 +40,14 @@ route(
     body: {
       name: 'Display name',
       initials: 'Initials as written on the job calendar',
-      role: 'tech | lead | manager | payroll | admin (admin needs a signed-in admin or a key with people:roles)',
+      role: 'tech | lead | manager | payroll | admin | division_admin (admin and division_admin need a signed-in admin or a key with people:roles)',
+      division: 'The part of the company they work in, e.g. Sound Services. A division_admin manages only their own division. Empty clears it (signed-in admin or a key with people:roles)',
       active: 'false to stop the person signing in or punching',
       password: 'Set an initial password (signed-in admins only). They must change it at first sign-in unless mustChangePassword is false',
       mustChangePassword: 'true or false: whether they must pick a new password at their next sign-in (signed-in admins only)',
       workerType: 'employee (W-2) | contractor (1099). Only with CONTRACTORS_ENABLED=true',
       workerTypeFrom: 'YYYY-MM-DD the worker type starts (company time). A change defaults to today',
+      overtimeExempt: 'true for salaried (exempt) staff: no weekly overtime, all their hours go to payroll as regular. Signed-in admins or a key with people:roles',
     },
   },
   async (req) => {
@@ -59,13 +63,28 @@ route(
     if (existing && existing.companyId !== auth.companyId) throw forbidden('That email belongs to another company.')
 
     const role = req.body?.role === undefined ? undefined : String(req.body.role)
-    if (role !== undefined && !isRole(role)) throw badRequest('role must be tech, lead, manager, payroll or admin.', { field: 'role' })
-    // Only a signed-in admin hands out or takes away the admin role.
-    if (!mayManageAdmins && (role === 'admin' || (existing?.role === 'admin' && role !== undefined))) {
-      throw forbidden('Only a signed-in admin can change who is an admin.')
+    if (role !== undefined && !isRole(role)) throw badRequest('role must be tech, lead, manager, payroll, admin, division_admin, sales or shop_supervisor.', { field: 'role' })
+    // Only a signed-in admin hands out or takes away the admin and division admin roles.
+    const guarded = (r: string | undefined) => r !== undefined && (GUARDED_ROLES as readonly string[]).includes(r as Role)
+    if (!mayManageAdmins && (guarded(role) || (guarded(existing?.role) && role !== undefined && role !== existing?.role))) {
+      throw forbidden('Only a signed-in admin can change who is an admin or a division admin.')
     }
     const active = bool(req.body?.active)
-    if (!mayManageAdmins && existing?.role === 'admin' && active === false) throw forbidden('Only a signed-in admin can deactivate an admin.')
+    if (!mayManageAdmins && guarded(existing?.role) && active === false) throw forbidden('Only a signed-in admin can deactivate an admin or a division admin.')
+    // The division decides what a division admin can see, so it is guarded the same way.
+    const division = req.body?.division === undefined ? undefined : normalizeDivision(req.body.division)
+    if (division !== undefined && division !== (existing?.division ?? '') && !mayManageAdmins) {
+      throw forbidden('Only a signed-in admin can change someone\'s division.')
+    }
+    // Salaried (exempt) or hourly decides who gets overtime, so it is pay data: the same guard.
+    let overtimeExempt: boolean | undefined
+    if (req.body?.overtimeExempt !== undefined) {
+      if (typeof req.body.overtimeExempt !== 'boolean') throw badRequest('overtimeExempt must be true or false.', { field: 'overtimeExempt' })
+      overtimeExempt = req.body.overtimeExempt
+      if (overtimeExempt !== (existing?.overtimeExempt ?? false) && !mayManageAdmins) {
+        throw forbidden('Only a signed-in admin can change whether someone is salaried.')
+      }
+    }
 
     // Never leave the company without an admin who can sign in.
     if (existing?.role === 'admin' && existing.active && ((role !== undefined && role !== 'admin') || active === false)) {
@@ -112,7 +131,7 @@ route(
       const saved = existing
         ? await tx.person.update({
             where: { id: existing.id },
-            data: { name: name || undefined, initials, role, active, passwordHash, mustChangePassword, ...worker },
+            data: { name: name || undefined, initials, role, division, active, passwordHash, mustChangePassword, overtimeExempt, ...worker },
           })
         : await tx.person.create({
             data: {
@@ -121,13 +140,15 @@ route(
               name: name || email,
               initials: initials ?? '',
               role: role ?? 'tech',
+              division: division ?? '',
               active: active ?? true,
               passwordHash,
               mustChangePassword,
+              overtimeExempt: overtimeExempt ?? false,
               ...worker,
             },
           })
-      await emit(tx, auth.companyId, 'person.upserted', { person: { id: saved.id, email: saved.email, name: saved.name, role: saved.role, active: saved.active, workerType: saved.workerType } })
+      await emit(tx, auth.companyId, 'person.upserted', { person: { id: saved.id, email: saved.email, name: saved.name, role: saved.role, division: saved.division, active: saved.active, workerType: saved.workerType, overtimeExempt: saved.overtimeExempt } })
       return saved
     })
     return { created: !existing, person: publicPerson(person) }

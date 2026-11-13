@@ -1,13 +1,17 @@
 import { prisma } from '../db.js'
 import { hoursBetween, localDate } from '../lib/time.js'
 import { insideFence, type Fence } from '../lib/geo.js'
+import { locationFlags, noLocationReason } from '../lib/locationFlags.js'
+import type { PersonFilter } from '../auth/division.js'
 
 // Things an approver should look at before signing off a week. "problem" needs a
 // decision (a missed clock-out, a 14-hour day); "note" is context (a correction,
-// a punch sent late from a phone with no signal).
+// a punch sent late from a phone with no signal). A punch made with location declined
+// on the phone is a problem (Art wants to know); a phone that could not find its
+// position is a note.
 
 export interface TimeException {
-  code: 'missed_clock_out' | 'long_day' | 'away_from_site' | 'away_from_shop' | 'edited' | 'sent_late'
+  code: 'missed_clock_out' | 'long_day' | 'away_from_site' | 'away_from_shop' | 'edited' | 'sent_late' | 'location_declined' | 'no_location'
   severity: 'problem' | 'note'
   personId: string
   personName: string
@@ -25,7 +29,7 @@ const isTravel = (key: string | undefined) => Boolean(key && /travel|drive/i.tes
 const timeOf = (d: Date, tz: string) => d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: tz })
 const dayOf = (d: Date, tz: string) => d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: tz })
 
-export async function findExceptions(companyId: string, opts: { from: Date; to: Date; personId?: string }): Promise<TimeException[]> {
+export async function findExceptions(companyId: string, opts: { from: Date; to: Date; personId?: PersonFilter }): Promise<TimeException[]> {
   const company = await prisma.company.findUniqueOrThrow({ where: { id: companyId } })
   const tz = company.timezone
   const now = new Date()
@@ -91,6 +95,24 @@ export async function findExceptions(companyId: string, opts: { from: Date; to: 
       const late = mins >= 120 ? `${Math.round(mins / 60)} h` : `${mins} min`
       out.push({ ...base, code: 'sent_late', severity: 'note', message: `${timeOf(p.clockIn, tz)} punch reached the server ${late} later (no signal, or entered after the fact).` })
     }
+  }
+
+  // Punches made without the phone's position. The punch itself always went through.
+  const byId = new Map(punches.map((p) => [p.id, p]))
+  for (const f of locationFlags(punches)) {
+    const p = byId.get(f.punchId)!
+    // An open segment from before the range is only here for the missed clock-out check.
+    if (f.side === 'in' && p.clockIn < opts.from) continue
+    const what = f.side === 'in' ? `${timeOf(f.at, tz)} punch on ${p.job.name}` : `${timeOf(f.at, tz)} clock-out`
+    out.push({
+      personId: p.personId,
+      personName: p.person.name,
+      date: localDate(f.at, tz),
+      punchId: p.id,
+      code: f.code,
+      severity: f.code === 'location_declined' ? 'problem' : 'note',
+      message: `${what} has no location: ${noLocationReason(f.status, p.source === 'lead')}.`,
+    })
   }
 
   for (const t of dayTotals.values()) {

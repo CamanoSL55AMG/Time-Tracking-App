@@ -1,3 +1,4 @@
+// TESTED & APPROVED by Art 2026-11-07: forced password change at first sign-in. See TESTED.md before changing.
 // Kept apart from middleware.ts (which needs the database) so it can be unit tested.
 
 interface Caller {

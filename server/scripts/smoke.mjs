@@ -303,16 +303,26 @@ try {
   const dow = (new Date(`${ymd(weekAgo)}T12:00:00Z`).getUTCDay() + 6) % 7 // Monday = 0
   const t0 = new Date(`${ymd(new Date(weekAgo.getTime() + (2 - dow) * 86_400_000))}T14:00:00Z`)
   const lastWeek = ymd(t0)
-  r = await call('POST', '/punches/in', { token: key, headers: asB, body: { jobId, at: t0.toISOString() } })
+  // The phone said no to location at clock-in; the clock-out had a position.
+  r = await call('POST', '/punches/in', { token: key, headers: asB, body: { jobId, at: t0.toISOString(), geoStatus: 'denied' } })
   const oldId = r.json?.punch?.id
-  r = await call('POST', '/punches/out', { token: key, headers: asB, body: { at: new Date(t0.getTime() + 13 * 3_600_000).toISOString() } })
+  check('a punch with location declined still goes through and keeps the answer', r.status === 200 && r.json?.punch?.inGeoStatus === 'denied' && r.json?.punch?.inLat === null, JSON.stringify(r.json?.punch ?? r.json))
+  r = await call('POST', '/punches/out', { token: key, headers: asB, body: { at: new Date(t0.getTime() + 13 * 3_600_000).toISOString(), geo: { lat: 47.82, lng: -122.3, accuracyM: 10 }, geoStatus: 'denied' } })
   check('a back-dated day last week is recorded', r.status === 200 && Boolean(oldId), JSON.stringify(r.json?.error ?? ''))
+  check('a real position wins over a stray status', r.json?.punch?.outGeoStatus === 'captured', JSON.stringify(r.json?.punch ?? null))
 
   r = await call('GET', `/timesheets?week=${lastWeek}`, { token: admin })
   const sheetRow = r.json?.rows?.find((x) => x.person.id === crewId)
   check('the week view lists the person, hours and the long day', r.status === 200 && Math.abs((sheetRow?.hours ?? 0) - 13) < 0.02 && sheetRow?.status === 'open' && sheetRow?.problems >= 1, JSON.stringify(sheetRow ?? r.json))
   r = await call('GET', `/reports/exceptions?from=${lastWeek}&to=${lastWeek}&personId=${crewId}`, { token: key })
   check('exceptions report flags the 13-hour day', r.status === 200 && r.json?.data?.some((x) => x.code === 'long_day'), JSON.stringify(r.json))
+  check('the week view counts the punch with location declined', sheetRow?.locationDeclined === 1, JSON.stringify(sheetRow ?? null))
+  r = await call('GET', `/reports/exceptions?from=${lastWeek}&to=${lastWeek}&personId=${crewId}&code=location_declined`, { token: key })
+  check(
+    'exceptions report filters to the punch with location declined, as a problem',
+    r.status === 200 && r.json?.data?.length === 1 && r.json.data[0].punchId === oldId && r.json.data[0].severity === 'problem',
+    JSON.stringify(r.json),
+  )
 
   r = await call('POST', '/me/week/sign', { token: tech, body: {} })
   check('a tech signs their week', r.status === 200 && r.json?.status === 'signed', JSON.stringify(r.json))
@@ -366,6 +376,21 @@ try {
   )
   r = await call('GET', '/payroll/periods', { token: tech })
   check('a tech cannot read the pay periods', r.status === 403)
+  // Shop punches to Stage Forge: admins only; a dry run sends nothing and works while off.
+  {
+    const today = new Date().toISOString().slice(0, 10)
+    r = await call('GET', '/integrations/stageforge/punches', { token: admin })
+    check('Stage Forge punch status answers', r.status === 200 && typeof r.json?.enabled === 'boolean', JSON.stringify(r.json))
+    const pushOn = r.json?.enabled === true
+    r = await call('POST', '/integrations/stageforge/punches/push', { token: admin, body: { from: today, to: today, dryRun: true } })
+    check('Stage Forge dry run shows what would go', r.status === 200 && r.json?.dryRun === true && Array.isArray(r.json?.preview), JSON.stringify(r.json))
+    if (!pushOn) {
+      r = await call('POST', '/integrations/stageforge/punches/push', { token: admin, body: { from: today, to: today } })
+      check('Stage Forge sending is off until turned on', r.status === 403 && r.json?.error?.code === 'stageforge_push_off', JSON.stringify(r.json))
+    }
+    r = await call('POST', '/integrations/stageforge/punches/push', { token: tech, body: { from: today, to: today, dryRun: true } })
+    check('a tech cannot send punches to Stage Forge', r.status === 403)
+  }
   // 1099 contractors: off unless CONTRACTORS_ENABLED=true.
   {
     const subEmail = `smoke-1099-${Date.now()}@example.invalid`
@@ -987,6 +1012,113 @@ try {
     check('a tech cannot import balances', r.status === 403)
 
     for (const e of [lvEmail, leadEmail]) await call('PUT', `/people/by-email/${encodeURIComponent(e)}`, { token: admin, body: { active: false } })
+  }
+
+  // Division admins (Art, 2026-11-11): Kris runs the admin screens for Sound Services
+  // only. Everything outside the division is invisible or refused, on the server.
+  {
+    const pw = () => `pw-${randomBytes(9).toString('base64url')}`
+    const divAdminEmail = `smoke-divadmin-${stamp}@example.invalid`
+    const inEmail = `smoke-div-in-${stamp}@example.invalid`
+    const outEmail = `smoke-div-out-${stamp}@example.invalid`
+    r = await call('PUT', `/people/by-email/${encodeURIComponent(inEmail)}`, { token: key, body: { name: 'Smoke Div In', division: 'Smoke Div' } })
+    check('a key without people:roles cannot set a division', r.status === 403, JSON.stringify(r.json))
+    r = await call('PUT', `/people/by-email/${encodeURIComponent(inEmail)}`, { token: admin, body: { name: 'Smoke Div In', division: `Smoke   Div ${stamp} ` } })
+    const inId = r.json?.person?.id
+    check('an admin sets a division (spaces folded)', r.status === 200 && r.json?.person?.division === `Smoke Div ${stamp}`, JSON.stringify(r.json))
+    r = await call('PUT', `/people/by-email/${encodeURIComponent(outEmail)}`, { token: key, body: { name: 'Smoke Div Out' } })
+    const outId = r.json?.person?.id
+    r = await call('PUT', `/people/by-email/${encodeURIComponent(divAdminEmail)}`, { token: key, body: { name: 'Smoke Div Admin', role: 'division_admin' } })
+    check('a key without people:roles cannot make a division admin', r.status === 403, JSON.stringify(r.json))
+    const divPw = pw()
+    r = await call('PUT', `/people/by-email/${encodeURIComponent(divAdminEmail)}`, {
+      token: admin,
+      body: { name: 'Smoke Div Admin', role: 'division_admin', division: `smoke div ${stamp}`, password: divPw, mustChangePassword: false },
+    })
+    const divAdminId = r.json?.person?.id
+    check('an admin makes a division admin', r.status === 200 && r.json?.person?.role === 'division_admin', JSON.stringify(r.json))
+    const div = (await call('POST', '/auth/login', { body: { email: divAdminEmail, password: divPw } })).json?.token
+    if (termsOn) await acceptAllTerms(div)
+
+    // A short closed segment for each tech, last hour.
+    const seg = async (email, tag) => {
+      await call('POST', '/punches/in', { token: key, headers: { 'X-Act-As': email }, body: { jobId, at: minutesAgo(30), clientId: `div-${tag}-${stamp}` } })
+      return (await call('POST', '/punches/out', { token: key, headers: { 'X-Act-As': email }, body: { at: minutesAgo(20) } })).json?.punch?.id
+    }
+    await seg(inEmail, 'in')
+    const outPunch = await seg(outEmail, 'out')
+
+    r = await call('GET', '/people', { token: div })
+    const roster = (r.json?.data ?? []).map((p) => p.id)
+    check('division admin: roster is their division only', r.status === 200 && roster.includes(inId) && roster.includes(divAdminId) && !roster.includes(outId), JSON.stringify(roster))
+    r = await call('GET', '/timesheets', { token: div })
+    const sheetIds = (r.json?.rows ?? []).map((x) => x.person.id).concat((r.json?.quiet ?? []).map((x) => x.id))
+    check('division admin: timesheets show their division only', r.status === 200 && sheetIds.includes(inId) && !sheetIds.includes(outId), JSON.stringify(sheetIds))
+    r = await call('GET', `/timesheets/${inId}`, { token: div })
+    check('division admin: opens a week in their division', r.status === 200, JSON.stringify(r.json?.error))
+    r = await call('GET', `/timesheets/${outId}`, { token: div })
+    check('division admin: a week outside the division is not found', r.status === 404, JSON.stringify(r.json))
+    r = await call('GET', '/punches', { token: div })
+    check('division admin: punches are their division only', r.status === 200 && (r.json?.data ?? []).every((x) => x.personId !== outId) && (r.json?.data ?? []).some((x) => x.personId === inId))
+    r = await call('GET', `/punches?personId=${outId}`, { token: div })
+    check('division admin: cannot ask for someone outside', r.status === 404)
+    r = await call('GET', `/punches/${outPunch}`, { token: div })
+    check('division admin: cannot open a punch outside', r.status === 404)
+    r = await call('PATCH', `/punches/${outPunch}`, { token: div, body: { notes: 'nope', reason: 'smoke' } })
+    check('division admin: cannot correct a punch outside', r.status === 404)
+    r = await call('POST', '/timesheets/approve', { token: div, body: { personIds: [outId] } })
+    check('division admin: cannot approve a week outside', r.status === 404)
+    r = await call('POST', '/timesheets/reopen', { token: div, body: { personId: outId, reason: 'smoke' } })
+    check('division admin: cannot reopen a week outside', r.status === 404)
+    r = await call('GET', '/reports/hours?groupBy=person', { token: div })
+    check('division admin: hours report is their division only', r.status === 200 && JSON.stringify(r.json).includes(inId) && !JSON.stringify(r.json).includes(outId))
+    r = await call('GET', '/board', { token: div })
+    check('division admin: board is their division only', r.status === 200 && (r.json?.rows ?? []).every((x) => x.personId !== outId))
+    r = await call('GET', '/requests', { token: div })
+    check('division admin: change requests are their division only', r.status === 200 && (r.json?.data ?? []).every((x) => x.person?.id !== outId))
+    r = await call('GET', '/leave/balances', { token: div })
+    if (r.status !== 200) console.log('SKIP  division admin leave balances (leave is off)')
+    else check('division admin: leave balances are their division only', (r.json?.people ?? []).every((x) => x.id !== outId) && (r.json?.people ?? []).some((x) => x.id === inId))
+    r = await call('GET', '/payroll/periods', { token: div })
+    check('division admin: sees the pay periods', r.status === 200, JSON.stringify(r.json))
+    // Approve both techs' weeks as a full admin, then compare the two exports.
+    await call('POST', '/timesheets/approve', { token: admin, body: { personIds: [inId, outId] } })
+    const payDay = new Date().toLocaleDateString('en-CA', { timeZone: process.env.COMPANY_TIMEZONE || 'America/Los_Angeles' })
+    r = await call('GET', `/payroll/labor?from=${payDay}&to=${payDay}`, { token: div })
+    if (r.status === 403 && r.json?.error?.code === 'payroll_export_off') console.log('SKIP  division admin payroll export (export is off)')
+    else {
+      const ids = (x) => [...(x?.lines ?? []), ...(x?.notReady ?? []), ...(x?.totals ?? [])].map((l) => l.personId)
+      const mine = ids(r.json)
+      check('division admin: payroll export is their division only', r.status === 200 && mine.includes(inId) && !mine.includes(outId), JSON.stringify(r.json).slice(0, 400))
+      const csvRes = await fetch(`${api}/payroll/labor?from=${payDay}&to=${payDay}&format=csv`, { headers: { Authorization: `Bearer ${div}` } })
+      const csvText = await csvRes.text()
+      check('division admin: payroll CSV is their division only', csvRes.status === 200 && !csvText.includes(outEmail), csvText.slice(0, 300))
+      r = await call('GET', `/payroll/labor?from=${payDay}&to=${payDay}`, { token: admin })
+      const all = ids(r.json)
+      check('full admins still export everyone', r.status === 200 && all.includes(inId) && all.includes(outId))
+    }
+    r = await call('GET', `/assignments/${new Date().toISOString().slice(0, 10)}`, { token: div })
+    check('division admin: a route not reviewed for divisions is refused', r.status === 403 && r.json?.error?.code === 'division_not_allowed', JSON.stringify(r.json))
+    // Salaried (exempt): pay data, so only signed-in admins (or a people:roles key) set it.
+    r = await call('PUT', `/people/by-email/${encodeURIComponent(inEmail)}`, { token: key, body: { overtimeExempt: true } })
+    check('a key without people:roles cannot mark someone salaried', r.status === 403, JSON.stringify(r.json))
+    r = await call('PUT', `/people/by-email/${encodeURIComponent(inEmail)}`, { token: div, body: { overtimeExempt: true } })
+    check('division admin: cannot mark someone salaried', r.status === 403)
+    r = await call('PUT', `/people/by-email/${encodeURIComponent(inEmail)}`, { token: admin, body: { overtimeExempt: true } })
+    check('an admin marks someone salaried', r.status === 200 && r.json?.person?.overtimeExempt === true, JSON.stringify(r.json))
+    r = await call('PUT', `/people/by-email/${encodeURIComponent(inEmail)}`, { token: admin, body: { overtimeExempt: 'yes' } })
+    check('salaried must be true or false', r.status === 400)
+    r = await call('PUT', `/people/by-email/${encodeURIComponent(inEmail)}`, { token: admin, body: { overtimeExempt: false } })
+    check('an admin marks someone hourly again', r.status === 200 && r.json?.person?.overtimeExempt === false)
+    r = await call('PUT', `/people/by-email/${encodeURIComponent(outEmail)}`, { token: div, body: { division: `Smoke Div ${stamp}` } })
+    check('division admin: cannot pull someone into the division', r.status === 403)
+    r = await call('GET', '/me/state', { token: div })
+    check('division admin: still has their own clock', r.status === 200)
+    r = await call('GET', '/timesheets', { token: admin })
+    const allIds = (r.json?.rows ?? []).map((x) => x.person.id)
+    check('full admins still see everyone', r.status === 200 && allIds.includes(inId) && allIds.includes(outId))
+
+    for (const e of [divAdminEmail, inEmail, outEmail]) await call('PUT', `/people/by-email/${encodeURIComponent(e)}`, { token: admin, body: { active: false } })
   }
 
   // Clean up.

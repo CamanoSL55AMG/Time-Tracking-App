@@ -37,3 +37,30 @@ export function parseGeo(input: unknown): GeoStamp | null {
   const acc = Number(g.accuracyM)
   return { lat, lng, accuracyM: Number.isFinite(acc) && acc >= 0 ? acc : undefined }
 }
+
+// ─── Whether the phone shared its position ─────────────────────────────────
+// Art, 2026-11-13: "If the user declines that I need to know that." The punch always
+// goes through; the answer the phone gave is kept on the punch and flagged for review.
+
+export const GEO_STATUSES = ['captured', 'denied', 'unavailable', 'timeout', 'unsupported'] as const
+export type GeoStatus = (typeof GEO_STATUSES)[number]
+const NOT_CAPTURED = new Set<string>(['denied', 'unavailable', 'timeout', 'unsupported'])
+
+/**
+ * The status to store with a punch. A real position always wins ("captured"). Without
+ * one, only a status the phone reported for a failed read is kept; a sender that says
+ * nothing (an integration, an old copy of the app) leaves it unknown (null), and
+ * "captured" with no position is not believed.
+ */
+export function resolveGeoStatus(geo: GeoStamp | null | undefined, raw: unknown): GeoStatus | null {
+  if (geo) return 'captured'
+  const s = typeof raw === 'string' ? raw.trim().toLowerCase() : ''
+  return NOT_CAPTURED.has(s) ? (s as GeoStatus) : null
+}
+
+/** How a punch's location answer shows for a reviewer; null when there is nothing to flag. */
+export function geoFlag(status: string | null | undefined): 'declined' | 'missing' | null {
+  if (status === 'denied') return 'declined'
+  if (status && NOT_CAPTURED.has(status)) return 'missing'
+  return null
+}

@@ -28,7 +28,8 @@ const label = (c: string) => (c ? c[0].toUpperCase() + c.slice(1) : 'Other')
 const h2 = (n: number) => n.toFixed(2)
 const statusText = (s: string) => (s === 'approved' ? 'On the clock' : s === 'signed' ? 'Signed, not approved' : 'Not signed')
 
-export default function PayrollPage() {
+/** division: set for a division admin, whose report holds their division only. */
+export default function PayrollPage({ division }: { division?: string } = {}) {
   const [periods, setPeriods] = useState<PayPeriods | null>(null)
   const [pick, setPick] = useState<'previous' | 'current' | 'custom'>('previous')
   const [from, setFrom] = useState('')
@@ -103,8 +104,9 @@ export default function PayrollPage() {
   return (
     <Stack spacing={2}>
       <Typography variant="h6" sx={{ fontWeight: 700 }}>
-        Payroll report
+        Payroll report{division ? ` for ${division}` : ''}
       </Typography>
+      {division && <Alert severity="info">This report and its CSV hold the people in {division} only.</Alert>}
       {!periods.exportEnabled && (
         <Alert severity="info">The payroll export is turned off. Set PAYROLL_EXPORT_ENABLED=true in server/.env and restart Logbook to turn it on.</Alert>
       )}

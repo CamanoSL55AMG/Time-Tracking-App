@@ -1,3 +1,4 @@
+// TESTED & APPROVED by Art 2026-11-10: (part) Week page layout (big Fix my times button, larger rows, notes folded per day). See TESTED.md before changing.
 import { useCallback, useEffect, useState } from 'react'
 import { Alert, Box, Button, ButtonBase, Chip, CircularProgress, Collapse, Divider, IconButton, Paper, Stack, Typography } from '@mui/material'
 import { api, errorText, fmtDay, fmtTime, shiftWeek, type PersonWeek, type SheetStatus, type TimeException, type WeekSegment } from '../api'
@@ -107,6 +108,14 @@ export function WeekDetail({
                 {fixedBySelf.has(s.id) ? (fixedBySelf.get(s.id)!.reviewedAt ? ` · fixed by ${mine ? 'you' : 'them'}, looked at` : ` · fixed by ${mine ? 'you' : 'them'}`) : s.edited && ' · corrected'}
                 {s.source === 'lead' && ' · by crew lead'}
               </Typography>
+              {(() => {
+                const tag = segmentLocationTag(s)
+                return tag ? (
+                  <Typography variant="caption" sx={{ flexShrink: 0, fontWeight: 700 }} color={tag.declined ? 'warning.dark' : 'text.secondary'}>
+                    {tag.label}
+                  </Typography>
+                ) : null
+              })()}
             </Stack>
           ))}
         </Box>
@@ -127,6 +136,17 @@ const noteWord: Record<TimeException['code'], [string, string]> = {
   long_day: ['long day', 'long days'],
   edited: ['change', 'changes'],
   sent_late: ['punch sent late', 'punches sent late'],
+  location_declined: ['punch with location declined', 'punches with location declined'],
+  no_location: ['punch without location', 'punches without location'],
+}
+
+/** A reviewer's mark on a segment made without the phone's position (Art, 2026-11-13). */
+const LOCATION_CODES = new Set<TimeException['code']>(['location_declined', 'no_location'])
+function segmentLocationTag(s: WeekSegment): { label: string; declined: boolean } | null {
+  const statuses = [s.inGeoStatus, s.outGeoStatus]
+  if (statuses.includes('denied')) return { label: 'location declined', declined: true }
+  if (statuses.some((x) => x === 'unavailable' || x === 'timeout' || x === 'unsupported')) return { label: 'no location', declined: false }
+  return null
 }
 
 /** A day's notes folded into one line; tap to see each. Art 2026-11-10: "quieter location notes". */
@@ -314,7 +334,8 @@ export default function WeekPage() {
   const today = new Date().toLocaleDateString('en-CA')
   const addDay = week.days.some((d) => d.date === today) ? today : week.weekStart
   const canFix = (date: string) => fixableDay(week, date, today)
-  const notes = week.exceptions.filter((x) => x.code !== 'sent_late')
+  // Location flags are for the reviewer; the tech is told at the moment of the punch.
+  const notes = week.exceptions.filter((x) => x.code !== 'sent_late' && !LOCATION_CODES.has(x.code))
   const withdraw = async (id: string) => {
     setError('')
     try {
