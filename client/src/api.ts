@@ -1,3 +1,4 @@
+// TESTED & APPROVED by Art 2026-11-13: (part) readGeo and the geoStatus sent with each punch. See TESTED.md before changing.
 import axios, { AxiosError } from 'axios'
 
 // Everything the page says to the server goes through here.

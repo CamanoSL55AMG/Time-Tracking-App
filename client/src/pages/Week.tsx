@@ -1,4 +1,5 @@
 // TESTED & APPROVED by Art 2026-11-10: (part) Week page layout (big Fix my times button, larger rows, notes folded per day). See TESTED.md before changing.
+// TESTED & APPROVED by Art 2026-11-13: (part) "location declined" / "no location" tag on segments in WeekDetail. See TESTED.md before changing.
 import { useCallback, useEffect, useState } from 'react'
 import { Alert, Box, Button, ButtonBase, Chip, CircularProgress, Collapse, Divider, IconButton, Paper, Stack, Typography } from '@mui/material'
 import { api, errorText, fmtDay, fmtTime, shiftWeek, type PersonWeek, type SheetStatus, type TimeException, type WeekSegment } from '../api'
